@@ -407,6 +407,23 @@ func _capture_and_quit() -> void:
 
 func _start_regression_tests() -> void:
 	print(">>> STARTING BLUEPRINT & AUTONOMOUS DRONE REGRESSION TESTS <<<")
+	get_tree().create_timer(0.6).timeout.connect(_run_test_dormant)
+
+func _run_test_dormant() -> void:
+	print("TEST PHASE 0: DORMANT PROBE & MINIMAL GUIDANCE OVERLAY")
+	_save_test_screen("docs/art/test_00_dormant_probe.png")
+	
+	# テスト用に全機能（SPACE PHASE）を開放
+	GameState.set_story_phase(GameState.StoryPhase.SPACE)
+	GameState.items["miner"] = 5
+	GameState.items["belt"] = 25
+	GameState.items["smelter"] = 5
+	GameState.items["turret"] = 5
+	GameState.resources["Fe"] = 150
+	GameState.resources["Cu"] = 150
+	GameState.resources["Si"] = 100
+	GameState.attached_drones = 2
+	
 	get_tree().create_timer(0.8).timeout.connect(_run_test_phase_1)
 
 func _run_test_phase_1() -> void:

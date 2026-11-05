@@ -1,7 +1,11 @@
 extends CanvasLayer
 
 # STAR REPLICA: AUTOMA - ミニマリスト＆ノンバーバル (文字を使わない) 洗練Sci-Fi UI
-# コントローラー/1タップ操作対応 ＆ アイコンピクトグラム駆動
+# コントローラー/1タップ操作対応 ＆ アイコンピクトグラム駆動 ＆ プログレッシブ・ディスクロージャー
+
+# 上部レスポンシブバー＆資源バッジコンテナ
+var top_bar_node: MarginContainer
+var res_badge_containers: Dictionary = {}
 
 # 左上ミニマルステータス
 var fe_label: Label
@@ -18,6 +22,11 @@ var shield_bar: ProgressBar
 var power_bar: ProgressBar
 var fleet_bar: ProgressBar
 var fleet_lbl: Label
+var stat_row_node: HBoxContainer
+var right_top_buttons: HBoxContainer
+
+# 画面左側ズームクラスタ
+var zoom_cluster_node: VBoxContainer
 
 # 下部ツールセレクター
 var tool_bar: HBoxContainer
@@ -25,6 +34,7 @@ var tool_buttons: Dictionary = {}
 var build_mode_indicator: Control
 var build_guide_label: Label
 var last_synced_tool: String = "none"
+var mega_btn_node: Button
 
 # 警報アイコン
 var alert_rect: TextureRect
@@ -58,12 +68,17 @@ var vstick_active: bool = false
 var vstick_touch_id: int = -1
 var vstick_knob_pos: Vector2 = Vector2.ZERO
 
+var action_cluster_node: Control
 var btn_touch_mine: Button
 var btn_touch_brake: Button
 var btn_touch_build: Button
 var btn_touch_drone: Button
 var btn_touch_map: Button
 var build_bar_panel: PanelContainer
+
+# 休眠探査機・起動ガイダンスオーバーレイ (DORMANT STATE)
+var boot_guide_overlay: Control
+var boot_prompt_lbl: Label
 
 func _ready() -> void:
 	main_node = get_parent()
@@ -72,6 +87,7 @@ func _ready() -> void:
 	
 	build_minimal_ui()
 	
+	GameState.story_phase_changed.connect(_on_story_phase_changed)
 	GameState.resource_changed.connect(_on_resource_changed)
 	GameState.fleet_changed.connect(_on_fleet_changed)
 	GameState.player_health_changed.connect(_on_player_health_changed)
@@ -82,6 +98,11 @@ func _ready() -> void:
 	get_tree().root.size_changed.connect(_adjust_responsive_layout)
 	_adjust_responsive_layout()
 	
+	_update_progressive_ui(GameState.story_phase)
+	_update_objective_text()
+
+func _on_story_phase_changed(new_phase: int) -> void:
+	_update_progressive_ui(new_phase)
 	_update_objective_text()
 
 func _process(delta: float) -> void:
@@ -89,7 +110,7 @@ func _process(delta: float) -> void:
 	_update_tool_badges()
 	_update_objective_text()
 	
-	if nav_overlay:
+	if nav_overlay and nav_overlay.visible:
 		nav_overlay.queue_redraw()
 		
 	if missing_timer > 0.0:
@@ -104,7 +125,7 @@ func _process(delta: float) -> void:
 			_sync_tool_highlights()
 			_update_build_mode_visuals()
 
-	if power_bar:
+	if power_bar and power_bar.is_visible_in_tree():
 		power_bar.value = GameState.power_ratio * 100.0
 		
 	if alert_timer > 0.0:
@@ -113,14 +134,24 @@ func _process(delta: float) -> void:
 			alert_rect.visible = (int(alert_timer * 6.0) % 2 == 0)
 			if alert_timer <= 0.0: alert_rect.visible = false
 
-	# ドローン合体可能時のパルス発光
-	if btn_touch_drone:
-		var can_attach = GameState.resources.get("Fe", 0) >= 40 and GameState.attached_drones < GameState.max_attached_drones
-		if can_attach:
+	# ドローン合体可能時のパルス発光 (DRONEボタン)
+	if btn_touch_drone and btn_touch_drone.visible:
+		var can_attach = false
+		if GameState.attached_drones == 0:
+			can_attach = GameState.resources.get("Fe", 0) >= 40
+		else:
+			can_attach = GameState.resources.get("Fe", 0) >= 30 and GameState.resources.get("Si", 0) >= 15
+			
+		if can_attach and GameState.attached_drones < GameState.max_attached_drones:
 			var pulse = (sin(hud_anim_time * 8.0) * 0.5 + 0.5)
 			btn_touch_drone.modulate = Color(1.0 + pulse * 1.5, 2.0 + pulse * 1.5, 1.5 + pulse * 1.5)
 		else:
 			btn_touch_drone.modulate = Color.WHITE
+
+	# 休眠探査機ガイダンスのパルス点滅
+	if boot_guide_overlay and boot_guide_overlay.visible and boot_prompt_lbl:
+		var b_pulse = (sin(hud_anim_time * 5.0) * 0.5 + 0.5)
+		boot_prompt_lbl.modulate = Color(1.0, 1.0, 1.0, 0.4 + b_pulse * 0.6)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
@@ -175,6 +206,7 @@ func build_minimal_ui() -> void:
 	# 1. 上部レスポンシブバー (PRESET_TOP_WIDE)
 	# ========================================================
 	var top_bar = MarginContainer.new()
+	top_bar_node = top_bar
 	top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	top_bar.anchor_left = 0.0
 	top_bar.anchor_right = 1.0
@@ -196,18 +228,19 @@ func build_minimal_ui() -> void:
 	res_hbox.add_theme_constant_override("separation", 6)
 	top_vbox.add_child(res_hbox)
 
-	fe_label = create_res_badge(res_hbox, "res://assets/ui/fe.png", str(GameState.resources["Fe"]), Color(0.3, 0.85, 1.0))
-	cu_label = create_res_badge(res_hbox, "res://assets/ui/cu.png", str(GameState.resources["Cu"]), Color(1.0, 0.65, 0.2))
-	ti_label = create_res_badge(res_hbox, "res://assets/ui/ti.png", str(GameState.resources["Ti"]), Color(0.85, 0.45, 1.0))
-	si_label = create_res_badge(res_hbox, "res://assets/ui/si.png", str(GameState.resources["Si"]), Color(0.2, 1.0, 0.7))
-	he3_label = create_res_badge(res_hbox, "res://assets/ui/res_he3.png", str(GameState.resources.get("He3", 0)), Color(0.2, 0.9, 1.0))
-	plasma_label = create_res_badge(res_hbox, "res://assets/ui/res_plasma.png", str(GameState.resources.get("Plasma", 0)), Color(1.0, 0.75, 0.2))
-	ice_label = create_res_badge(res_hbox, "res://assets/ui/res_ice.png", str(GameState.resources.get("Ice", 0)), Color(0.4, 0.9, 1.0))
-	dm_label = create_res_badge(res_hbox, "res://assets/ui/res_darkmatter.png", str(GameState.resources.get("DarkMatter", 0)), Color(0.8, 0.4, 1.0))
-	nt_label = create_res_badge(res_hbox, "res://assets/ui/res_neutronium.png", str(GameState.resources.get("Neutronium", 0)), Color(0.2, 1.0, 0.8))
+	fe_label = create_res_badge(res_hbox, "res://assets/ui/fe.png", str(GameState.resources["Fe"]), Color(0.3, 0.85, 1.0), "Fe")
+	cu_label = create_res_badge(res_hbox, "res://assets/ui/cu.png", str(GameState.resources["Cu"]), Color(1.0, 0.65, 0.2), "Cu")
+	ti_label = create_res_badge(res_hbox, "res://assets/ui/ti.png", str(GameState.resources["Ti"]), Color(0.85, 0.45, 1.0), "Ti")
+	si_label = create_res_badge(res_hbox, "res://assets/ui/si.png", str(GameState.resources["Si"]), Color(0.2, 1.0, 0.7), "Si")
+	he3_label = create_res_badge(res_hbox, "res://assets/ui/res_he3.png", str(GameState.resources.get("He3", 0)), Color(0.2, 0.9, 1.0), "He3")
+	plasma_label = create_res_badge(res_hbox, "res://assets/ui/res_plasma.png", str(GameState.resources.get("Plasma", 0)), Color(1.0, 0.75, 0.2), "Plasma")
+	ice_label = create_res_badge(res_hbox, "res://assets/ui/res_ice.png", str(GameState.resources.get("Ice", 0)), Color(0.4, 0.9, 1.0), "Ice")
+	dm_label = create_res_badge(res_hbox, "res://assets/ui/res_darkmatter.png", str(GameState.resources.get("DarkMatter", 0)), Color(0.8, 0.4, 1.0), "DarkMatter")
+	nt_label = create_res_badge(res_hbox, "res://assets/ui/res_neutronium.png", str(GameState.resources.get("Neutronium", 0)), Color(0.2, 1.0, 0.8), "Neutronium")
 
 	# 2行目: ステータスバー (左) ＋ 伸縮スペーサー ＋ 操作ボタン (右)
 	var stat_row = HBoxContainer.new()
+	stat_row_node = stat_row
 	stat_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	stat_row.add_theme_constant_override("separation", 8)
 	top_vbox.add_child(stat_row)
@@ -268,6 +301,7 @@ func build_minimal_ui() -> void:
 
 	# 右側: ドクトリン・カメラ・セーブ操作ボタン (文字バッジ式で巨大テクスチャ誤爆防止)
 	var right_hbox = HBoxContainer.new()
+	right_top_buttons = right_hbox
 	right_hbox.alignment = BoxContainer.ALIGNMENT_END
 	right_hbox.add_theme_constant_override("separation", 5)
 	stat_row.add_child(right_hbox)
@@ -402,6 +436,7 @@ func build_minimal_ui() -> void:
 	# 2. 画面左側: ズームボタンクラスタ (Zoom Buttons)
 	# ========================================================
 	var zoom_cluster = VBoxContainer.new()
+	zoom_cluster_node = zoom_cluster
 	zoom_cluster.set_anchors_preset(Control.PRESET_CENTER_LEFT)
 	zoom_cluster.anchor_left = 0.0
 	zoom_cluster.anchor_top = 0.45
@@ -459,6 +494,7 @@ func build_minimal_ui() -> void:
 	# 4. 画面右下: スマホ用アクションボタンクラスタ (Action Button Cluster)
 	# ========================================================
 	var action_cluster = Control.new()
+	action_cluster_node = action_cluster
 	action_cluster.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	action_cluster.anchor_left = 1.0
 	action_cluster.anchor_right = 1.0
@@ -620,6 +656,7 @@ func build_minimal_ui() -> void:
 
 	# メガストラクチャー展開ボタン (右端)
 	var mega_btn = Button.new()
+	mega_btn_node = mega_btn
 	mega_btn.icon = load("res://assets/ui/icon_elevator.png")
 	mega_btn.expand_icon = true
 	mega_btn.custom_minimum_size = Vector2(48, 50)
@@ -642,6 +679,47 @@ func build_minimal_ui() -> void:
 
 	# 6. メガストラクチャー・ミニマルパレット構築
 	_build_minimal_mega_palette(sb_slot)
+
+	# ========================================================
+	# 7. 休眠探査機・再起動ガイダンス (DORMANT STATE OVERLAY)
+	# ========================================================
+	boot_guide_overlay = Control.new()
+	boot_guide_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	boot_guide_overlay.mouse_filter = Control.MOUSE_FILTER_PASS
+	boot_guide_overlay.gui_input.connect(func(ev):
+		if (ev is InputEventMouseButton and ev.pressed) or (ev is InputEventScreenTouch and ev.pressed):
+			if player_node and player_node.has_method("wake_up_probe"):
+				player_node.wake_up_probe()
+	)
+	add_child(boot_guide_overlay)
+
+	var boot_vbox = VBoxContainer.new()
+	boot_vbox.set_anchors_preset(Control.PRESET_CENTER)
+	boot_vbox.anchor_left = 0.5
+	boot_vbox.anchor_right = 0.5
+	boot_vbox.anchor_top = 0.5
+	boot_vbox.anchor_bottom = 0.5
+	boot_vbox.offset_left = -200.0
+	boot_vbox.offset_top = 60.0
+	boot_vbox.offset_right = 200.0
+	boot_vbox.offset_bottom = 140.0
+	boot_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	boot_vbox.add_theme_constant_override("separation", 6)
+	boot_guide_overlay.add_child(boot_vbox)
+
+	var b_tag = Label.new()
+	b_tag.text = ">>> DORMANT AUTOMA PROBE <<<"
+	b_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b_tag.add_theme_font_size_override("font_size", 13)
+	b_tag.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
+	boot_vbox.add_child(b_tag)
+
+	boot_prompt_lbl = Label.new()
+	boot_prompt_lbl.text = "[ TAP SCREEN TO INITIALIZE CORE ]"
+	boot_prompt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boot_prompt_lbl.add_theme_font_size_override("font_size", 14)
+	boot_prompt_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.5))
+	boot_vbox.add_child(boot_prompt_lbl)
 
 func _adjust_responsive_layout() -> void:
 	var vp_rect = get_viewport().get_visible_rect()
@@ -730,7 +808,7 @@ func _reset_vstick() -> void:
 		player_node.touch_thrust_vec = Vector2.ZERO
 	vstick_base.queue_redraw()
 
-func create_res_badge(parent: Node, icon_p: String, init_v: String, col: Color) -> Label:
+func create_res_badge(parent: Node, icon_p: String, init_v: String, col: Color, res_key: String = "") -> Label:
 	var h = HBoxContainer.new()
 	h.add_theme_constant_override("separation", 4)
 	
@@ -747,7 +825,68 @@ func create_res_badge(parent: Node, icon_p: String, init_v: String, col: Color) 
 	h.add_child(lbl)
 
 	parent.add_child(h)
+	if res_key != "":
+		res_badge_containers[res_key] = h
 	return lbl
+
+func _update_progressive_ui(phase: int) -> void:
+	if boot_guide_overlay:
+		boot_guide_overlay.visible = (phase == GameState.StoryPhase.DORMANT)
+
+	# 0. DORMANT: 全UI非表示
+	if phase == GameState.StoryPhase.DORMANT:
+		if top_bar_node: top_bar_node.visible = false
+		if zoom_cluster_node: zoom_cluster_node.visible = false
+		if vstick_base: vstick_base.visible = false
+		if action_cluster_node: action_cluster_node.visible = false
+		if build_bar_panel: build_bar_panel.visible = false
+		if nav_overlay: nav_overlay.visible = false
+		return
+
+	# 1. MOVE 以降: 上部バーとジョイスティック開放
+	if top_bar_node: top_bar_node.visible = true
+	if vstick_base: vstick_base.visible = true
+	if zoom_cluster_node: zoom_cluster_node.visible = (phase >= GameState.StoryPhase.SPACE)
+	if nav_overlay: nav_overlay.visible = (phase >= GameState.StoryPhase.SPACE)
+	if action_cluster_node: action_cluster_node.visible = (phase >= GameState.StoryPhase.MINE)
+	if build_bar_panel: build_bar_panel.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
+
+	# ステータス行 (HP, Shield, Energy) と 右上ボタン (H, M, A, Core, Map, Save)
+	if stat_row_node: stat_row_node.visible = (phase >= GameState.StoryPhase.FACTORY)
+	if right_top_buttons: right_top_buttons.visible = (phase >= GameState.StoryPhase.SPACE)
+
+	# 資源バッジの段階的表示
+	for r_id in res_badge_containers.keys():
+		var b_node = res_badge_containers[r_id]
+		if r_id == "Fe":
+			b_node.visible = (phase >= GameState.StoryPhase.MINE)
+		elif r_id in ["Cu", "Si"]:
+			b_node.visible = (phase >= GameState.StoryPhase.FACTORY)
+		else:
+			b_node.visible = (phase >= GameState.StoryPhase.SPACE)
+
+	# アクションボタンの段階的表示
+	if btn_touch_mine:
+		btn_touch_mine.visible = (phase >= GameState.StoryPhase.MINE)
+	if btn_touch_drone:
+		btn_touch_drone.visible = (phase >= GameState.StoryPhase.DRONE)
+	if btn_touch_build:
+		btn_touch_build.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
+	if btn_touch_brake:
+		btn_touch_brake.visible = (phase >= GameState.StoryPhase.FACTORY)
+
+	# 建築ツールの段階的表示
+	for t_id in tool_buttons.keys():
+		var slot_panel = tool_buttons[t_id]["panel"]
+		if t_id == "miner":
+			slot_panel.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
+		elif t_id in ["belt", "smelter", "solar"]:
+			slot_panel.visible = (phase >= GameState.StoryPhase.FACTORY)
+		else:
+			slot_panel.visible = (phase >= GameState.StoryPhase.SPACE)
+
+	if mega_btn_node:
+		mega_btn_node.visible = (phase >= GameState.StoryPhase.SPACE)
 
 func create_icon_btn(icon_p: String, _tip: String, on_click: Callable) -> Button:
 	var b = Button.new()
@@ -883,32 +1022,61 @@ func show_missing_res_alert(res_name: String) -> void:
 
 func _update_objective_text() -> void:
 	if not objective_label: return
-	if GameState.quest_index >= GameState.quest_list.size():
-		objective_label.text = "SYSTEM LIBERATED: ALL OBJECTIVES COMPLETE"
-		objective_label.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
-		return
-		
-	var q = GameState.quest_list[GameState.quest_index]
-	var txt = ""
-	match q.get("req_type"):
-		"resource":
-			var cur = GameState.resources.get(q.get("target_res", "Fe"), 0)
-			txt = "%s: %d / %d" % [q.get("short", ""), cur, q.get("target_val", 0)]
-		"drone":
-			txt = "%s (%d/%d)" % [q.get("short", ""), GameState.attached_drones, q.get("target_val", 1)]
-		"building":
-			txt = "%s" % [q.get("short", "")]
-		"fleet":
-			txt = "%s (%d/%d)" % [q.get("short", ""), GameState.fleet_count, q.get("target_val", 100)]
-		"celestial_any":
-			var cur_p = GameState.resources.get("Plasma", 0) + GameState.resources.get("Ice", 0)
-			txt = "%s (%d/%d)" % [q.get("short", ""), cur_p, q.get("target_val", 5)]
-		"megastructure":
-			txt = "%s" % [q.get("short", "")]
-		"liberation":
-			txt = "%s (HP: %.0f)" % [q.get("short", ""), GameState.hostile_core_health]
-			
-	objective_label.text = "[ %s ]" % txt
+	
+	match GameState.story_phase:
+		GameState.StoryPhase.DORMANT:
+			objective_label.text = "[ >>> TAP SCREEN TO INITIALIZE AUTOMA CORE <<< ]"
+			objective_label.add_theme_color_override("font_color", Color(0.2, 2.0, 2.8))
+			return
+		GameState.StoryPhase.MOVE:
+			objective_label.text = "[ STEP 1: ENGAGE THRUSTERS - MOVE WITH JOYSTICK / WASD ]"
+			objective_label.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
+			return
+		GameState.StoryPhase.MINE:
+			var cur_fe = GameState.resources.get("Fe", 0)
+			objective_label.text = "[ STEP 2: HOLD [MINE] OVER Fe VEIN (%d / 40) ]" % mini(40, cur_fe)
+			objective_label.add_theme_color_override("font_color", Color(0.3, 2.2, 2.8))
+			return
+		GameState.StoryPhase.DRONE:
+			objective_label.text = "[ STEP 3: TAP [DRONE] TO 3D-PRINT SUB-UNIT (COST: 40 Fe) ]"
+			objective_label.add_theme_color_override("font_color", Color(0.2, 2.5, 1.0))
+			return
+		GameState.StoryPhase.BUILD_MINER:
+			objective_label.text = "[ STEP 4: TAP [BUILD] & PLACE DRILL ON Fe VEIN ]"
+			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
+			return
+		GameState.StoryPhase.FACTORY:
+			objective_label.text = "[ STEP 5: BUILD BELT & SMELTER TO AUTOMATE PRODUCTION ]"
+			objective_label.add_theme_color_override("font_color", Color(1.0, 2.0, 0.4))
+			return
+		GameState.StoryPhase.SPACE:
+			if GameState.quest_index >= GameState.quest_list.size():
+				objective_label.text = "[ SYSTEM LIBERATED: CONQUER THE STARS ]"
+				objective_label.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
+				return
+				
+			var q = GameState.quest_list[GameState.quest_index]
+			var txt = ""
+			match q.get("req_type"):
+				"resource":
+					var cur = GameState.resources.get(q.get("target_res", "Fe"), 0)
+					txt = "%s: %d / %d" % [q.get("short", ""), cur, q.get("target_val", 0)]
+				"drone":
+					txt = "%s (%d/%d)" % [q.get("short", ""), GameState.attached_drones, q.get("target_val", 1)]
+				"building":
+					txt = "%s" % [q.get("short", "")]
+				"fleet":
+					txt = "%s (%d/%d)" % [q.get("short", ""), GameState.fleet_count, q.get("target_val", 100)]
+				"celestial_any":
+					var cur_p = GameState.resources.get("Plasma", 0) + GameState.resources.get("Ice", 0)
+					txt = "%s (%d/%d)" % [q.get("short", ""), cur_p, q.get("target_val", 5)]
+				"megastructure":
+					txt = "%s" % [q.get("short", "")]
+				"liberation":
+					txt = "%s (HP: %.0f)" % [q.get("short", ""), GameState.hostile_core_health]
+					
+			objective_label.text = "[ %s ]" % txt
+			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 
 func _on_nav_overlay_draw() -> void:
 	if not nav_overlay or not main_node: return

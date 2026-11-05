@@ -19,6 +19,13 @@ var touch_thrust_vec: Vector2 = Vector2.ZERO
 var touch_mining_active: bool = false
 var touch_braking_active: bool = false
 
+# ストーリー進行＆アニメーション・造形エフェクト
+var moved_dist_accum: float = 0.0
+var sensor_pulse_timer: float = 0.0
+var sensor_pulse_radius: float = 0.0
+var drone_fabrication_timer: float = 0.0
+var wake_pulse_timer: float = 0.0
+
 var drone_rot_angle: float = 0.0
 var anim_time: float = 0.0
 var grid_manager: Node2D = null
@@ -34,9 +41,38 @@ func _ready() -> void:
 	player_sheet = load("res://assets/sprites/player_core_sheet.png")
 	drone_sheet = load("res://assets/sprites/fabricator_drone_sheet.png")
 	grid_manager = get_parent().get_node_or_null("GridManager")
+	GameState.drone_attached.connect(_on_drone_attached)
+
+func _on_drone_attached(_count: int) -> void:
+	drone_fabrication_timer = 1.4
+	AudioSynth.play_synth("build")
+
+func wake_up_probe() -> void:
+	if GameState.story_phase == GameState.StoryPhase.DORMANT:
+		GameState.set_story_phase(GameState.StoryPhase.MOVE)
+		wake_pulse_timer = 1.2
+		sensor_pulse_radius = 5.0
+		AudioSynth.play_synth("build")
 
 func _physics_process(delta: float) -> void:
 	anim_time += delta
+	
+	if wake_pulse_timer > 0.0:
+		wake_pulse_timer -= delta
+	if sensor_pulse_timer > 0.0:
+		sensor_pulse_timer -= delta
+		sensor_pulse_radius += delta * 360.0
+	if drone_fabrication_timer > 0.0:
+		drone_fabrication_timer -= delta
+
+	# 休眠フェーズ判定（操作・推力はオフ）
+	if GameState.story_phase == GameState.StoryPhase.DORMANT:
+		velocity = Vector2.ZERO
+		is_mining = false
+		thrusting_dir = Vector2.ZERO
+		queue_redraw()
+		return
+
 	var input_vec = Vector2.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
 		input_vec.y -= 1.0
@@ -94,28 +130,44 @@ func _physics_process(delta: float) -> void:
 		velocity = input_vec.normalized() * 240.0
 		
 	move_and_slide()
+
+	# MOVEフェーズでの移動距離検知 ＆ 地質センサー波発信
+	if GameState.story_phase == GameState.StoryPhase.MOVE:
+		moved_dist_accum += velocity.length() * delta
+		if moved_dist_accum >= 60.0:
+			sensor_pulse_timer = 1.4
+			sensor_pulse_radius = 12.0
+			GameState.set_story_phase(GameState.StoryPhase.MINE)
+			AudioSynth.play_synth("alert")
 	
 	# マウス ＆ ゲームパッド ＆ スマホタッチ採掘操作（建築ツール非選択時のみ）
+	# ※ スマホやWebブラウザでは画面タップでのビーム誤爆を完全防止！
+	var can_mine_phase = (GameState.story_phase >= GameState.StoryPhase.MINE)
 	var is_building = (grid_manager and grid_manager.selected_tool != "none")
 	var is_gamepad_mining = (Input.get_joy_axis(0, JOY_AXIS_TRIGGER_RIGHT) > 0.35) or (Input.is_joy_button_pressed(0, JOY_BUTTON_A) and not is_building)
-	var is_mouse_mining = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not is_building
 	var is_touch_mining = touch_mining_active and not is_building
 
-	if (is_mouse_mining or is_gamepad_mining or is_touch_mining) and not is_building:
-		if is_touch_mining:
-			mining_target = _get_auto_aim_target()
-		elif is_mouse_mining:
+	var is_touch_dev = DisplayServer.is_touchscreen_available() or OS.has_feature("mobile") or OS.has_feature("web")
+	var is_mouse_mining = false
+	if not is_touch_dev and not is_building:
+		# PC環境でのみマウスクリックまたはスペースキー長押しで採掘可能
+		is_mouse_mining = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_key_pressed(KEY_SPACE)
+
+	if can_mine_phase and (is_touch_mining or is_gamepad_mining or is_mouse_mining) and not is_building:
+		if is_touch_mining or is_gamepad_mining:
+			if is_touch_mining:
+				mining_target = _get_auto_aim_target()
+			else:
+				var joy_rx = Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
+				var joy_ry = Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+				if Vector2(joy_rx, joy_ry).length() > 0.25:
+					var raw_gp = global_position + Vector2(joy_rx, joy_ry).normalized() * 180.0
+					mining_target = _snap_target_to_celestial_or_vein(raw_gp)
+				else:
+					mining_target = _get_auto_aim_target()
+		else:
 			var raw_target = get_global_mouse_position()
 			mining_target = _snap_target_to_celestial_or_vein(raw_target)
-		else:
-			# ゲームパッド：右スティックエイム、未入力なら最も近い鉱脈/天体へ自動照準！
-			var joy_rx = Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
-			var joy_ry = Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
-			if Vector2(joy_rx, joy_ry).length() > 0.25:
-				var raw_gp = global_position + Vector2(joy_rx, joy_ry).normalized() * 180.0
-				mining_target = _snap_target_to_celestial_or_vein(raw_gp)
-			else:
-				mining_target = _get_auto_aim_target()
 				
 		is_mining = true
 		mining_laser_timer += delta
@@ -250,6 +302,12 @@ func _cycle_tool(dir: int) -> void:
 	grid_manager.select_tool(tool_list[cur_idx])
 
 func _input(event: InputEvent) -> void:
+	# 休眠探査機の再起動タップ検知
+	if GameState.story_phase == GameState.StoryPhase.DORMANT:
+		if (event is InputEventMouseButton and event.pressed) or (event is InputEventScreenTouch and event.pressed) or (event is InputEventKey and event.pressed):
+			wake_up_probe()
+			return
+
 	# ゲームパッド (Joypad 0) ボタン操作
 	if event is InputEventJoypadButton and event.pressed:
 		match event.button_index:
@@ -321,7 +379,30 @@ func _input(event: InputEvent) -> void:
 			GameState.add_log("ESCAPE VELOCITY REACHED: %.0f px/s -> INTERPLANETARY FLIGHT!" % velocity.length())
 
 func _draw() -> void:
-	# 1. 重力軌道予測ライン
+	# 0. 起動パルス ＆ 地質探査センサー波エフェクト (広がるリング波紋)
+	if wake_pulse_timer > 0.0:
+		var w_r = (1.2 - wake_pulse_timer) * 120.0
+		var w_a = wake_pulse_timer / 1.2
+		draw_arc(Vector2.ZERO, w_r, 0, TAU, 32, Color(0.0, 2.5, 3.0, w_a * 0.8), 2.5)
+
+	if sensor_pulse_timer > 0.0:
+		var p_alpha = sensor_pulse_timer / 1.4
+		draw_arc(Vector2.ZERO, sensor_pulse_radius, 0, TAU, 48, Color(0.2, 2.2, 0.8, p_alpha * 0.85), 3.0)
+		draw_arc(Vector2.ZERO, maxf(1.0, sensor_pulse_radius - 12.0), 0, TAU, 36, Color(0.0, 1.8, 2.8, p_alpha * 0.5), 1.5)
+
+	# 1. 休眠状態の描画 (DORMANT)
+	if GameState.story_phase == GameState.StoryPhase.DORMANT:
+		var stand_pulse = (sin(anim_time * 4.0) * 0.5 + 0.5)
+		# 待機リング波紋
+		draw_arc(Vector2.ZERO, 32.0 + stand_pulse * 6.0, 0, TAU, 32, Color(0.0, 1.5, 2.0, 0.3 + stand_pulse * 0.3), 1.5)
+		# 消灯した本体コア
+		if player_sheet:
+			draw_texture_rect_region(player_sheet, Rect2(Vector2(-24, -24), Vector2(48, 48)), Rect2(0.0, 0.0, 48.0, 48.0), Color(0.35, 0.4, 0.45, 0.85))
+		# 赤い微弱待機ランプ
+		draw_circle(Vector2.ZERO, 4.0, Color(1.8, 0.2, 0.2, 0.6 + stand_pulse * 0.4))
+		return
+
+	# 2. 重力軌道予測ライン
 	if grid_manager and velocity.length() > 15.0:
 		var sim_p = global_position
 		var sim_v = velocity
@@ -341,19 +422,53 @@ func _draw() -> void:
 	var base_radius = 24.0
 	var p_frame = int(anim_time * 8.0) % 4
 	
-	# 2. アタッチされた小型プリントドローン群の描画
+	# 3. アタッチされた小型プリントドローン群の美麗描画 (四角形枠の排除・サイバー子機)
 	if drones > 0:
 		var step = TAU / float(drones)
-		var orbit_dist = base_radius + 20.0
+		var orbit_dist = base_radius + 22.0
+		# 薄いホログラム公転軌道リング
+		draw_arc(Vector2.ZERO, orbit_dist, 0, TAU, 40, Color(0.0, 1.8, 2.5, 0.3), 1.0)
+
 		for i in range(drones):
 			var a = drone_rot_angle + step * float(i)
 			var d_pos = Vector2(cos(a), sin(a)) * orbit_dist
-			draw_line(Vector2.ZERO, d_pos, Color(0.0, 0.9, 1.0, 0.7), 2.0)
+			
+			# 自機とドローンを結ぶ光のエナジーテザー
+			draw_line(Vector2.ZERO, d_pos, Color(0.0, 1.8, 2.8, 0.45), 1.2)
+			
+			# ドローン本体のサイバーウィング幾何学描画 (六角形コア ＋ デルタ翼)
+			var wing_dir = Vector2(-sin(a), cos(a)) # 進行方向
+			var tip = d_pos + wing_dir * 10.0
+			var left_w = d_pos - wing_dir * 7.0 + Vector2(-wing_dir.y, wing_dir.x) * 8.0
+			var right_w = d_pos - wing_dir * 7.0 - Vector2(-wing_dir.y, wing_dir.x) * 8.0
+			var pts = PackedVector2Array([tip, left_w, d_pos - wing_dir * 4.0, right_w])
+			
+			draw_colored_polygon(pts, Color(0.04, 0.12, 0.2, 0.95))
+			draw_polyline(pts, Color(0.0, 2.4, 3.0, 0.9), 1.5)
+			# ドローン中心の発光コア
+			draw_circle(d_pos, 3.5, Color(0.2, 2.5, 2.5, 1.0))
+			draw_arc(d_pos, 6.0, 0, TAU, 16, Color(2.5, 2.5, 2.5, 0.8), 1.0)
+
+			# スプライトシートがあれば加算合成
 			if drone_sheet:
 				var d_frame = (p_frame + i) % 4
-				draw_texture_rect_region(drone_sheet, Rect2(d_pos - Vector2(12, 12), Vector2(24, 24)), Rect2(24.0 * d_frame, 0.0, 24.0, 24.0))
+				draw_texture_rect_region(drone_sheet, Rect2(d_pos - Vector2(10, 10), Vector2(20, 20)), Rect2(24.0 * d_frame, 0.0, 24.0, 24.0), Color(1.0, 1.2, 1.5, 0.7))
 
-	# 3. プレイヤー中央コア（Seed Unit: 48x48）
+	# 4. ドローン造形シーケンス演出 (3Dプリント溶接サークル ＆ スパーク)
+	if drone_fabrication_timer > 0.0:
+		var f_progress = 1.0 - (drone_fabrication_timer / 1.4)
+		var f_rad = base_radius + 22.0
+		# 回転する溶接ホログラムリング
+		draw_arc(Vector2.ZERO, f_rad, 0, TAU * f_progress, 36, Color(0.0, 2.5, 3.0, 0.95), 2.5)
+		draw_arc(Vector2.ZERO, f_rad + 6.0, anim_time * 6.0, anim_time * 6.0 + PI, 24, Color(2.5, 1.8, 0.3, 0.8), 2.0)
+		
+		# 溶接火花パーティクル
+		for s in range(8):
+			var sa = anim_time * 12.0 + float(s) * (TAU / 8.0)
+			var sp_pos = Vector2(cos(sa), sin(sa)) * (f_rad + randf_range(-4.0, 4.0))
+			draw_circle(sp_pos, randf_range(1.5, 3.0), Color(2.8, 2.2, 0.6, 0.9))
+
+	# 5. プレイヤー中央コア（Seed Unit: 48x48）
 	# スラスター噴射 ＆ 逆噴射ブレーキ (RCS)
 	if thrusting_dir != Vector2.ZERO:
 		var flame_len = 16.0 + sin(anim_time * 30.0) * 4.0
@@ -372,7 +487,7 @@ func _draw() -> void:
 		draw_texture_rect_region(player_sheet, Rect2(Vector2(-24, -24), Vector2(48, 48)), Rect2(48.0 * p_frame, 0.0, 48.0, 48.0))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# 4. 採掘レーザービーム描画 (宇宙天体固有カラー ＆ HDR Glow)
+	# 6. 採掘レーザービーム描画 (宇宙天体固有カラー ＆ HDR Glow)
 	if is_mining:
 		var local_target = to_local(mining_target)
 		var beam_col = current_mining_color
@@ -381,16 +496,17 @@ func _draw() -> void:
 		draw_line(Vector2.ZERO, local_target, Color(2.5, 2.5, 2.5, 1.0), 1.2)
 		draw_circle(local_target, 7.0, beam_col)
 		
-		# ドローンからの支援ビーム
+		# ドローンからのマルチ支援ビーム (採掘効率アップが視覚的に実感できる)
 		if drones > 0:
 			var step = TAU / float(drones)
-			var orbit_dist = base_radius + 20.0
+			var orbit_dist = base_radius + 22.0
 			for i in range(mini(drones, 4)):
 				var a = drone_rot_angle + step * float(i)
 				var d_pos = Vector2(cos(a), sin(a)) * orbit_dist
-				draw_line(d_pos, local_target, beam_col * Color(1, 1, 1, 0.5), 1.5)
+				draw_line(d_pos, local_target, beam_col * Color(1.2, 1.2, 1.5, 0.75), 1.8)
+				draw_circle(d_pos, 4.0, Color(2.5, 2.5, 2.5, 0.9))
 
-	# 5. シールドリング＆自機耐久値バー描画 (HDR Glow)
+	# 7. シールドリング＆自機耐久値バー描画 (HDR Glow)
 	if GameState.player_shield > 0.0:
 		var s_alpha = GameState.player_shield / GameState.player_max_shield
 		draw_arc(Vector2.ZERO, 30.0, 0, TAU, 32, Color(0.0, 2.0, 3.0, s_alpha * 0.7), 1.5)

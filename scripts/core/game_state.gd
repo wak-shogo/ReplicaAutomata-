@@ -3,12 +3,25 @@ extends Node
 # STAR REPLICA: AUTOMA - コアゲームステート＆プログレッション管理 (商用製品版)
 # クラフト、自動化、有向物流、電力網、1万体スウォーム、メガストラクチャー、空爆防衛戦、セーブ
 
+# 0. ユーザーストーリー・プログレッシブ進行フェーズ (休眠探査機から宇宙帝国へ)
+enum StoryPhase {
+	DORMANT,      # 0: 休眠中。何もない地表。画面タップで再起動。
+	MOVE,         # 1: 移動確認。数歩移動でセンサーパルスが地下Fe鉱脈を探知。
+	MINE,         # 2: 手動採掘。[MINE]ボタンで40 Fe採掘。
+	DRONE,        # 3: 子機造形。[DRONE]ボタンで初の子機を3Dプリント＆合体。
+	BUILD_MINER,  # 4: 施設建築。[BUILD]ボタンで自動化ドリルをFe鉱脈上に配置。
+	FACTORY,      # 5: 工場物流。コンベア・精錬炉の設置。
+	SPACE         # 6: 宇宙進出。全機能（星間ナビ、艦隊ドクトリン、メガストラクチャー等）完全開放。
+}
+
+var story_phase: StoryPhase = StoryPhase.DORMANT
+
 # 1. 資源データ（原材料 ＆ 宇宙天体固有資源）
 var resources = {
-	"Fe": 15,        # 鉄鉱石 (初期手動採掘チュートリアル用)
-	"Cu": 25,        # 銅鉱石
+	"Fe": 0,         # 鉄鉱石 (初期手動採掘チュートリアル用)
+	"Cu": 0,         # 銅鉱石
 	"Ti": 0,         # チタン鉱石
-	"Si": 20,        # 珪素鉱石
+	"Si": 0,         # 珪素鉱石
 	"Energy": 100.0, # 蓄電グリッド残量 (%)
 	"He3": 0,        # 月(Luna): ヘリウム3
 	"Plasma": 0,     # 恒星(Sun): 純粋太陽プラズマ
@@ -34,14 +47,14 @@ var items = {
 	"alloy": 0,            # 耐熱チタン合金
 	"drone_unit": 0,       # レプリカドローン機体
 	# 建設用ストック
-	"miner": 1,            # スタータードリル
-	"belt": 15,            # スターターベルト
-	"smelter": 1,          # スターター精錬炉
+	"miner": 0,            # スタータードリル
+	"belt": 0,             # スターターベルト
+	"smelter": 0,          # スターター精錬炉
 	"assembler": 0,
 	"mass_driver": 0,
 	"depot": 0,
-	"turret": 1,           # スターター防衛タレット
-	"solar": 1,            # スターター太陽光パネル
+	"turret": 0,           # スターター防衛タレット
+	"solar": 0,            # スターター太陽光パネル
 	"geothermal": 0
 }
 
@@ -207,6 +220,7 @@ var quest_list: Array[Dictionary] = [
 var event_logs: Array[String] = []
 
 # シグナル一覧
+signal story_phase_changed(new_phase: int)
 signal resource_changed(type: String, amount: int)
 signal item_changed(type: String, amount: int)
 signal fleet_changed(current: int, maximum: int)
@@ -226,6 +240,36 @@ func _ready() -> void:
 	add_log("SEED UNIT LANDED. PRESS F5 TO QUICK-SAVE, F9 TO QUICK-LOAD.")
 	call_deferred("_notify_initial_quest")
 
+func set_story_phase(new_phase: StoryPhase) -> void:
+	if story_phase == new_phase:
+		return
+	story_phase = new_phase
+	story_phase_changed.emit(story_phase)
+	match story_phase:
+		StoryPhase.DORMANT:
+			add_log("SYSTEM STATUS: DORMANT PROBE STANDBY")
+		StoryPhase.MOVE:
+			add_log("CORE INITIALIZED. THRUST SYSTEMS ONLINE.")
+		StoryPhase.MINE:
+			add_log("SENSOR ALERT: UNDERGROUND Fe VEIN DETECTED!")
+		StoryPhase.DRONE:
+			add_log("BLUEPRINT UNLOCKED: SUB-DRONE FABRICATION READY.")
+		StoryPhase.BUILD_MINER:
+			if items.get("miner", 0) <= 0:
+				items["miner"] = 1
+				item_changed.emit("miner", items["miner"])
+			add_log("SCHEMATIC GRANTED: AUTOMATED DRILL (MINER x1).")
+		StoryPhase.FACTORY:
+			if items.get("belt", 0) <= 0:
+				items["belt"] = 10
+				item_changed.emit("belt", items["belt"])
+			if items.get("smelter", 0) <= 0:
+				items["smelter"] = 1
+				item_changed.emit("smelter", items["smelter"])
+			add_log("LOGISTICS PROTOCOL: CONVEYORS & SMELTERS UNLOCKED.")
+		StoryPhase.SPACE:
+			add_log("STELLAR ASCENSION: ALL SYSTEMS FULLY OPERATIONAL.")
+
 func _process(delta: float) -> void:
 	# シールド自動リチャージ
 	if player_shield_cooldown > 0.0:
@@ -234,11 +278,12 @@ func _process(delta: float) -> void:
 		player_shield = minf(player_max_shield, player_shield + delta * 20.0)
 		player_health_changed.emit(player_hp, player_max_hp, player_shield, player_max_shield)
 
-	# 敵空爆ウェーブタイマー
-	raid_timer += delta
-	if raid_timer >= raid_interval:
-		raid_timer = 0.0
-		_trigger_hostile_air_raid()
+	# 敵空爆ウェーブタイマー（工場フェーズ以降に開始）
+	if story_phase >= StoryPhase.FACTORY:
+		raid_timer += delta
+		if raid_timer >= raid_interval:
+			raid_timer = 0.0
+			_trigger_hostile_air_raid()
 
 func _trigger_hostile_air_raid() -> void:
 	raid_wave_count += 1
@@ -262,6 +307,10 @@ func add_resource(type: String, amount: int) -> void:
 		resources[type] += amount
 		resource_changed.emit(type, resources[type])
 		_check_quest_progress()
+		
+		# ストーリーフェーズ自動進行: 40 Fe 到達でドローン造形開放
+		if story_phase == StoryPhase.MINE and resources.get("Fe", 0) >= 40:
+			set_story_phase(StoryPhase.DRONE)
 
 func consume_resource(type: String, amount: int) -> bool:
 	if resources.has(type) and resources[type] >= amount:
@@ -309,14 +358,27 @@ func add_log(text: String) -> void:
 
 func attach_drone() -> bool:
 	if attached_drones < max_attached_drones:
-		if consume_resource("Fe", 25) and consume_resource("Si", 15):
+		# 初回のドローンは Fe: 40 のみで造形可能！2回目以降は Fe: 30 + Si: 15
+		var can_craft = false
+		if attached_drones == 0:
+			if consume_resource("Fe", 40):
+				can_craft = true
+			else:
+				add_log("CRAFT FAILED: REQUIRES 40 Fe TO FABRICATE SUB-DRONE")
+		else:
+			if consume_resource("Fe", 30) and consume_resource("Si", 15):
+				can_craft = true
+			else:
+				add_log("CRAFT FAILED: REQUIRES 30 Fe + 15 Si")
+
+		if can_craft:
 			attached_drones += 1
 			drone_attached.emit(attached_drones)
 			add_log("DRONE DOCKED: CHASSIS EXPANDED (%d/%d)" % [attached_drones, max_attached_drones])
 			_check_quest_progress()
+			if story_phase == StoryPhase.DRONE:
+				set_story_phase(StoryPhase.BUILD_MINER)
 			return true
-		else:
-			add_log("CRAFT FAILED: REQUIRES 25 Fe + 15 Si")
 	return false
 
 # 自機被弾処理
@@ -437,6 +499,11 @@ func notify_building_constructed(btype: String) -> void:
 		var q = quest_list[quest_index]
 		if q.get("req_type") == "building" and q.get("building_type") == btype:
 			_advance_quest()
+
+	if btype == "miner" and story_phase == StoryPhase.BUILD_MINER:
+		set_story_phase(StoryPhase.FACTORY)
+	elif (btype == "belt" or btype == "smelter") and story_phase == StoryPhase.FACTORY:
+		set_story_phase(StoryPhase.SPACE)
 
 # メガストラクチャー建造開始
 func start_megastructure(proj_id: String) -> bool:
