@@ -79,6 +79,9 @@ func _ready() -> void:
 	GameState.quest_updated.connect(_on_quest_updated)
 	GameState.quest_completed.connect(_on_quest_completed)
 	
+	get_tree().root.size_changed.connect(_adjust_responsive_layout)
+	_adjust_responsive_layout()
+	
 	_update_objective_text()
 
 func _process(delta: float) -> void:
@@ -184,22 +187,14 @@ func build_minimal_ui() -> void:
 	add_child(top_bar)
 
 	var top_vbox = VBoxContainer.new()
-	top_vbox.add_theme_constant_override("separation", 6)
+	top_vbox.add_theme_constant_override("separation", 4)
 	top_bar.add_child(top_vbox)
 
-	# 1行目: 資源 & ステータス (左) ＋ 伸縮スペーサー ＋ 各種操作ボタン (右)
-	var top_row1 = HBoxContainer.new()
-	top_row1.alignment = BoxContainer.ALIGNMENT_BEGIN
-	top_vbox.add_child(top_row1)
-
-	# 左側: 資源＆ステータス
-	var tl_container = VBoxContainer.new()
-	tl_container.add_theme_constant_override("separation", 4)
-	top_row1.add_child(tl_container)
-
+	# 1行目: 資源バッジ一覧 (9種を中央揃え)
 	var res_hbox = HBoxContainer.new()
-	res_hbox.add_theme_constant_override("separation", 8)
-	tl_container.add_child(res_hbox)
+	res_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	res_hbox.add_theme_constant_override("separation", 6)
+	top_vbox.add_child(res_hbox)
 
 	fe_label = create_res_badge(res_hbox, "res://assets/ui/fe.png", str(GameState.resources["Fe"]), Color(0.3, 0.85, 1.0))
 	cu_label = create_res_badge(res_hbox, "res://assets/ui/cu.png", str(GameState.resources["Cu"]), Color(1.0, 0.65, 0.2))
@@ -211,23 +206,29 @@ func build_minimal_ui() -> void:
 	dm_label = create_res_badge(res_hbox, "res://assets/ui/res_darkmatter.png", str(GameState.resources.get("DarkMatter", 0)), Color(0.8, 0.4, 1.0))
 	nt_label = create_res_badge(res_hbox, "res://assets/ui/res_neutronium.png", str(GameState.resources.get("Neutronium", 0)), Color(0.2, 1.0, 0.8))
 
+	# 2行目: ステータスバー (左) ＋ 伸縮スペーサー ＋ 操作ボタン (右)
+	var stat_row = HBoxContainer.new()
+	stat_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	stat_row.add_theme_constant_override("separation", 8)
+	top_vbox.add_child(stat_row)
+
 	var stat_hbox = HBoxContainer.new()
-	stat_hbox.add_theme_constant_override("separation", 10)
-	tl_container.add_child(stat_hbox)
+	stat_hbox.add_theme_constant_override("separation", 6)
+	stat_row.add_child(stat_hbox)
 
 	var hp_vbox = VBoxContainer.new()
 	hp_vbox.add_theme_constant_override("separation", 2)
 	stat_hbox.add_child(hp_vbox)
 
 	shield_bar = ProgressBar.new()
-	shield_bar.custom_minimum_size = Vector2(100, 4)
+	shield_bar.custom_minimum_size = Vector2(90, 4)
 	shield_bar.value = 100.0
 	shield_bar.show_percentage = false
 	shield_bar.modulate = Color(0.0, 1.8, 2.8)
 	hp_vbox.add_child(shield_bar)
 
 	hp_bar = ProgressBar.new()
-	hp_bar.custom_minimum_size = Vector2(100, 5)
+	hp_bar.custom_minimum_size = Vector2(90, 5)
 	hp_bar.value = 100.0
 	hp_bar.show_percentage = false
 	hp_bar.modulate = Color(0.2, 2.0, 0.6)
@@ -240,7 +241,7 @@ func build_minimal_ui() -> void:
 	p_ico.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	p_hbox.add_child(p_ico)
 	power_bar = ProgressBar.new()
-	power_bar.custom_minimum_size = Vector2(50, 5)
+	power_bar.custom_minimum_size = Vector2(40, 5)
 	power_bar.value = 100.0
 	power_bar.show_percentage = false
 	power_bar.modulate = Color(1.0, 0.85, 0.2)
@@ -260,46 +261,81 @@ func build_minimal_ui() -> void:
 	f_hbox.add_child(fleet_lbl)
 	stat_hbox.add_child(f_hbox)
 
-	# 伸縮スペーサー (左側の資源と右側の操作ボタンを両端に均等配置)
+	# 伸縮スペーサー (左側のステータスと右側の操作ボタンを両端に均等配置)
 	var spacer = Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top_row1.add_child(spacer)
+	stat_row.add_child(spacer)
 
-	# 右側: ドクトリン・カメラ・セーブ操作アイコン
+	# 右側: ドクトリン・カメラ・セーブ操作ボタン (文字バッジ式で巨大テクスチャ誤爆防止)
 	var right_hbox = HBoxContainer.new()
 	right_hbox.alignment = BoxContainer.ALIGNMENT_END
-	right_hbox.add_theme_constant_override("separation", 6)
-	top_row1.add_child(right_hbox)
+	right_hbox.add_theme_constant_override("separation", 5)
+	stat_row.add_child(right_hbox)
 
-	var btn_h = create_icon_btn("res://assets/ui/tool_pick.png", "HARVEST", func(): GameState.set_fleet_doctrine("HARVEST"))
-	var btn_m = create_icon_btn("res://assets/ui/item_drone_unit.png", "MULTIPLY", func(): GameState.set_fleet_doctrine("MULTIPLY"))
-	var btn_a = create_icon_btn("res://assets/sprites/hostile_fighter.png", "ASSAULT", func(): GameState.set_fleet_doctrine("ASSAULT"))
-	btn_a.modulate = Color(2.5, 0.5, 0.5)
+	var sb_top_btn = StyleBoxFlat.new()
+	sb_top_btn.bg_color = Color(0.04, 0.08, 0.16, 0.85)
+	sb_top_btn.border_color = Color(0.0, 1.8, 2.5, 0.6)
+	sb_top_btn.set_border_width_all(1)
+	sb_top_btn.set_corner_radius_all(4)
+
+	var btn_h = Button.new()
+	btn_h.text = "H"
+	btn_h.custom_minimum_size = Vector2(26, 24)
+	btn_h.add_theme_stylebox_override("normal", sb_top_btn)
+	btn_h.add_theme_font_size_override("font_size", 10)
+	btn_h.pressed.connect(func(): GameState.set_fleet_doctrine("HARVEST"))
 	right_hbox.add_child(btn_h)
+
+	var btn_m = Button.new()
+	btn_m.text = "M"
+	btn_m.custom_minimum_size = Vector2(26, 24)
+	btn_m.add_theme_stylebox_override("normal", sb_top_btn)
+	btn_m.add_theme_font_size_override("font_size", 10)
+	btn_m.pressed.connect(func(): GameState.set_fleet_doctrine("MULTIPLY"))
 	right_hbox.add_child(btn_m)
+
+	var btn_a = Button.new()
+	btn_a.text = "A"
+	btn_a.custom_minimum_size = Vector2(26, 24)
+	var sb_a = sb_top_btn.duplicate()
+	sb_a.border_color = Color(2.5, 0.4, 0.4, 0.8)
+	btn_a.add_theme_stylebox_override("normal", sb_a)
+	btn_a.add_theme_font_size_override("font_size", 10)
+	btn_a.add_theme_color_override("font_color", Color(2.5, 0.6, 0.6))
+	btn_a.pressed.connect(func(): GameState.set_fleet_doctrine("ASSAULT"))
 	right_hbox.add_child(btn_a)
 
-	var btn_snap = create_icon_btn("res://assets/sprites/player_core_sheet.png", "SNAP_CAMERA", func():
-		if main_node and main_node.has_method("snap_camera_to_player"): main_node.snap_camera_to_player()
-	)
-	var btn_map = create_icon_btn("res://assets/environment/planet_large.png", "MAP", func():
-		if main_node and main_node.has_method("toggle_map_view"): main_node.toggle_map_view()
-	)
+	var btn_snap = Button.new()
+	btn_snap.text = "CORE"
+	btn_snap.custom_minimum_size = Vector2(36, 24)
+	btn_snap.add_theme_stylebox_override("normal", sb_top_btn)
+	btn_snap.add_theme_font_size_override("font_size", 9)
+	btn_snap.pressed.connect(func(): if main_node and main_node.has_method("snap_camera_to_player"): main_node.snap_camera_to_player())
 	right_hbox.add_child(btn_snap)
+
+	var btn_map = Button.new()
+	btn_map.text = "MAP"
+	btn_map.custom_minimum_size = Vector2(32, 24)
+	btn_map.add_theme_stylebox_override("normal", sb_top_btn)
+	btn_map.add_theme_font_size_override("font_size", 9)
+	btn_map.pressed.connect(func(): if main_node and main_node.has_method("toggle_map_view"): main_node.toggle_map_view())
 	right_hbox.add_child(btn_map)
 
-	var btn_save = create_icon_btn("res://assets/ui/circuit.png" if ResourceLoader.exists("res://assets/ui/circuit.png") else "res://assets/ui/item_circuit.png", "SAVE", func():
-		SaveManager.save_game(false)
-	)
+	var btn_save = Button.new()
+	btn_save.text = "SAVE"
+	btn_save.custom_minimum_size = Vector2(34, 24)
+	btn_save.add_theme_stylebox_override("normal", sb_top_btn)
+	btn_save.add_theme_font_size_override("font_size", 9)
+	btn_save.pressed.connect(func(): SaveManager.save_game(false))
 	right_hbox.add_child(btn_save)
 
-	# 2行目: 目標導線バッジ (中央配置)
-	var top_row2 = HBoxContainer.new()
-	top_row2.alignment = BoxContainer.ALIGNMENT_CENTER
-	top_vbox.add_child(top_row2)
+	# 3行目: 目標導線バッジ (中央配置)
+	var top_row3 = HBoxContainer.new()
+	top_row3.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_vbox.add_child(top_row3)
 
 	objective_panel = PanelContainer.new()
-	objective_panel.custom_minimum_size = Vector2(340, 36)
+	objective_panel.custom_minimum_size = Vector2(320, 32)
 	var sb_obj = StyleBoxFlat.new()
 	sb_obj.bg_color = Color(0.04, 0.08, 0.16, 0.85)
 	sb_obj.border_color = Color(0.0, 1.8, 2.5, 0.7)
@@ -308,13 +344,13 @@ func build_minimal_ui() -> void:
 	objective_panel.add_theme_stylebox_override("panel", sb_obj)
 
 	objective_label = Label.new()
-	objective_label.text = "[ ⛏️ ➔ 💎 Fe: 0 / 40 ]"
+	objective_label.text = "[ MISSION: MINE Fe (0 / 40) ]"
 	objective_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	objective_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	objective_label.add_theme_font_size_override("font_size", 14)
+	objective_label.add_theme_font_size_override("font_size", 13)
 	objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 	objective_panel.add_child(objective_label)
-	top_row2.add_child(objective_panel)
+	top_row3.add_child(objective_panel)
 
 	# 素材不足警告バッジ (画面中央)
 	missing_panel = PanelContainer.new()
@@ -335,7 +371,7 @@ func build_minimal_ui() -> void:
 	missing_panel.add_theme_stylebox_override("panel", sb_miss)
 
 	missing_label = Label.new()
-	missing_label.text = "⚠️ INSUFFICIENT MATERIAL"
+	missing_label.text = "INSUFFICIENT MATERIAL"
 	missing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	missing_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	missing_label.add_theme_font_size_override("font_size", 10)
@@ -384,17 +420,19 @@ func build_minimal_ui() -> void:
 	sb_circle_btn.set_corner_radius_all(24)
 
 	var btn_zin = Button.new()
-	btn_zin.text = "➕"
-	btn_zin.custom_minimum_size = Vector2(48, 48)
-	btn_zin.add_theme_font_size_override("font_size", 20)
+	btn_zin.text = "+"
+	btn_zin.custom_minimum_size = Vector2(46, 46)
+	btn_zin.add_theme_font_size_override("font_size", 28)
+	btn_zin.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
 	btn_zin.add_theme_stylebox_override("normal", sb_circle_btn)
 	btn_zin.pressed.connect(func(): if main_node and main_node.has_method("zoom_in"): main_node.zoom_in())
 	zoom_cluster.add_child(btn_zin)
 
 	var btn_zout = Button.new()
-	btn_zout.text = "➖"
-	btn_zout.custom_minimum_size = Vector2(48, 48)
-	btn_zout.add_theme_font_size_override("font_size", 20)
+	btn_zout.text = "-"
+	btn_zout.custom_minimum_size = Vector2(46, 46)
+	btn_zout.add_theme_font_size_override("font_size", 28)
+	btn_zout.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
 	btn_zout.add_theme_stylebox_override("normal", sb_circle_btn)
 	btn_zout.pressed.connect(func(): if main_node and main_node.has_method("zoom_out"): main_node.zoom_out())
 	zoom_cluster.add_child(btn_zout)
@@ -408,10 +446,10 @@ func build_minimal_ui() -> void:
 	vstick_base.anchor_right = 0.0
 	vstick_base.anchor_top = 1.0
 	vstick_base.anchor_bottom = 1.0
-	vstick_base.offset_left = 24.0
-	vstick_base.offset_top = -210.0
-	vstick_base.offset_right = 204.0
-	vstick_base.offset_bottom = -30.0
+	vstick_base.offset_left = 12.0
+	vstick_base.offset_top = -180.0
+	vstick_base.offset_right = 172.0
+	vstick_base.offset_bottom = -20.0
 	vstick_base.mouse_filter = Control.MOUSE_FILTER_PASS
 	vstick_base.draw.connect(_on_vstick_draw)
 	vstick_base.gui_input.connect(_on_vstick_gui_input)
@@ -426,76 +464,80 @@ func build_minimal_ui() -> void:
 	action_cluster.anchor_right = 1.0
 	action_cluster.anchor_top = 1.0
 	action_cluster.anchor_bottom = 1.0
-	action_cluster.offset_left = -230.0
-	action_cluster.offset_top = -230.0
-	action_cluster.offset_right = -16.0
-	action_cluster.offset_bottom = -16.0
+	action_cluster.offset_left = -190.0
+	action_cluster.offset_top = -210.0
+	action_cluster.offset_right = -10.0
+	action_cluster.offset_bottom = -10.0
 	action_cluster.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(action_cluster)
 
-	# [⛏️ MINE] 採掘ボタン (大・右下最前面)
+	# [MINE] 採掘ボタン (大・右下最前面)
 	var sb_mine = StyleBoxFlat.new()
-	sb_mine.bg_color = Color(0.03, 0.12, 0.22, 0.85)
-	sb_mine.border_color = Color(0.0, 2.2, 2.8, 0.95)
+	sb_mine.bg_color = Color(0.02, 0.12, 0.22, 0.9)
+	sb_mine.border_color = Color(0.0, 2.5, 3.0, 0.95)
 	sb_mine.set_border_width_all(2)
 	sb_mine.set_corner_radius_all(44)
 
 	btn_touch_mine = Button.new()
-	btn_touch_mine.text = "⛏️"
-	btn_touch_mine.position = Vector2(120, 120)
+	btn_touch_mine.text = "MINE"
+	btn_touch_mine.position = Vector2(92, 100)
 	btn_touch_mine.custom_minimum_size = Vector2(88, 88)
 	btn_touch_mine.add_theme_stylebox_override("normal", sb_mine)
-	btn_touch_mine.add_theme_font_size_override("font_size", 34)
+	btn_touch_mine.add_theme_font_size_override("font_size", 16)
+	btn_touch_mine.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
 	btn_touch_mine.button_down.connect(func(): if player_node: player_node.touch_mining_active = true)
 	btn_touch_mine.button_up.connect(func(): if player_node: player_node.touch_mining_active = false)
 	action_cluster.add_child(btn_touch_mine)
 
-	# [🛑 BRAKE] 緊急ブレーキボタン (中・MINEの上)
+	# [BRAKE] 緊急ブレーキボタン (中・MINEの上)
 	var sb_brake = StyleBoxFlat.new()
-	sb_brake.bg_color = Color(0.18, 0.04, 0.04, 0.85)
+	sb_brake.bg_color = Color(0.2, 0.04, 0.04, 0.9)
 	sb_brake.border_color = Color(2.5, 0.3, 0.3, 0.9)
 	sb_brake.set_border_width_all(2)
-	sb_brake.set_corner_radius_all(31)
+	sb_brake.set_corner_radius_all(32)
 
 	btn_touch_brake = Button.new()
-	btn_touch_brake.text = "🛑"
-	btn_touch_brake.position = Vector2(136, 46)
-	btn_touch_brake.custom_minimum_size = Vector2(62, 62)
+	btn_touch_brake.text = "BRAKE"
+	btn_touch_brake.position = Vector2(104, 26)
+	btn_touch_brake.custom_minimum_size = Vector2(64, 64)
 	btn_touch_brake.add_theme_stylebox_override("normal", sb_brake)
-	btn_touch_brake.add_theme_font_size_override("font_size", 26)
+	btn_touch_brake.add_theme_font_size_override("font_size", 12)
+	btn_touch_brake.add_theme_color_override("font_color", Color(2.5, 0.7, 0.7))
 	btn_touch_brake.button_down.connect(func(): if player_node: player_node.touch_braking_active = true)
 	btn_touch_brake.button_up.connect(func(): if player_node: player_node.touch_braking_active = false)
 	action_cluster.add_child(btn_touch_brake)
 
-	# [🔨 BUILD] ビルドモード切替ボタン (中・MINEの左)
+	# [BUILD] ビルドモード切替ボタン (中・MINEの左)
 	var sb_bld = StyleBoxFlat.new()
-	sb_bld.bg_color = Color(0.04, 0.09, 0.16, 0.85)
+	sb_bld.bg_color = Color(0.04, 0.09, 0.16, 0.9)
 	sb_bld.border_color = Color(0.0, 1.8, 2.5, 0.8)
-	sb_bld.set_border_width_all(1)
-	sb_bld.set_corner_radius_all(32)
+	sb_bld.set_border_width_all(2)
+	sb_bld.set_corner_radius_all(34)
 
 	btn_touch_build = Button.new()
-	btn_touch_build.text = "🔨"
-	btn_touch_build.position = Vector2(44, 136)
-	btn_touch_build.custom_minimum_size = Vector2(64, 64)
+	btn_touch_build.text = "BUILD"
+	btn_touch_build.position = Vector2(12, 112)
+	btn_touch_build.custom_minimum_size = Vector2(68, 68)
 	btn_touch_build.add_theme_stylebox_override("normal", sb_bld)
-	btn_touch_build.add_theme_font_size_override("font_size", 28)
+	btn_touch_build.add_theme_font_size_override("font_size", 13)
+	btn_touch_build.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 	btn_touch_build.pressed.connect(toggle_build_mode)
 	action_cluster.add_child(btn_touch_build)
 
-	# [🧬 DRONE] ドローン合体ボタン (小・BUILDの上)
+	# [DRONE] ドローン合体ボタン (小・BUILDの上)
 	var sb_drn = StyleBoxFlat.new()
-	sb_drn.bg_color = Color(0.03, 0.14, 0.1, 0.85)
+	sb_drn.bg_color = Color(0.03, 0.14, 0.1, 0.9)
 	sb_drn.border_color = Color(0.2, 2.0, 0.7, 0.8)
-	sb_drn.set_border_width_all(1)
-	sb_drn.set_corner_radius_all(29)
+	sb_drn.set_border_width_all(2)
+	sb_drn.set_corner_radius_all(30)
 
 	btn_touch_drone = Button.new()
-	btn_touch_drone.text = "🧬"
-	btn_touch_drone.position = Vector2(56, 58)
-	btn_touch_drone.custom_minimum_size = Vector2(58, 58)
+	btn_touch_drone.text = "DRONE"
+	btn_touch_drone.position = Vector2(22, 38)
+	btn_touch_drone.custom_minimum_size = Vector2(60, 60)
 	btn_touch_drone.add_theme_stylebox_override("normal", sb_drn)
-	btn_touch_drone.add_theme_font_size_override("font_size", 24)
+	btn_touch_drone.add_theme_font_size_override("font_size", 11)
+	btn_touch_drone.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
 	btn_touch_drone.pressed.connect(func():
 		if GameState.attach_drone(): AudioSynth.play_synth("build")
 	)
@@ -510,13 +552,13 @@ func build_minimal_ui() -> void:
 	build_bar_panel.anchor_right = 1.0
 	build_bar_panel.anchor_top = 1.0
 	build_bar_panel.anchor_bottom = 1.0
-	build_bar_panel.offset_left = 220.0
-	build_bar_panel.offset_right = -250.0
-	build_bar_panel.offset_top = -78.0
-	build_bar_panel.offset_bottom = -18.0
+	build_bar_panel.offset_left = 12.0
+	build_bar_panel.offset_right = -12.0
+	build_bar_panel.offset_top = -262.0
+	build_bar_panel.offset_bottom = -204.0
 	var sb_bar = StyleBoxFlat.new()
-	sb_bar.bg_color = Color(0.03, 0.05, 0.09, 0.8)
-	sb_bar.border_color = Color(0.0, 1.5, 2.2, 0.5)
+	sb_bar.bg_color = Color(0.03, 0.05, 0.09, 0.85)
+	sb_bar.border_color = Color(0.0, 1.5, 2.2, 0.6)
 	sb_bar.set_border_width_all(1)
 	sb_bar.set_corner_radius_all(4)
 	build_bar_panel.add_theme_stylebox_override("panel", sb_bar)
@@ -533,7 +575,7 @@ func build_minimal_ui() -> void:
 
 	# ビルドモードON/OFF表示インジケータ
 	build_mode_indicator = Panel.new()
-	build_mode_indicator.custom_minimum_size = Vector2(6, 52)
+	build_mode_indicator.custom_minimum_size = Vector2(5, 46)
 	build_mode_indicator.modulate = Color(0.4, 0.4, 0.4, 0.5)
 	bc_container.add_child(build_mode_indicator)
 
@@ -552,13 +594,14 @@ func build_minimal_ui() -> void:
 
 	for t in tools:
 		var slot_p = PanelContainer.new()
-		slot_p.custom_minimum_size = Vector2(52, 54)
+		slot_p.custom_minimum_size = Vector2(48, 50)
 		slot_p.add_theme_stylebox_override("panel", sb_slot)
 
 		var b = Button.new()
 		b.icon = load("res://assets/ui/%s.png" % t["icon"])
 		b.flat = true
-		b.custom_minimum_size = Vector2(50, 52)
+		b.expand_icon = true
+		b.custom_minimum_size = Vector2(46, 48)
 		b.pressed.connect(func(): _select_tool_by_id(t["id"]))
 		slot_p.add_child(b)
 
@@ -566,9 +609,9 @@ func build_minimal_ui() -> void:
 		var count_lbl = Label.new()
 		count_lbl.text = "0"
 		count_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		count_lbl.position = Vector2(12, 32)
-		count_lbl.size = Vector2(36, 16)
-		count_lbl.add_theme_font_size_override("font_size", 11)
+		count_lbl.position = Vector2(10, 28)
+		count_lbl.size = Vector2(34, 16)
+		count_lbl.add_theme_font_size_override("font_size", 10)
 		count_lbl.add_theme_color_override("font_color", Color(0.2, 1.0, 0.6))
 		slot_p.add_child(count_lbl)
 
@@ -578,7 +621,8 @@ func build_minimal_ui() -> void:
 	# メガストラクチャー展開ボタン (右端)
 	var mega_btn = Button.new()
 	mega_btn.icon = load("res://assets/ui/icon_elevator.png")
-	mega_btn.custom_minimum_size = Vector2(52, 54)
+	mega_btn.expand_icon = true
+	mega_btn.custom_minimum_size = Vector2(48, 50)
 	mega_btn.pressed.connect(toggle_mega_palette)
 	bc_container.add_child(mega_btn)
 
@@ -589,15 +633,37 @@ func build_minimal_ui() -> void:
 	build_guide_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	build_guide_label.anchor_top = 1.0
 	build_guide_label.anchor_bottom = 1.0
-	build_guide_label.offset_top = -106.0
-	build_guide_label.offset_bottom = -84.0
-	build_guide_label.add_theme_font_size_override("font_size", 12)
+	build_guide_label.offset_top = -288.0
+	build_guide_label.offset_bottom = -268.0
+	build_guide_label.add_theme_font_size_override("font_size", 11)
 	build_guide_label.add_theme_color_override("font_color", Color(0.0, 2.0, 2.8, 0.85))
 	build_guide_label.visible = false
 	add_child(build_guide_label)
 
 	# 6. メガストラクチャー・ミニマルパレット構築
 	_build_minimal_mega_palette(sb_slot)
+
+func _adjust_responsive_layout() -> void:
+	var vp_rect = get_viewport().get_visible_rect()
+	var is_portrait = (vp_rect.size.x < vp_rect.size.y)
+	if is_portrait:
+		if build_bar_panel:
+			build_bar_panel.offset_left = 12.0
+			build_bar_panel.offset_right = -12.0
+			build_bar_panel.offset_top = -262.0
+			build_bar_panel.offset_bottom = -204.0
+		if build_guide_label:
+			build_guide_label.offset_top = -288.0
+			build_guide_label.offset_bottom = -268.0
+	else:
+		if build_bar_panel:
+			build_bar_panel.offset_left = 180.0
+			build_bar_panel.offset_right = -190.0
+			build_bar_panel.offset_top = -68.0
+			build_bar_panel.offset_bottom = -12.0
+		if build_guide_label:
+			build_guide_label.offset_top = -94.0
+			build_guide_label.offset_bottom = -74.0
 
 # ========================================================
 # バーチャルジョイスティック描画 ＆ タッチ入力ハンドラー
@@ -606,22 +672,22 @@ func _on_vstick_draw() -> void:
 	if not vstick_base: return
 	var center = vstick_base.size * 0.5
 	# 外枠リング (HDR Glow)
-	vstick_base.draw_arc(center, 64.0, 0, TAU, 36, Color(0.0, 1.8, 2.5, 0.4), 2.5)
-	vstick_base.draw_circle(center, 64.0, Color(0.02, 0.05, 0.1, 0.45))
+	vstick_base.draw_arc(center, 54.0, 0, TAU, 36, Color(0.0, 2.0, 2.8, 0.5), 2.5)
+	vstick_base.draw_circle(center, 54.0, Color(0.02, 0.05, 0.12, 0.5))
 	
 	# スティックノブ
 	var knob_p = center + vstick_knob_pos
-	vstick_base.draw_circle(knob_p, 26.0, Color(0.0, 2.2, 2.8, 0.8))
-	vstick_base.draw_arc(knob_p, 26.0, 0, TAU, 28, Color(2.5, 2.5, 2.5, 0.95), 2.0)
+	vstick_base.draw_circle(knob_p, 24.0, Color(0.0, 2.4, 3.0, 0.85))
+	vstick_base.draw_arc(knob_p, 24.0, 0, TAU, 28, Color(2.5, 2.5, 2.5, 0.95), 2.0)
 	
 	# 中央方向ガイド十字線
-	vstick_base.draw_line(center - Vector2(14, 0), center + Vector2(14, 0), Color(0.0, 1.8, 2.5, 0.35), 1.5)
-	vstick_base.draw_line(center - Vector2(0, 14), center + Vector2(0, 14), Color(0.0, 1.8, 2.5, 0.35), 1.5)
+	vstick_base.draw_line(center - Vector2(12, 0), center + Vector2(12, 0), Color(0.0, 1.8, 2.5, 0.4), 1.5)
+	vstick_base.draw_line(center - Vector2(0, 12), center + Vector2(0, 12), Color(0.0, 1.8, 2.5, 0.4), 1.5)
 
 func _on_vstick_gui_input(event: InputEvent) -> void:
 	if not vstick_base: return
 	var center = vstick_base.size * 0.5
-	var max_r = 60.0
+	var max_r = 50.0
 	
 	if event is InputEventScreenTouch:
 		if event.pressed:
@@ -687,7 +753,8 @@ func create_icon_btn(icon_p: String, _tip: String, on_click: Callable) -> Button
 	var b = Button.new()
 	if ResourceLoader.exists(icon_p):
 		b.icon = load(icon_p)
-	b.custom_minimum_size = Vector2(38, 38)
+		b.expand_icon = true
+	b.custom_minimum_size = Vector2(32, 32)
 	b.pressed.connect(on_click)
 	return b
 
@@ -809,7 +876,7 @@ func _on_quest_completed(_idx: int, _info: Dictionary) -> void:
 
 func show_missing_res_alert(res_name: String) -> void:
 	if missing_panel and missing_label:
-		missing_label.text = "⚠️ NEED: %s" % res_name
+		missing_label.text = "NEED: %s" % res_name
 		missing_panel.visible = true
 		missing_timer = 1.2
 		AudioSynth.play_synth("alert")
@@ -817,7 +884,7 @@ func show_missing_res_alert(res_name: String) -> void:
 func _update_objective_text() -> void:
 	if not objective_label: return
 	if GameState.quest_index >= GameState.quest_list.size():
-		objective_label.text = "★ SYSTEM LIBERATED: ALL OBJECTIVES COMPLETE ★"
+		objective_label.text = "SYSTEM LIBERATED: ALL OBJECTIVES COMPLETE"
 		objective_label.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
 		return
 		
@@ -856,19 +923,19 @@ func _on_nav_overlay_draw() -> void:
 	var half_h = (vp_size.y * 0.5) / zoom.y
 	var screen_center = vp_size * 0.5
 
-	# ナビ対象天体リスト
+	# ナビ対象天体リスト (文字化け防止・ASCII識別子)
 	var targets: Array[Dictionary] = [
-		{"name": "HOME", "pos": Vector2(800.0, 1070.0), "col": Color(0.2, 0.8, 1.0), "icon": "🌍"},
-		{"name": "SUN", "pos": Vector2(800.0, -850.0), "col": Color(1.0, 0.7, 0.1), "icon": "☀️"},
-		{"name": "SINGULARITY", "pos": Vector2(2300.0, -350.0), "col": Color(0.8, 0.3, 1.0), "icon": "🕳️"},
-		{"name": "PULSAR", "pos": Vector2(-700.0, -350.0), "col": Color(0.1, 1.0, 0.8), "icon": "⚡"},
-		{"name": "BOSS CORE", "pos": Vector2(1380.0, 150.0), "col": Color(1.0, 0.2, 0.2), "icon": "👾"}
+		{"name": "HOME", "pos": Vector2(800.0, 1070.0), "col": Color(0.2, 0.8, 1.0), "icon": "[HOME]"},
+		{"name": "SUN", "pos": Vector2(800.0, -850.0), "col": Color(1.0, 0.7, 0.1), "icon": "[SUN]"},
+		{"name": "SINGULARITY", "pos": Vector2(2300.0, -350.0), "col": Color(0.8, 0.3, 1.0), "icon": "[HOLE]"},
+		{"name": "PULSAR", "pos": Vector2(-700.0, -350.0), "col": Color(0.1, 1.0, 0.8), "icon": "[PULSAR]"},
+		{"name": "BOSS CORE", "pos": Vector2(1380.0, 150.0), "col": Color(1.0, 0.2, 0.2), "icon": "[BOSS]"}
 	]
 	
 	if grid_manager and not grid_manager.moon_body.is_empty():
-		targets.append({"name": "LUNA", "pos": grid_manager.moon_body.get("pos", Vector2.ZERO), "col": Color(0.3, 0.9, 1.0), "icon": "🌙"})
+		targets.append({"name": "LUNA", "pos": grid_manager.moon_body.get("pos", Vector2.ZERO), "col": Color(0.3, 0.9, 1.0), "icon": "[LUNA]"})
 	if grid_manager and not grid_manager.comet_body.is_empty():
-		targets.append({"name": "COMET", "pos": grid_manager.comet_body.get("pos", Vector2.ZERO), "col": Color(0.4, 0.9, 1.0), "icon": "☄️"})
+		targets.append({"name": "COMET", "pos": grid_manager.comet_body.get("pos", Vector2.ZERO), "col": Color(0.4, 0.9, 1.0), "icon": "[COMET]"})
 
 	for t in targets:
 		var t_pos: Vector2 = t["pos"]
@@ -886,7 +953,7 @@ func _on_nav_overlay_draw() -> void:
 				nav_overlay.draw_line(screen_tpos + Vector2(24, 0), screen_tpos + Vector2(38, 0), ret_col, 2.0)
 				nav_overlay.draw_line(screen_tpos - Vector2(0, 38), screen_tpos - Vector2(0, 24), ret_col, 2.0)
 				nav_overlay.draw_line(screen_tpos + Vector2(0, 24), screen_tpos + Vector2(0, 38), ret_col, 2.0)
-				nav_overlay.draw_string(ThemeDB.fallback_font, screen_tpos + Vector2(-36, 46), "⌖ LOCK-ON: %s" % t["name"], HORIZONTAL_ALIGNMENT_CENTER, -1, 9, ret_col)
+				nav_overlay.draw_string(ThemeDB.fallback_font, screen_tpos + Vector2(-36, 46), "LOCK-ON: %s" % t["name"], HORIZONTAL_ALIGNMENT_CENTER, -1, 9, ret_col)
 		else:
 			# 画面外：画面端にポインターアイコン＋距離を描画
 			var dir = diff.normalized()
@@ -948,5 +1015,5 @@ func _on_nav_overlay_draw() -> void:
 
 				var m_dist_km = m_pdist / 100.0
 				var m_dist_str = "%.1fkm" % m_dist_km if m_dist_km >= 1.0 else "%.0fm" % m_pdist
-				var m_txt = "🎯 %s [%s]" % [m_info.get("name", "MISSION"), m_dist_str]
+				var m_txt = "GOAL: %s [%s]" % [m_info.get("name", "MISSION"), m_dist_str]
 				nav_overlay.draw_string(ThemeDB.fallback_font, marker_p - Vector2(40, 14), m_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(2.5, 2.5, 1.2))

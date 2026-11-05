@@ -79,26 +79,26 @@ func _on_window_size_changed() -> void:
 	var win_size = win.size
 	var aspect = float(win_size.x) / maxf(1.0, float(win_size.y))
 	if aspect < 1.0:
-		# スマホ縦持ち (Portrait): 基準解像度を幅900、高さ1600に切替
-		win.content_scale_size = Vector2i(900, 1600)
+		# スマホ縦持ち (Portrait): 基準解像度を幅540、高さ960 (9:16) に設定し指先サイズに完全適合
+		win.content_scale_size = Vector2i(540, 960)
 	else:
-		# PC / スマホ横持ち (Landscape): 基準解像度を幅1600、高さ900に切替
-		win.content_scale_size = Vector2i(1600, 900)
+		# PC / スマホ横持ち (Landscape): 基準解像度を幅1280、高さ720 に設定
+		win.content_scale_size = Vector2i(1280, 720)
 
 	if camera:
 		camera.anchor_mode = Camera2D.ANCHOR_MODE_DRAG_CENTER
 		if player:
 			camera.global_position = player.global_position
 		
-		var base_z = 1.15
+		var base_z = 1.0
 		if aspect < 0.65:
-			base_z = 1.35
+			base_z = 0.95
 		elif aspect < 0.9:
-			base_z = 1.25
+			base_z = 0.98
 		elif aspect < 1.2:
-			base_z = 1.15
-		else:
 			base_z = 1.05
+		else:
+			base_z = 1.15
 			
 		target_zoom = Vector2(base_z, base_z)
 		camera.zoom = target_zoom
@@ -443,7 +443,7 @@ func _run_test_phase_3() -> void:
 func _run_test_phase_4() -> void:
 	print("TEST PHASE 4: AIR RAID INCOMING & TURRET DEFENSE")
 	spawn_air_raid(1)
-	GameState.raid_alert.emit(true, "⚠️ RAID")
+	GameState.raid_alert.emit(true, "RAID ALERT")
 	get_tree().create_timer(0.5).timeout.connect(func():
 		_save_test_screen("docs/art/test_04_air_raid_turret.png")
 		_run_test_phase_5()

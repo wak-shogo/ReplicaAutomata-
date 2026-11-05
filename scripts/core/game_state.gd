@@ -93,7 +93,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "目覚めと手動採掘",
 		"icon": "tool_pick",
-		"short": "⛏️ ➔ 💎 Fe",
+		"short": "MINE Fe",
 		"waypoint": "vein_Fe",
 		"req_type": "resource",
 		"target_res": "Fe",
@@ -102,7 +102,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "機体拡張：ドローン合体",
 		"icon": "item_drone_unit",
-		"short": "🧬 [X] ➔ 合体",
+		"short": "ATTACH DRONE",
 		"waypoint": "player",
 		"req_type": "drone",
 		"target_val": 1
@@ -110,7 +110,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "自動化の第一歩：ドリル設置",
 		"icon": "tool_drill",
-		"short": "[1] ➔ ドリル配置",
+		"short": "BUILD DRILL",
 		"waypoint": "vein_Fe",
 		"req_type": "building",
 		"building_type": "miner",
@@ -119,7 +119,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "コンベア物流網の敷設",
 		"icon": "tool_belt",
-		"short": "[2] ➔ コンベア敷設",
+		"short": "BUILD BELT",
 		"waypoint": "surface",
 		"req_type": "building",
 		"building_type": "belt",
@@ -128,7 +128,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "金属精錬ラインの構築",
 		"icon": "tool_smelter",
-		"short": "[3] ➔ 精錬炉配置",
+		"short": "BUILD SMELTER",
 		"waypoint": "surface",
 		"req_type": "building",
 		"building_type": "smelter",
@@ -137,7 +137,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "ドローン自動組立機の配置",
 		"icon": "tool_assembler",
-		"short": "[4] ➔ 組立機配置",
+		"short": "BUILD ASSEMBLER",
 		"waypoint": "surface",
 		"req_type": "building",
 		"building_type": "assembler",
@@ -146,7 +146,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "宇宙射出：マスドライバー建設",
 		"icon": "tool_mass_driver",
-		"short": "[5] ➔ 射出台建設",
+		"short": "BUILD MASS DRIVER",
 		"waypoint": "surface",
 		"req_type": "building",
 		"building_type": "mass_driver",
@@ -155,7 +155,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "スウォーム艦隊100機突破",
 		"icon": "item_drone_unit",
-		"short": "🐝 ➔ 艦隊 100機",
+		"short": "FLEET SWARM",
 		"waypoint": "space",
 		"req_type": "fleet",
 		"target_val": 100
@@ -163,7 +163,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "月面探査：ヘリウム3採掘",
 		"icon": "res_he3",
-		"short": "🌙 ➔ 月 He3採掘",
+		"short": "HARVEST LUNA He3",
 		"waypoint": "LUNA-PRIME",
 		"req_type": "resource",
 		"target_res": "He3",
@@ -172,7 +172,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "深宇宙探査：彗星または太陽採掘",
 		"icon": "res_plasma",
-		"short": "☀️☄️ ➔ プラズマ/氷採掘",
+		"short": "HARVEST PLASMA / ICE",
 		"waypoint": "HELIOS-PRIME",
 		"req_type": "celestial_any",
 		"target_val": 5
@@ -180,7 +180,7 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "特異点突入：暗黒物質採掘",
 		"icon": "res_darkmatter",
-		"short": "🕳️ ➔ 特異点 暗黒物質",
+		"short": "HARVEST DARK MATTER",
 		"waypoint": "GARGANTUA-ZERO",
 		"req_type": "resource",
 		"target_res": "DarkMatter",
@@ -189,14 +189,14 @@ var quest_list: Array[Dictionary] = [
 	{
 		"title": "大規模宇宙構造物の建造",
 		"icon": "icon_elevator",
-		"short": "🏗️ ➔ メガストラクチャー",
+		"short": "BUILD MEGASTRUCTURE",
 		"waypoint": "megastructure",
 		"req_type": "megastructure"
 	},
 	{
 		"title": "敵性要塞制圧・星系解放",
 		"icon": "tool_turret",
-		"short": "⚔️ ➔ 敵コア総攻撃",
+		"short": "ASSAULT HOSTILE CORE",
 		"waypoint": "boss",
 		"req_type": "liberation",
 		"target_val": 100
@@ -243,7 +243,7 @@ func _process(delta: float) -> void:
 func _trigger_hostile_air_raid() -> void:
 	raid_wave_count += 1
 	is_raid_active = true
-	var alert_msg = "⚠️ WARNING: HOSTILE AIR RAID INCOMING (WAVE %d) ⚠️" % raid_wave_count
+	var alert_msg = "WARNING: HOSTILE AIR RAID INCOMING (WAVE %d)" % raid_wave_count
 	add_log(alert_msg)
 	AudioSynth.play_synth("laser")
 	raid_alert.emit(true, alert_msg)

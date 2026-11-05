@@ -359,7 +359,7 @@ func _draw() -> void:
 		draw_rect(Rect2(bar_pos, Vector2(bar_w, 8)), Color(0.1, 0.1, 0.1, 0.9))
 		draw_rect(Rect2(bar_pos, Vector2(bar_w * hp_ratio, 8)), Color(1.0, 0.2, 0.2, 0.95))
 		draw_rect(Rect2(bar_pos, Vector2(bar_w, 8)), Color(0.8, 0.3, 0.3, 1.0), false, 1.0)
-		draw_string(ThemeDB.fallback_font, bar_pos + Vector2(0, -3), "敵要塞コア: %.0f / %.0f HP" % [GameState.hostile_core_health, GameState.hostile_core_max_health], HORIZONTAL_ALIGNMENT_CENTER, int(bar_w), 10, Color(1.0, 0.6, 0.6))
+		draw_string(ThemeDB.fallback_font, bar_pos + Vector2(0, -3), "ENEMY CORE: %.0f / %.0f HP" % [GameState.hostile_core_health, GameState.hostile_core_max_health], HORIZONTAL_ALIGNMENT_CENTER, int(bar_w), 10, Color(1.0, 0.6, 0.6))
 	else:
 		# 撃破完了マーク
-		draw_string(ThemeDB.fallback_font, boss_core_pos + Vector2(-60, 0), "★ 敵拠点制圧完了 ★", HORIZONTAL_ALIGNMENT_CENTER, 120, 14, Color(0.2, 1.0, 0.5))
+		draw_string(ThemeDB.fallback_font, boss_core_pos + Vector2(-60, 0), "SYSTEM LIBERATED", HORIZONTAL_ALIGNMENT_CENTER, 120, 14, Color(0.2, 1.0, 0.5))
