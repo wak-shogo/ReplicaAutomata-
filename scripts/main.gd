@@ -13,6 +13,9 @@ var is_right_dragging: bool = false
 var last_mouse_screen_pos: Vector2 = Vector2.ZERO
 var saved_player_zoom: Vector2 = Vector2(1.0, 1.0)
 var is_map_mode: bool = false
+var touch_points: Dictionary = {}
+var initial_touch_dist: float = 0.0
+var initial_zoom_level: float = 1.0
 
 # 画面揺れ (Screen Shake)
 var shake_amount: float = 0.0
@@ -41,13 +44,9 @@ func _ready() -> void:
 	elif "--run-tests" in args or "--run-tests" in OS.get_cmdline_args():
 		_start_regression_tests()
 
-	# 3. カメラ初期設定
-	if camera:
-		camera.anchor_mode = Camera2D.ANCHOR_MODE_DRAG_CENTER
-		if player:
-			camera.global_position = player.global_position
-		target_zoom = Vector2(1.15, 1.15)
-		camera.zoom = target_zoom
+	# 3. 画面サイズ・向き自動適応 (スマホ縦画面・横画面レスポンシブ)
+	get_tree().root.size_changed.connect(_on_window_size_changed)
+	_on_window_size_changed()
 
 	# 4. マスドライバー射出シグナル接続
 	if grid_manager and swarm_simulation:
@@ -73,6 +72,36 @@ func _setup_world_environment() -> void:
 	env.glow_hdr_threshold = 1.0
 	world_env.environment = env
 	add_child(world_env)
+
+func _on_window_size_changed() -> void:
+	var win = get_window()
+	if not win: return
+	var win_size = win.size
+	var aspect = float(win_size.x) / maxf(1.0, float(win_size.y))
+	if aspect < 1.0:
+		# スマホ縦持ち (Portrait): 基準解像度を幅900、高さ1600に切替
+		win.content_scale_size = Vector2i(900, 1600)
+	else:
+		# PC / スマホ横持ち (Landscape): 基準解像度を幅1600、高さ900に切替
+		win.content_scale_size = Vector2i(1600, 900)
+
+	if camera:
+		camera.anchor_mode = Camera2D.ANCHOR_MODE_DRAG_CENTER
+		if player:
+			camera.global_position = player.global_position
+		
+		var base_z = 1.15
+		if aspect < 0.65:
+			base_z = 1.35
+		elif aspect < 0.9:
+			base_z = 1.25
+		elif aspect < 1.2:
+			base_z = 1.15
+		else:
+			base_z = 1.05
+			
+		target_zoom = Vector2(base_z, base_z)
+		camera.zoom = target_zoom
 
 func _process(delta: float) -> void:
 	# 1. カメラのスムーズ追従 & スムーズズーム処理
@@ -223,15 +252,42 @@ func _input(event: InputEvent) -> void:
 		camera.global_position -= delta_pos
 		last_mouse_screen_pos = event.position
 
+	elif event is InputEventScreenTouch:
+		if event.pressed:
+			touch_points[event.index] = event.position
+			if touch_points.size() == 2:
+				var pts = touch_points.values()
+				initial_touch_dist = pts[0].distance_to(pts[1])
+				initial_zoom_level = target_zoom.x
+		else:
+			touch_points.erase(event.index)
+			if touch_points.size() < 2:
+				initial_touch_dist = 0.0
+
+	elif event is InputEventScreenDrag:
+		if touch_points.has(event.index):
+			touch_points[event.index] = event.position
+			if touch_points.size() >= 2 and initial_touch_dist > 15.0:
+				var pts = touch_points.values()
+				var cur_dist = pts[0].distance_to(pts[1])
+				var factor = cur_dist / initial_touch_dist
+				target_zoom = Vector2.ONE * clampf(initial_zoom_level * factor, 0.16, 2.8)
+
 	elif event is InputEventKey and event.pressed:
 		if event.keycode == KEY_SPACE:
 			snap_camera_to_player()
 		elif event.keycode == KEY_M:
 			toggle_map_view()
 		elif event.keycode == KEY_Z:
-			_zoom_at_mouse(0.85)
+			zoom_out()
 		elif event.keycode == KEY_X:
-			_zoom_at_mouse(1.18)
+			zoom_in()
+
+func zoom_in() -> void:
+	_zoom_at_mouse(1.25)
+
+func zoom_out() -> void:
+	_zoom_at_mouse(0.8)
 
 func _zoom_at_mouse(factor: float) -> void:
 	var old_zoom = target_zoom.x
@@ -250,7 +306,13 @@ func snap_camera_to_player() -> void:
 	is_following_player = true
 	is_map_mode = false
 	if target_zoom.x < 0.6:
-		target_zoom = Vector2(1.15, 1.15)
+		var vp_rect = get_viewport().get_visible_rect()
+		var aspect = vp_rect.size.x / maxf(1.0, vp_rect.size.y)
+		var base_z = 1.15
+		if aspect < 0.65: base_z = 2.45
+		elif aspect < 0.9: base_z = 1.95
+		elif aspect < 1.2: base_z = 1.45
+		target_zoom = Vector2(base_z, base_z)
 	AudioSynth.play_synth("click")
 	GameState.add_log("CAMERA: LOCKED ON SEED UNIT")
 	_update_camera_status_ui()
@@ -334,10 +396,13 @@ func _on_orbital_logistics_tick() -> void:
 			GameState.destroy_fleet(randi_range(5, 18))
 
 func _capture_and_quit() -> void:
-	var img = get_viewport().get_texture().get_image()
-	var path = "res://docs/art/ingame_screenshot.png"
-	var err = img.save_png(ProjectSettings.globalize_path(path))
-	print("CAPTURE RESULT: ", err, " -> ", ProjectSettings.globalize_path(path))
+	var tex = get_viewport().get_texture()
+	if tex:
+		var img = tex.get_image()
+		if img:
+			var path = "res://docs/art/ingame_screenshot.png"
+			var err = img.save_png(ProjectSettings.globalize_path(path))
+			print("CAPTURE RESULT: ", err, " -> ", ProjectSettings.globalize_path(path))
 	get_tree().quit(0)
 
 func _start_regression_tests() -> void:
@@ -467,7 +532,12 @@ func _run_test_phase_9() -> void:
 	)
 
 func _save_test_screen(rel_path: String) -> void:
-	var img = get_viewport().get_texture().get_image()
-	var full_p = ProjectSettings.globalize_path(rel_path)
-	var err = img.save_png(full_p)
-	print("SAVED: ", rel_path, " -> ERR: ", err)
+	var tex = get_viewport().get_texture()
+	if tex:
+		var img = tex.get_image()
+		if img:
+			var full_p = ProjectSettings.globalize_path(rel_path)
+			var err = img.save_png(full_p)
+			print("SAVED: ", rel_path, " -> ERR: ", err)
+			return
+	print("SKIPPED SCREENSHOT (NO TEXTURE): ", rel_path)

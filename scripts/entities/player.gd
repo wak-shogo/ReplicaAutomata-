@@ -14,6 +14,11 @@ var ship_rotation: float = 0.0
 var angular_velocity: float = 0.0
 var angular_damping: float = 9.0
 
+# スマホ・タッチ操作盤連携
+var touch_thrust_vec: Vector2 = Vector2.ZERO
+var touch_mining_active: bool = false
+var touch_braking_active: bool = false
+
 var drone_rot_angle: float = 0.0
 var anim_time: float = 0.0
 var grid_manager: Node2D = null
@@ -52,6 +57,10 @@ func _physics_process(delta: float) -> void:
 	if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT): input_vec.x -= 1.0
 	if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT): input_vec.x += 1.0
 
+	# スマホ・バーチャルジョイスティック入力の合成
+	if touch_thrust_vec.length_squared() > 0.01:
+		input_vec = touch_thrust_vec
+
 	if grid_manager and grid_manager.has_method("compute_gravity_and_orbit"):
 		grid_manager.ensure_sectors_around(global_position)
 		current_orbit_info = grid_manager.compute_gravity_and_orbit(global_position, velocity)
@@ -60,12 +69,12 @@ func _physics_process(delta: float) -> void:
 		
 		if alt > 8.0:
 			# 宇宙空間：完全な等速直線運動（無抵抗慣性）＆万有引力軌道運動 + スラスター推力 + 手動ブレーキ
-			var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_joy_button_pressed(0, JOY_BUTTON_B)
+			var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
 			is_inertial_braking = is_brake_key
 			thrusting_dir = input_vec.normalized()
 			
 			if is_inertial_braking:
-				# 手動操作による緊急アクティブ逆噴射ブレーキ (Shift / C / Joypad B)
+				# 手動操作による緊急アクティブ逆噴射ブレーキ (Shift / C / Joypad B / スマホブレーキ)
 				velocity = velocity.move_toward(Vector2.ZERO, 380.0 * delta)
 				velocity += g_acc * delta
 			elif input_vec.length_squared() > 0.01:
@@ -86,13 +95,16 @@ func _physics_process(delta: float) -> void:
 		
 	move_and_slide()
 	
-	# マウス ＆ ゲームパッド採掘操作（建築ツール非選択時のみ）
+	# マウス ＆ ゲームパッド ＆ スマホタッチ採掘操作（建築ツール非選択時のみ）
 	var is_building = (grid_manager and grid_manager.selected_tool != "none")
 	var is_gamepad_mining = (Input.get_joy_axis(0, JOY_AXIS_TRIGGER_RIGHT) > 0.35) or (Input.is_joy_button_pressed(0, JOY_BUTTON_A) and not is_building)
 	var is_mouse_mining = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not is_building
+	var is_touch_mining = touch_mining_active and not is_building
 
-	if (is_mouse_mining or is_gamepad_mining) and not is_building:
-		if is_mouse_mining:
+	if (is_mouse_mining or is_gamepad_mining or is_touch_mining) and not is_building:
+		if is_touch_mining:
+			mining_target = _get_auto_aim_target()
+		elif is_mouse_mining:
 			var raw_target = get_global_mouse_position()
 			mining_target = _snap_target_to_celestial_or_vein(raw_target)
 		else:
