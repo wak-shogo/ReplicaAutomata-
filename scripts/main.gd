@@ -1,0 +1,473 @@
+extends Node2D
+
+@onready var grid_manager: Node2D = $GridManager
+@onready var swarm_simulation: Node2D = $SwarmSimulation
+@onready var player: CharacterBody2D = $Player
+@onready var hud: CanvasLayer = $HUD
+@onready var camera: Camera2D = $Camera2D
+
+# カメラ操作用変数
+var is_following_player: bool = true
+var target_zoom: Vector2 = Vector2(1.0, 1.0)
+var is_right_dragging: bool = false
+var last_mouse_screen_pos: Vector2 = Vector2.ZERO
+var saved_player_zoom: Vector2 = Vector2(1.0, 1.0)
+var is_map_mode: bool = false
+
+# 画面揺れ (Screen Shake)
+var shake_amount: float = 0.0
+var shake_timer: float = 0.0
+
+# 敵空爆部隊 (Active Air Raid Bombers)
+var active_bombers: Array[Dictionary] = []
+var tex_bomber: Texture2D
+
+# 爆発エフェクトリスト
+var world_explosions: Array[Dictionary] = []
+
+# ワールド環境 (Glow / Bloom)
+var world_env: WorldEnvironment
+
+func _ready() -> void:
+	tex_bomber = load("res://assets/sprites/corrupted_bomber.png")
+	
+	# 1. 2D Glow / Bloom (WorldEnvironment) の設定
+	_setup_world_environment()
+
+	# 2. コマンドライン引数チェック
+	var args = OS.get_cmdline_user_args()
+	if "--capture" in args or "--capture" in OS.get_cmdline_args():
+		get_tree().create_timer(1.2).timeout.connect(_capture_and_quit)
+	elif "--run-tests" in args or "--run-tests" in OS.get_cmdline_args():
+		_start_regression_tests()
+
+	# 3. カメラ初期設定
+	if camera:
+		camera.anchor_mode = Camera2D.ANCHOR_MODE_DRAG_CENTER
+		if player:
+			camera.global_position = player.global_position
+		target_zoom = Vector2(1.15, 1.15)
+		camera.zoom = target_zoom
+
+	# 4. マスドライバー射出シグナル接続
+	if grid_manager and swarm_simulation:
+		grid_manager.launch_probe_to_space.connect(swarm_simulation.launch_probe)
+	
+	GameState.doctrine_changed.connect(_on_doctrine_changed)
+	
+	# 5. 定期的な宇宙資源回収＆自律シミュレーション
+	var timer = Timer.new()
+	timer.wait_time = 2.5
+	timer.autostart = true
+	timer.timeout.connect(_on_orbital_logistics_tick)
+	add_child(timer)
+
+func _setup_world_environment() -> void:
+	world_env = WorldEnvironment.new()
+	var env = Environment.new()
+	env.background_mode = Environment.BG_CANVAS
+	env.glow_enabled = true
+	env.glow_intensity = 1.15
+	env.glow_bloom = 0.22
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
+	env.glow_hdr_threshold = 1.0
+	world_env.environment = env
+	add_child(world_env)
+
+func _process(delta: float) -> void:
+	# 1. カメラのスムーズ追従 & スムーズズーム処理
+	if camera:
+		camera.zoom = camera.zoom.lerp(target_zoom, delta * 12.0)
+		
+		var base_pos = camera.global_position
+		if is_following_player and player and not is_map_mode:
+			base_pos = base_pos.lerp(player.global_position, delta * 8.0)
+			
+		# 画面揺れ (Screen Shake) 適用
+		if shake_timer > 0.0:
+			shake_timer -= delta
+			var shake_offset = Vector2(randf_range(-shake_amount, shake_amount), randf_range(-shake_amount, shake_amount))
+			camera.global_position = base_pos + shake_offset
+		else:
+			camera.global_position = base_pos
+
+	# 2. メガストラクチャー建造進行
+	_process_megastructure_building(delta)
+	
+	# 3. 敵急降下爆撃機の更新
+	_process_active_bombers(delta)
+	
+	# 4. 爆発エフェクトの更新
+	for i in range(world_explosions.size() - 1, -1, -1):
+		world_explosions[i]["timer"] -= delta
+		if world_explosions[i]["timer"] <= 0.0:
+			world_explosions.remove_at(i)
+			
+	queue_redraw()
+
+func shake_camera(amount: float, duration: float) -> void:
+	shake_amount = amount
+	shake_timer = duration
+
+# 敵空爆ウェーブのスポーン
+func spawn_air_raid(wave_num: int) -> void:
+	var bomber_count = 2 + wave_num
+	var home_c = Vector2(800.0, 1070.0)
+	
+	for i in range(bomber_count):
+		# 上空軌道からスポーン
+		var spawn_angle = randf_range(-PI * 0.75, -PI * 0.25)
+		var spawn_pos = home_c + Vector2(cos(spawn_angle), sin(spawn_angle)) * 950.0
+		var target_angle = spawn_angle + randf_range(-0.15, 0.15)
+		var target_pos = home_c + Vector2(cos(target_angle), sin(target_angle)) * 620.0
+		
+		active_bombers.append({
+			"pos": spawn_pos,
+			"target": target_pos,
+			"speed": randf_range(110.0, 160.0),
+			"hp": 50.0,
+			"max_hp": 50.0
+		})
+
+func _process_active_bombers(delta: float) -> void:
+	for i in range(active_bombers.size() - 1, -1, -1):
+		var b = active_bombers[i]
+		var dir = (b["target"] - b["pos"]).normalized()
+		b["pos"] += dir * b["speed"] * delta
+		
+		# 地表付近に到達 -> 爆撃実行
+		if b["pos"].distance_to(b["target"]) < 30.0:
+			_explode_bomber(b["pos"], true)
+			active_bombers.remove_at(i)
+			continue
+			
+		# プレイヤーとの接触判定
+		if player and b["pos"].distance_to(player.global_position) < 40.0:
+			GameState.damage_player(25.0)
+			shake_camera(8.0, 0.3)
+			_explode_bomber(b["pos"], false)
+			active_bombers.remove_at(i)
+
+func destroy_bomber(bomber: Dictionary) -> void:
+	var idx = active_bombers.find(bomber)
+	if idx != -1:
+		_explode_bomber(bomber["pos"], false)
+		active_bombers.remove_at(idx)
+
+func _explode_bomber(pos: Vector2, hit_ground: bool) -> void:
+	world_explosions.append({
+		"pos": pos,
+		"radius": randf_range(20.0, 35.0),
+		"timer": 0.35
+	})
+	AudioSynth.play_synth("explosion")
+	var shake_val = 10.0 if hit_ground else 4.0
+	shake_camera(shake_val, 0.25)
+	
+	if hit_ground:
+		GameState.add_log("ALERT: ENEMY BOMB DETONATED ON SURFACE!")
+
+func _draw() -> void:
+	# 敵急降下爆撃機の描画
+	for b in active_bombers:
+		var dir = (b["target"] - b["pos"]).normalized()
+		var rot = dir.angle() + PI * 0.5
+		if tex_bomber:
+			draw_set_transform(b["pos"], rot, Vector2.ONE)
+			draw_texture(tex_bomber, -Vector2(18, 18))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		else:
+			draw_circle(b["pos"], 12.0, Color(2.5, 0.2, 0.2))
+			
+		# HPバー
+		var hp_r = b["hp"] / b["max_hp"]
+		draw_rect(Rect2(b["pos"] - Vector2(14, 20), Vector2(28 * hp_r, 3)), Color(2.0, 0.2, 0.2))
+
+	# 爆発エフェクト描画 (HDR Glow)
+	for exp in world_explosions:
+		var alpha = exp["timer"] / 0.35
+		draw_circle(exp["pos"], exp["radius"] * (1.6 - alpha), Color(3.0, 1.2, 0.2, alpha * 0.85))
+		draw_arc(exp["pos"], exp["radius"] * (2.2 - alpha), 0, TAU, 16, Color(3.0, 2.5, 0.8, alpha), 2.0)
+
+func _input(event: InputEvent) -> void:
+	if not camera:
+		return
+		
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			if event.pressed:
+				is_right_dragging = true
+				last_mouse_screen_pos = event.position
+				is_following_player = false
+				is_map_mode = false
+				_update_camera_status_ui()
+			else:
+				is_right_dragging = false
+				
+		elif event.button_index == MOUSE_BUTTON_MIDDLE:
+			if event.pressed:
+				is_right_dragging = true
+				last_mouse_screen_pos = event.position
+				is_following_player = false
+				_update_camera_status_ui()
+			else:
+				is_right_dragging = false
+
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_zoom_at_mouse(1.16)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_zoom_at_mouse(0.86)
+
+	elif event is InputEventMouseMotion and is_right_dragging:
+		var delta_pos = (event.position - last_mouse_screen_pos) / camera.zoom.x
+		camera.global_position -= delta_pos
+		last_mouse_screen_pos = event.position
+
+	elif event is InputEventKey and event.pressed:
+		if event.keycode == KEY_SPACE:
+			snap_camera_to_player()
+		elif event.keycode == KEY_M:
+			toggle_map_view()
+		elif event.keycode == KEY_Z:
+			_zoom_at_mouse(0.85)
+		elif event.keycode == KEY_X:
+			_zoom_at_mouse(1.18)
+
+func _zoom_at_mouse(factor: float) -> void:
+	var old_zoom = target_zoom.x
+	var new_zoom = clampf(old_zoom * factor, 0.16, 2.4)
+	if is_equal_approx(old_zoom, new_zoom):
+		return
+		
+	var mouse_world_before = camera.get_global_mouse_position()
+	target_zoom = Vector2(new_zoom, new_zoom)
+	
+	if not is_following_player:
+		var mouse_viewport_offset = get_viewport().get_mouse_position() - get_viewport_rect().size * 0.5
+		camera.global_position = mouse_world_before - (mouse_viewport_offset / new_zoom)
+
+func snap_camera_to_player() -> void:
+	is_following_player = true
+	is_map_mode = false
+	if target_zoom.x < 0.6:
+		target_zoom = Vector2(1.15, 1.15)
+	AudioSynth.play_synth("click")
+	GameState.add_log("CAMERA: LOCKED ON SEED UNIT")
+	_update_camera_status_ui()
+
+func toggle_map_view() -> void:
+	is_map_mode = not is_map_mode
+	if is_map_mode:
+		saved_player_zoom = target_zoom
+		is_following_player = false
+		target_zoom = Vector2(0.18, 0.18)
+		camera.global_position = Vector2(800.0, 180.0)
+		AudioSynth.play_synth("click")
+		GameState.add_log("MACRO ORBITAL MAP VIEW ACTIVATED")
+	else:
+		snap_camera_to_player()
+		target_zoom = saved_player_zoom
+	_update_camera_status_ui()
+
+func _update_camera_status_ui() -> void:
+	if hud and hud.has_method("update_camera_mode_indicator"):
+		var mode_name = "自機追従中 [SPACE]" if is_following_player else "自機へ戻る [SPACE]"
+		hud.update_camera_mode_indicator(mode_name, is_following_player)
+
+func _process_megastructure_building(delta: float) -> void:
+	var active_proj = GameState.active_megastructure_project
+	if active_proj != "" and GameState.megastructures.has(active_proj):
+		var proj = GameState.megastructures[active_proj]
+		if not proj["built"]:
+			var swarm_boost = maxf(1.0, float(GameState.fleet_count) * 0.015)
+			var build_speed = (0.04 * swarm_boost) * delta
+			proj["progress"] = minf(1.0, proj["progress"] + build_speed)
+			GameState.megastructure_updated.emit(active_proj, proj["progress"], false)
+			
+			if proj["progress"] >= 1.0:
+				proj["built"] = true
+				GameState.megastructure_updated.emit(active_proj, 1.0, true)
+				GameState.add_log("************************************************")
+				GameState.add_log("MEGASTRUCTURE COMPLETED: [%s]!" % proj["name"])
+				GameState.add_log("BONUS ACTIVATED: %s" % proj["bonus"])
+				GameState.add_log("************************************************")
+				AudioSynth.play_synth("launch")
+				GameState._advance_quest()
+
+func _on_doctrine_changed(new_doctrine: String) -> void:
+	if swarm_simulation and swarm_simulation.has_method("set_doctrine"):
+		swarm_simulation.set_doctrine(new_doctrine)
+
+func _on_orbital_logistics_tick() -> void:
+	var fleet = GameState.fleet_count
+	if fleet <= 0:
+		return
+		
+	var elevator_boost = 3.0 if GameState.megastructures["elevator"]["built"] else 1.0
+	
+	match GameState.fleet_doctrine:
+		"HARVEST":
+			var ti_gain = int((randi_range(2, 6) + float(fleet) * 0.04) * elevator_boost)
+			var si_gain = int((randi_range(3, 8) + float(fleet) * 0.05) * elevator_boost)
+			var fe_gain = int((randi_range(4, 10) + float(fleet) * 0.06) * elevator_boost)
+			GameState.add_resource("Ti", ti_gain)
+			GameState.add_resource("Si", si_gain)
+			GameState.add_resource("Fe", fe_gain)
+			if randf() < 0.4:
+				GameState.add_log("SWARM LOGISTICS: DELIVERED +%d Fe, +%d Si, +%d Ti" % [fe_gain, si_gain, ti_gain])
+				
+		"MULTIPLY":
+			if fleet < GameState.fleet_max:
+				var multiply_count = mini(int(float(fleet) * 0.12) + 2, 60)
+				GameState.add_fleet(multiply_count)
+				GameState.add_log("SWARM REPLICATION: +%d UNITS CONSTRUCTED" % multiply_count)
+				AudioSynth.play_synth("build")
+				
+		"ASSAULT":
+			var dmg = (float(fleet) * 0.25) + randf_range(15.0, 35.0)
+			if GameState.megastructures["citadel"]["built"]:
+				dmg *= 1.8
+			GameState.damage_hostile_core(dmg)
+			GameState.add_log("FLEET ASSAULT: STRUCK CORRUPTED CORE (-%.0f HP)" % dmg)
+			AudioSynth.play_synth("laser")
+			# 敵からの反撃によるスウォーム損耗
+			GameState.destroy_fleet(randi_range(5, 18))
+
+func _capture_and_quit() -> void:
+	var img = get_viewport().get_texture().get_image()
+	var path = "res://docs/art/ingame_screenshot.png"
+	var err = img.save_png(ProjectSettings.globalize_path(path))
+	print("CAPTURE RESULT: ", err, " -> ", ProjectSettings.globalize_path(path))
+	get_tree().quit(0)
+
+func _start_regression_tests() -> void:
+	print(">>> STARTING BLUEPRINT & AUTONOMOUS DRONE REGRESSION TESTS <<<")
+	get_tree().create_timer(0.8).timeout.connect(_run_test_phase_1)
+
+func _run_test_phase_1() -> void:
+	print("TEST PHASE 1: BLUEPRINT PLACEMENT & MINIMAL NON-VERBAL UI")
+	if grid_manager:
+		grid_manager.select_tool("miner")
+		grid_manager._add_blueprint("miner", -0.52, 20.0, "Fe", false)
+		grid_manager._add_blueprint("smelter", -0.38, 32.0, "Fe", false)
+	get_tree().create_timer(0.4).timeout.connect(func():
+		_save_test_screen("docs/art/test_01_blueprint_hologram.png")
+		_run_test_phase_2()
+	)
+
+func _run_test_phase_2() -> void:
+	print("TEST PHASE 2: CONSTRUCTION DRONES WELDING BEAM")
+	# ドローンがブループリントに到達して溶接ビームを照射している瞬間を撮影
+	get_tree().create_timer(0.5).timeout.connect(func():
+		_save_test_screen("docs/art/test_02_drones_welding.png")
+		_run_test_phase_3()
+	)
+
+func _run_test_phase_3() -> void:
+	print("TEST PHASE 3: CONVEYOR DRAG BLUEPRINTS & MULTI-DRONE FABRICATION")
+	if grid_manager:
+		# 連続ベルトブループリント
+		for i in range(5):
+			var ba = lerpf(-0.52, -0.38, float(i) / 4.0)
+			grid_manager._add_blueprint("belt", ba, 4.0, "", false)
+	get_tree().create_timer(0.5).timeout.connect(func():
+		_save_test_screen("docs/art/test_03_belt_drag_blueprint.png")
+		_run_test_phase_4()
+	)
+
+func _run_test_phase_4() -> void:
+	print("TEST PHASE 4: AIR RAID INCOMING & TURRET DEFENSE")
+	spawn_air_raid(1)
+	GameState.raid_alert.emit(true, "⚠️ RAID")
+	get_tree().create_timer(0.5).timeout.connect(func():
+		_save_test_screen("docs/art/test_04_air_raid_turret.png")
+		_run_test_phase_5()
+	)
+
+func _run_test_phase_5() -> void:
+	print("TEST PHASE 5: SWARM DEPLOYMENT & MEGASTRUCTURES BUILDING")
+	GameState.add_fleet(1800)
+	GameState.megastructures["elevator"]["progress"] = 0.85
+	GameState.megastructures["dyson"]["progress"] = 0.50
+	GameState.active_megastructure_project = "elevator"
+	if camera:
+		target_zoom = Vector2(0.65, 0.65)
+		camera.zoom = target_zoom
+	get_tree().create_timer(0.5).timeout.connect(func():
+		_save_test_screen("docs/art/test_05_swarm_megastructure.png")
+		_run_test_phase_6()
+	)
+
+func _run_test_phase_6() -> void:
+	print("TEST PHASE 6: MACRO ORBITAL MAP VIEW (SUN, BLACK HOLE, COMET, PULSAR, MOON ORBIT)")
+	toggle_map_view()
+	get_tree().create_timer(0.6).timeout.connect(func():
+		_save_test_screen("docs/art/test_06_macro_map.png")
+		_run_test_phase_7()
+	)
+
+func _run_test_phase_7() -> void:
+	print("TEST PHASE 7: ASSAULT DOCTRINE ON ENEMY BOSS CORE")
+	is_map_mode = false
+	is_following_player = false
+	GameState.set_fleet_doctrine("ASSAULT")
+	if camera:
+		camera.global_position = Vector2(1380.0, 150.0)
+		target_zoom = Vector2(1.2, 1.2)
+		camera.zoom = target_zoom
+	get_tree().create_timer(0.5).timeout.connect(func():
+		_save_test_screen("docs/art/test_07_assault_boss.png")
+		_run_test_phase_8()
+	)
+
+func _run_test_phase_8() -> void:
+	print("TEST PHASE 8: CELESTIAL MINING (LUNA He3 & BLACK HOLE DARK MATTER)")
+	is_map_mode = false
+	is_following_player = false
+	# プレイヤーを月の近傍へ移動し、月への採掘レーザーを照射
+	if player and grid_manager:
+		var moon_pos = grid_manager.moon_body.get("pos", Vector2(1200, 300))
+		player.global_position = moon_pos + Vector2(-90.0, -40.0)
+		player.is_mining = true
+		player.mining_target = moon_pos
+		player._detect_nearest_ore(moon_pos)
+		GameState.add_resource(player.current_mining_ore, 12)
+		if camera:
+			camera.global_position = player.global_position
+			target_zoom = Vector2(1.35, 1.35)
+			camera.zoom = target_zoom
+
+	get_tree().create_timer(0.5).timeout.connect(func():
+		_save_test_screen("docs/art/test_08_celestial_mining.png")
+		_run_test_phase_9()
+	)
+
+func _run_test_phase_9() -> void:
+	print("TEST PHASE 9: BLACK HOLE GARGANTUA & SWARM HARVESTING")
+	if player and grid_manager:
+		# ブラックホールの近傍へカメラ移動
+		var bh_pos = Vector2(2300.0, -350.0)
+		player.global_position = bh_pos + Vector2(-150.0, 40.0)
+		player.is_mining = true
+		player.mining_target = bh_pos
+		player._detect_nearest_ore(bh_pos)
+		GameState.add_resource("DarkMatter", 8)
+		GameState.add_resource("Plasma", 15)
+		GameState.add_resource("Ice", 20)
+		GameState.set_fleet_doctrine("HARVEST")
+		if camera:
+			camera.global_position = bh_pos
+			target_zoom = Vector2(0.95, 0.95)
+			camera.zoom = target_zoom
+
+	get_tree().create_timer(0.6).timeout.connect(func():
+		_save_test_screen("docs/art/test_09_blackhole_singularity.png")
+		print(">>> ALL CELESTIAL & BLUEPRINT TESTS FINISHED SUCCESSFULLY! <<<")
+		get_tree().quit(0)
+	)
+
+func _save_test_screen(rel_path: String) -> void:
+	var img = get_viewport().get_texture().get_image()
+	var full_p = ProjectSettings.globalize_path(rel_path)
+	var err = img.save_png(full_p)
+	print("SAVED: ", rel_path, " -> ERR: ", err)
