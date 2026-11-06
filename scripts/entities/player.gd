@@ -151,37 +151,73 @@ func _physics_process(delta: float) -> void:
 		var min_radius: float = prim_rad + r_ship
 		var to_ship: Vector2 = global_position - prim_pos
 		var cur_r: float = to_ship.length()
+		var normal: Vector2 = to_ship / cur_r if cur_r > 0.001 else Vector2.UP
 		
-		if cur_r > 0.001:
-			var normal = to_ship / cur_r
-			# 地表より内側にめり込んでいる場合
-			if cur_r < min_radius:
-				# 1. 物理位置を地表面に完全ハードクランプ (位置押し出し)
-				global_position = prim_pos + normal * min_radius
-				
-				# 2. 地面に向かう法線速度成分をゼロ化 (地面に衝突して停止)
-				var v_in = velocity.dot(normal)
-				if v_in < -40.0:
-					AudioSynth.play_synth("click")
-					var mn = get_parent()
-					if mn and mn.has_method("shake_camera"):
-						mn.shake_camera(clampf(abs(v_in) * 0.02, 1.0, 5.0), 0.15)
-				if v_in < 0.0:
-					velocity -= normal * v_in
-				
-				# 3. 接地中の入力制御: 水平移動と上空への離陸
-				var tangent = Vector2(-normal.y, normal.x)
-				var t_input = input_vec.dot(tangent)
-				var up_input = maxf(0.0, input_vec.dot(normal))
-				if input_vec.length_squared() > 0.01:
-					var target_v = (tangent * t_input * 240.0) + (normal * up_input * 320.0)
-					velocity = velocity.lerp(target_v, delta * 12.0)
-				else:
-					velocity = velocity.move_toward(Vector2.ZERO, 500.0 * delta)
+		# 地表より内側にめり込んでいる場合
+		if cur_r < min_radius:
+			# 1. 物理位置を地表面に完全ハードクランプ (位置押し出し)
+			global_position = prim_pos + normal * min_radius
+			
+			# 2. 地面に向かう法線速度成分をゼロ化 (地面に衝突して停止)
+			var v_in = velocity.dot(normal)
+			if v_in < -40.0:
+				AudioSynth.play_synth("click")
+				var mn = get_parent()
+				if mn and mn.has_method("shake_camera"):
+					mn.shake_camera(clampf(abs(v_in) * 0.02, 1.0, 5.0), 0.15)
+			if v_in < 0.0:
+				velocity -= normal * v_in
+			
+			# 3. 接地中の入力制御: 水平移動と上空への離陸
+			var tangent = Vector2(-normal.y, normal.x)
+			var t_input = input_vec.dot(tangent)
+			var up_input = maxf(0.0, input_vec.dot(normal))
+			if input_vec.length_squared() > 0.01:
+				var target_v = (tangent * t_input * 240.0) + (normal * up_input * 320.0)
+				velocity = velocity.lerp(target_v, delta * 12.0)
+			else:
+				velocity = velocity.move_toward(Vector2.ZERO, 500.0 * delta)
 
-		# 4. 母星の公転運動に追従 (公転参照系)
-		if prim_kind == "home" and cur_r < prim_rad * 3.5:
-			global_position += grid_manager.home_delta_pos
+		# 4. 全天体共通：公転座標系自動追従 (Celestial Co-moving Reference Frame)
+		var p_delta = current_orbit_info.get("primary_delta_pos", Vector2.ZERO)
+		if p_delta.length_squared() > 0.0001 and cur_r < prim_rad * 2.8:
+			global_position += p_delta
+
+		# 5. 恒星プラズマ過熱 ＆ スイングバイ熱放射 (Solar Heat Flux & Radiation Hazard)
+		var sun_p = grid_manager.SUN_POS
+		var sun_r = grid_manager.SUN_RADIUS
+		var d_sun = global_position - sun_p
+		var dist_sun = d_sun.length()
+		
+		if dist_sun < sun_r * 1.4:
+			# コロナ過熱圏突入：シールド蒸発 ＆ 熱ダメージ
+			var heat_ratio = clampf((sun_r * 1.4 - dist_sun) / (sun_r * 0.4), 0.0, 1.0)
+			GameState.damage_player(35.0 * heat_ratio * delta)
+			
+			# 太陽表面突入時：固体激突ではなく強烈なプラズマ熱衝撃波で外側へ吹き飛ばし
+			if dist_sun < sun_r:
+				var push_n = d_sun.normalized() if dist_sun > 0.1 else Vector2.UP
+				global_position = sun_p + push_n * (sun_r + 4.0)
+				velocity = push_n * 650.0
+				AudioSynth.play_synth("alert")
+				GameState.add_log("SOLAR CORONA DEFLECTION: EXTREME THERMAL REPULSION!")
+
+		# 6. ブラックホール事象の地平面 ＆ 潮汐破壊・時空ワープ (Singularity Tidal Disruption)
+		if prim_kind == "blackhole":
+			if cur_r < prim_rad * 1.2:
+				# 事象の地平面突入：超重力潮汐力によるシールド浸食
+				GameState.damage_player(55.0 * delta)
+				# 降着円盤スイングバイ加速
+				var spin_tangent = Vector2(-normal.y, normal.x)
+				velocity += spin_tangent * (480.0 * delta)
+				
+				# 特異点到達時：緊急時空ワームホール排出
+				if cur_r < 28.0:
+					var eject_dir = Vector2(randf_range(-1, 1), randf_range(-1, 1)).normalized()
+					global_position = prim_pos + eject_dir * (prim_rad * 2.2)
+					velocity = eject_dir * 780.0
+					AudioSynth.play_synth("launch")
+					GameState.add_log("EVENT HORIZON WARP: QUANTUM EJECTION FROM SINGULARITY!")
 
 	# MOVEフェーズでの移動距離検知 ＆ 地質センサー波発信
 	if GameState.story_phase == GameState.StoryPhase.MOVE:
@@ -231,7 +267,12 @@ func _physics_process(delta: float) -> void:
 			mining_laser_timer = 0.0
 			AudioSynth.play_synth("mine")
 			var amount = 1 + GameState.attached_drones
-			GameState.add_resource(current_mining_ore, amount)
+			if current_mining_source != "" and current_mining_source != "Crust":
+				# 宇宙天体有限埋蔵量からの抽出
+				GameState.mine_celestial_resource(current_mining_source, current_mining_ore, amount)
+			else:
+				# 母星地表鉱脈
+				GameState.add_resource(current_mining_ore, amount)
 			
 			# レーザーで敵爆撃機を迎撃判定
 			var main_n = get_parent()
@@ -279,14 +320,16 @@ func _physics_process(delta: float) -> void:
 func _snap_target_to_celestial_or_vein(raw_pos: Vector2) -> Vector2:
 	if not grid_manager:
 		return raw_pos
-	# 宇宙天体へのスナップ判定
+	# 宇宙天体へのスナップ判定 (天体中心ではなく、自機に近い天体表面へスナップ！)
 	if grid_manager.get("active_planets"):
 		for p in grid_manager.active_planets:
 			if p.get("kind", "") == "home": continue
 			var ppos: Vector2 = p.get("pos", Vector2.ZERO)
 			var prad: float = p.get("radius", 50.0)
-			if raw_pos.distance_to(ppos) <= prad + 140.0:
-				return ppos
+			var reach = prad + maxf(160.0, prad * 0.4)
+			if raw_pos.distance_to(ppos) <= reach:
+				var to_ship = (global_position - ppos).normalized() if global_position != ppos else Vector2.UP
+				return ppos + to_ship * prad
 	# 小惑星帯へのスナップ判定
 	if grid_manager.get("asteroid_belt"):
 		for ast in grid_manager.asteroid_belt:
@@ -298,7 +341,7 @@ func _get_auto_aim_target() -> Vector2:
 	if not grid_manager:
 		return global_position + Vector2(0, 80)
 		
-	# 1. 宇宙空間にいる場合：最も近い宇宙天体へオートエイム
+	# 1. 宇宙空間にいる場合：最も近い宇宙天体表面へオートエイム
 	var d_home = global_position.distance_to(grid_manager.HOME_CENTER)
 	if d_home > grid_manager.HOME_RADIUS + 70.0:
 		var best_cel_dist = 99999.0
@@ -307,10 +350,12 @@ func _get_auto_aim_target() -> Vector2:
 			for p in grid_manager.active_planets:
 				if p.get("kind", "") == "home": continue
 				var ppos: Vector2 = p.get("pos", Vector2.ZERO)
-				var d = global_position.distance_to(ppos)
+				var prad: float = p.get("radius", 50.0)
+				var d = global_position.distance_to(ppos) - prad
 				if d < best_cel_dist:
 					best_cel_dist = d
-					best_cel_pos = ppos
+					var to_ship = (global_position - ppos).normalized() if global_position != ppos else Vector2.UP
+					best_cel_pos = ppos + to_ship * prad
 		return best_cel_pos
 
 	# 2. 地表付近にいる場合：最も近い地下鉱脈へオートエイム

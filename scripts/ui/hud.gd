@@ -415,18 +415,19 @@ func build_minimal_ui() -> void:
 	add_child(missing_panel)
 
 	# 空爆警告
+	# 空爆襲来警告アラートアイコン (中央上部のナビ・ミッション干渉を完全排除し、右上ステータス下に配置)
 	alert_rect = TextureRect.new()
 	alert_rect.texture = load("res://assets/sprites/corrupted_bomber.png")
-	alert_rect.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	alert_rect.anchor_left = 0.5
-	alert_rect.anchor_right = 0.5
+	alert_rect.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	alert_rect.anchor_left = 1.0
+	alert_rect.anchor_right = 1.0
 	alert_rect.anchor_top = 0.0
 	alert_rect.anchor_bottom = 0.0
-	alert_rect.offset_left = -20.0
-	alert_rect.offset_top = 90.0
-	alert_rect.offset_right = 20.0
-	alert_rect.offset_bottom = 130.0
-	alert_rect.custom_minimum_size = Vector2(40, 40)
+	alert_rect.offset_left = -160.0
+	alert_rect.offset_top = 64.0
+	alert_rect.offset_right = -124.0
+	alert_rect.offset_bottom = 100.0
+	alert_rect.custom_minimum_size = Vector2(36, 36)
 	alert_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	alert_rect.modulate = Color(3.0, 0.3, 0.3)
 	alert_rect.visible = false
@@ -1091,21 +1092,35 @@ func _on_nav_overlay_draw() -> void:
 	var half_h = (vp_size.y * 0.5) / zoom.y
 	var screen_center = vp_size * 0.5
 
-	# ナビ対象天体リスト (公転動的座標対応・ASCII識別子)
-	var h_pos = grid_manager.HOME_CENTER if grid_manager else Vector2(800.0, 1070.0)
-	var s_pos = grid_manager.SUN_POS if grid_manager else Vector2(800.0, -850.0)
-	var targets: Array[Dictionary] = [
-		{"name": "HOME", "pos": h_pos, "col": Color(0.2, 0.8, 1.0), "icon": "[HOME]"},
-		{"name": "SUN", "pos": s_pos, "col": Color(1.0, 0.7, 0.1), "icon": "[SUN]"},
-		{"name": "SINGULARITY", "pos": s_pos + Vector2(3800.0, -1800.0), "col": Color(0.8, 0.3, 1.0), "icon": "[HOLE]"},
-		{"name": "PULSAR", "pos": s_pos + Vector2(-3600.0, -1400.0), "col": Color(0.1, 1.0, 0.8), "icon": "[PULSAR]"},
-		{"name": "BOSS CORE", "pos": s_pos + Vector2(3800.0, 200.0), "col": Color(1.0, 0.2, 0.2), "icon": "[BOSS]"}
-	]
-	
-	if grid_manager and not grid_manager.moon_body.is_empty():
-		targets.append({"name": "LUNA", "pos": grid_manager.moon_body.get("pos", Vector2.ZERO), "col": Color(0.3, 0.9, 1.0), "icon": "[LUNA]"})
-	if grid_manager and not grid_manager.comet_body.is_empty():
-		targets.append({"name": "COMET", "pos": grid_manager.comet_body.get("pos", Vector2.ZERO), "col": Color(0.4, 0.9, 1.0), "icon": "[COMET]"})
+	# ナビ対象天体リスト (星系の主要天体 Key Solar Bodies のみに厳格選定)
+	var targets: Array[Dictionary] = []
+	if grid_manager:
+		targets.append({"name": "HOME", "pos": grid_manager.HOME_CENTER, "col": Color(0.2, 0.8, 1.0), "icon": "[HOME]"})
+		targets.append({"name": "SUN", "pos": grid_manager.SUN_POS, "col": Color(1.0, 0.7, 0.1), "icon": "[SUN]"})
+		
+		# 1. 母星の公式衛星 LUNA-PRIME のみ
+		if not grid_manager.moon_body.is_empty():
+			targets.append({"name": "LUNA", "pos": grid_manager.moon_body.get("pos", Vector2.ZERO), "col": Color(0.3, 0.9, 1.0), "icon": "[LUNA]"})
+			
+		# 2. 彗星 COMET-NEOWISE
+		if not grid_manager.comet_body.is_empty():
+			targets.append({"name": "COMET", "pos": grid_manager.comet_body.get("pos", Vector2.ZERO), "col": Color(0.4, 0.9, 1.0), "icon": "[COMET]"})
+			
+		# 3. 特異天体 (ブラックホール Gargantua & パルサー Pulsar-X)
+		for p in grid_manager.active_planets:
+			var pid = p.get("id", "")
+			if pid == "GARGANTUA-ZERO":
+				targets.append({"name": "HOLE", "pos": p["pos"], "col": Color(0.8, 0.3, 1.0), "icon": "[HOLE]"})
+			elif pid == "PULSAR-X":
+				targets.append({"name": "PULSAR", "pos": p["pos"], "col": Color(0.1, 1.0, 0.8), "icon": "[PULSAR]"})
+		
+		# 4. 敵ボス要塞 (宇宙進出フェーズ以降かつ遠距離表示)
+		if GameState.story_phase >= GameState.StoryPhase.SPACE:
+			targets.append({"name": "BOSS", "pos": grid_manager.SUN_POS + Vector2(7600.0, -1200.0), "col": Color(1.0, 0.25, 0.25), "icon": "[BOSS]"})
+
+	# 画面外マーカーの角度ファンアウト（重なり回避）バッファ
+	var placed_marker_angles: Array[float] = []
+	var placed_screen_marker_positions: Array[Vector2] = []
 
 	for t in targets:
 		var t_pos: Vector2 = t["pos"]
@@ -1125,9 +1140,20 @@ func _on_nav_overlay_draw() -> void:
 				nav_overlay.draw_line(screen_tpos + Vector2(0, 24), screen_tpos + Vector2(0, 38), ret_col, 2.0)
 				nav_overlay.draw_string(ThemeDB.fallback_font, screen_tpos + Vector2(-36, 46), "LOCK-ON: %s" % t["name"], HORIZONTAL_ALIGNMENT_CENTER, -1, 9, ret_col)
 		else:
-			# 画面外：画面端にポインターアイコン＋距離を描画
-			var dir = diff.normalized()
-			# 画面四辺の境界との交点を計算
+			# 画面外：画面端にポインターアイコン＋距離を描画 (角度ファンアウトによる完全デコリジョン)
+			var base_dir = diff.normalized()
+			var base_angle = atan2(base_dir.y, base_dir.x)
+			
+			# 他の配置済みマーカーとの角度近接判定 ＆ ファンアウト
+			var spread_angle = base_angle
+			for placed_a in placed_marker_angles:
+				var diff_a = angle_difference(spread_angle, placed_a)
+				if abs(diff_a) < 0.24: # 約14度以内なら左右に押し出し
+					var push_sign = 1.0 if diff_a >= 0.0 else -1.0
+					spread_angle += push_sign * (0.24 - abs(diff_a))
+			placed_marker_angles.append(spread_angle)
+			
+			var dir = Vector2(cos(spread_angle), sin(spread_angle))
 			var edge_margin = 38.0
 			var max_dx = screen_center.x - edge_margin
 			var max_dy = screen_center.y - edge_margin
@@ -1135,17 +1161,49 @@ func _on_nav_overlay_draw() -> void:
 			var scale_y = max_dy / maxf(0.001, abs(dir.y))
 			var scale_factor = minf(scale_x, scale_y)
 			var marker_p = screen_center + dir * scale_factor
-			if marker_p.y < 54.0 and abs(marker_p.x - screen_center.x) < 170.0:
-				marker_p.y = 54.0
-
-			var m_col: Color = t["col"]
-			nav_overlay.draw_circle(marker_p, 4.0, m_col)
-			nav_overlay.draw_line(marker_p, marker_p + dir * 8.0, m_col, 2.0)
 			
+			# 上部UIバー＆ナラティブ目的バナーとの干渉完全回避 (Safe Zone クランプ)
+			if marker_p.y < 118.0 and abs(marker_p.x - screen_center.x) < 280.0:
+				marker_p.y = 118.0
+
+			# 左下バーチャルジョイスティック領域の完全回避
+			if marker_p.x < 230.0 and marker_p.y > vp_size.y - 230.0:
+				if marker_p.x < 115.0:
+					marker_p.y = vp_size.y - 235.0
+				else:
+					marker_p.x = 235.0
+
+			# 右下アクションボタンクラスタ領域の完全回避
+			if marker_p.x > vp_size.x - 230.0 and marker_p.y > vp_size.y - 230.0:
+				if marker_p.x > vp_size.x - 115.0:
+					marker_p.y = vp_size.y - 235.0
+				else:
+					marker_p.x = vp_size.x - 235.0
+
+			# 下部ビルドパレットバー領域の完全回避
+			if marker_p.y > vp_size.y - 85.0 and abs(marker_p.x - screen_center.x) < 380.0:
+				marker_p.y = vp_size.y - 88.0
+
+			# 他のマーカーとのX/Yスクリーン座標デコリジョン (最低84pxの横間隔を強制保証)
+			for existing_p in placed_screen_marker_positions:
+				if abs(marker_p.y - existing_p.y) < 20.0 and abs(marker_p.x - existing_p.x) < 86.0:
+					var shift = (86.0 - abs(marker_p.x - existing_p.x))
+					if marker_p.x >= existing_p.x:
+						marker_p.x += shift
+					else:
+						marker_p.x -= shift
+			placed_screen_marker_positions.append(marker_p)
+
 			var dist_km = p_dist / 100.0
 			var dist_str = "%.1fkm" % dist_km if dist_km >= 1.0 else "%.0fm" % p_dist
 			var lbl = "%s %s" % [t["icon"], dist_str]
-			nav_overlay.draw_string(ThemeDB.fallback_font, marker_p - Vector2(24, 8), lbl, HORIZONTAL_ALIGNMENT_CENTER, -1, 9, m_col * Color(1.5, 1.5, 1.5, 0.9))
+			var lbl_size = Vector2(80.0, 16.0)
+			var lbl_rect = Rect2(marker_p - Vector2(40, 12), lbl_size)
+			
+			var m_col: Color = t["col"]
+			nav_overlay.draw_circle(marker_p, 3.5, m_col)
+			nav_overlay.draw_line(marker_p, marker_p + dir * 7.0, m_col, 2.0)
+			nav_overlay.draw_string(ThemeDB.fallback_font, lbl_rect.position + Vector2(0, 11), lbl, HORIZONTAL_ALIGNMENT_CENTER, int(lbl_size.x), 9, m_col * Color(1.4, 1.4, 1.4, 0.95))
 
 	# ========================================================
 	# 最優先: 現在のクエスト目標地点へのオフスクリーン矢印誘導
@@ -1160,13 +1218,17 @@ func _on_nav_overlay_draw() -> void:
 			var m_col: Color = m_info.get("color", Color(0.0, 2.5, 3.0))
 
 			if not m_in_screen:
-				# 画面外：画面端にパルスするターゲットマーカーを描画
+				# 画面外：画面端にパルスするターゲットマーカーを描画 (Safe Zone クランプ適用)
 				var dir = m_diff.normalized()
 				var edge_margin = 46.0
 				var max_dx = screen_center.x - edge_margin
 				var max_dy = screen_center.y - edge_margin
 				var scale_factor = minf(max_dx / maxf(0.001, abs(dir.x)), max_dy / maxf(0.001, abs(dir.y)))
 				var marker_p = screen_center + dir * scale_factor
+				
+				# 上部UI Safe Zone 回避
+				if marker_p.y < 120.0 and abs(marker_p.x - screen_center.x) < 280.0:
+					marker_p.y = 120.0
 
 				var pulse = (sin(hud_anim_time * 6.0) * 0.5 + 0.5)
 				var p_col = m_col * Color(1.0 + pulse * 1.5, 1.0 + pulse * 1.5, 1.0 + pulse * 1.5, 1.0)

@@ -109,6 +109,16 @@ func _process(delta: float) -> void:
 		camera.zoom = camera.zoom.lerp(target_zoom, delta * 12.0)
 		
 		var base_pos = camera.global_position
+		# 宇宙飛行遭難防止フェイルセーフ (機体が画面端を逸脱しそうになったら自動で追従復帰)
+		if not is_following_player and player and not is_map_mode:
+			var vp_sz = get_viewport().get_visible_rect().size
+			var half_w = (vp_sz.x * 0.5) / camera.zoom.x
+			var half_h = (vp_sz.y * 0.5) / camera.zoom.y
+			var p_diff = player.global_position - camera.global_position
+			if abs(p_diff.x) > half_w * 0.88 or abs(p_diff.y) > half_h * 0.88:
+				is_following_player = true
+				_update_camera_status_ui()
+
 		if is_following_player and player and not is_map_mode:
 			base_pos = base_pos.lerp(player.global_position, delta * 8.0)
 			
@@ -271,7 +281,7 @@ func _input(event: InputEvent) -> void:
 				var pts = touch_points.values()
 				var cur_dist = pts[0].distance_to(pts[1])
 				var factor = cur_dist / initial_touch_dist
-				target_zoom = Vector2.ONE * clampf(initial_zoom_level * factor, 0.16, 2.8)
+				target_zoom = Vector2.ONE * clampf(initial_zoom_level * factor, 0.035, 2.8)
 
 	elif event is InputEventKey and event.pressed:
 		if event.keycode == KEY_SPACE:
@@ -291,7 +301,7 @@ func zoom_out() -> void:
 
 func _zoom_at_mouse(factor: float) -> void:
 	var old_zoom = target_zoom.x
-	var new_zoom = clampf(old_zoom * factor, 0.16, 2.4)
+	var new_zoom = clampf(old_zoom * factor, 0.035, 2.8)
 	if is_equal_approx(old_zoom, new_zoom):
 		return
 		
@@ -322,10 +332,11 @@ func toggle_map_view() -> void:
 	if is_map_mode:
 		saved_player_zoom = target_zoom
 		is_following_player = false
-		target_zoom = Vector2(0.18, 0.18)
-		camera.global_position = Vector2(800.0, 180.0)
+		target_zoom = Vector2(0.048, 0.048) # 太陽系全域（7200〜12000px）を雄大に俯瞰
+		var sun_center = grid_manager.SUN_POS if grid_manager else Vector2(800.0, -850.0)
+		camera.global_position = sun_center
 		AudioSynth.play_synth("click")
-		GameState.add_log("MACRO ORBITAL MAP VIEW ACTIVATED")
+		GameState.add_log("MACRO ORBITAL MAP VIEW ACTIVATED: FULL SOLAR SYSTEM OVERVIEW")
 	else:
 		snap_camera_to_player()
 		target_zoom = saved_player_zoom
@@ -468,6 +479,7 @@ func _run_test_phase_4() -> void:
 
 func _run_test_phase_5() -> void:
 	print("TEST PHASE 5: SWARM DEPLOYMENT & MEGASTRUCTURES BUILDING")
+	active_bombers.clear() # 空爆フェーズ終了：残存爆撃機をクリーンアップ
 	GameState.add_fleet(1800)
 	GameState.megastructures["elevator"]["progress"] = 0.85
 	GameState.megastructures["dyson"]["progress"] = 0.50
@@ -493,9 +505,10 @@ func _run_test_phase_7() -> void:
 	is_map_mode = false
 	is_following_player = false
 	GameState.set_fleet_doctrine("ASSAULT")
+	var boss_pos = grid_manager.SUN_POS + Vector2(7600.0, -1200.0) if grid_manager else Vector2(8400.0, -2050.0)
 	if camera:
-		camera.global_position = Vector2(1380.0, 150.0)
-		target_zoom = Vector2(1.2, 1.2)
+		camera.global_position = boss_pos
+		target_zoom = Vector2(0.85, 0.85)
 		camera.zoom = target_zoom
 	get_tree().create_timer(0.5).timeout.connect(func():
 		_save_test_screen("docs/art/test_07_assault_boss.png")
@@ -506,6 +519,9 @@ func _run_test_phase_8() -> void:
 	print("TEST PHASE 8: CELESTIAL MINING (LUNA He3 & BLACK HOLE DARK MATTER)")
 	is_map_mode = false
 	is_following_player = false
+	if hud and hud.alert_rect:
+		hud.alert_rect.visible = false
+		hud.alert_timer = 0.0
 	# プレイヤーを月の近傍へ移動し、月への採掘レーザーを照射
 	if player and grid_manager:
 		var moon_pos = grid_manager.moon_body.get("pos", Vector2(1200, 300))
@@ -527,8 +543,8 @@ func _run_test_phase_8() -> void:
 func _run_test_phase_9() -> void:
 	print("TEST PHASE 9: BLACK HOLE GARGANTUA & SWARM HARVESTING")
 	if player and grid_manager:
-		var bh_pos = grid_manager.SUN_POS + Vector2(3800.0, -1800.0)
-		player.global_position = bh_pos + Vector2(-150.0, 40.0)
+		var bh_pos = grid_manager.SUN_POS + Vector2(14800.0, -7200.0)
+		player.global_position = bh_pos + Vector2(-220.0, 60.0)
 		player.is_mining = true
 		player.mining_target = bh_pos
 		player._detect_nearest_ore(bh_pos)
@@ -538,7 +554,7 @@ func _run_test_phase_9() -> void:
 		GameState.set_fleet_doctrine("HARVEST")
 		if camera:
 			camera.global_position = bh_pos
-			target_zoom = Vector2(0.95, 0.95)
+			target_zoom = Vector2(0.75, 0.75)
 			camera.zoom = target_zoom
 
 	get_tree().create_timer(0.6).timeout.connect(func():
@@ -581,7 +597,7 @@ func _run_test_phase_11() -> void:
 	toggle_map_view()
 	if camera:
 		camera.global_position = grid_manager.SUN_POS if grid_manager else Vector2(800, -850)
-		target_zoom = Vector2(0.22, 0.22)
+		target_zoom = Vector2(0.045, 0.045)
 		camera.zoom = target_zoom
 
 	get_tree().create_timer(0.6).timeout.connect(func():

@@ -6,19 +6,19 @@ signal turret_fired(from_pos: Vector2, target_pos: Vector2)
 
 # 1. 恒星 (太陽 Helios-Prime: 星系の不動の重力中心 ＆ 圧倒的巨大恒星)
 const SUN_POS: Vector2 = Vector2(800.0, -850.0)
-const SUN_RADIUS: float = 1100.0       # 太陽の圧倒的巨躯 (旧220pxから5倍拡大！)
-const SUN_SURFACE_G: float = 320.0     # 恒星重力
-const SUN_INFLUENCE: float = 5200.0    # 恒星重力圏
+const SUN_RADIUS: float = 1200.0       # 太陽の圧倒的巨躯 (雄大な恒星コア)
+const SUN_SURFACE_G: float = 380.0     # 恒星重力
+const SUN_INFLUENCE: float = 16000.0   # 太陽系全域に及ぶ重力圏
 
 # 2. 母星 (Origin-Prime: 太陽の周りを滑らかに公転する生命の惑星)
-const HOME_RADIUS: float = 420.0       # 母星半径 (太陽1100pxに対して適正な比率、周長約2640px)
-const HOME_SURFACE_G: float = 165.0
-const SECTOR_SIZE: float = 3200.0
+const HOME_RADIUS: float = 420.0       # 母星半径 (周長約2640px)
+const HOME_SURFACE_G: float = 175.0
+const SECTOR_SIZE: float = 4000.0
 
-var home_orbit_radius: float = 2400.0
+var home_orbit_radius: float = 7200.0  # 太陽から適度に離れたハビタブルゾーン (旧2400pxから3倍拡大！)
 var home_orbit_angle: float = PI * 0.5
-var home_orbit_speed: float = 0.012    # 公転角速度 (約8.7分で太陽を1周)
-var HOME_CENTER: Vector2 = SUN_POS + Vector2(cos(PI * 0.5), sin(PI * 0.5)) * 2400.0
+var home_orbit_speed: float = 0.006    # 公転角速度 (滑らかで壮大な公転)
+var HOME_CENTER: Vector2 = SUN_POS + Vector2(cos(PI * 0.5), sin(PI * 0.5)) * 7200.0
 var home_prev_pos: Vector2 = HOME_CENTER
 var home_delta_pos: Vector2 = Vector2.ZERO
 
@@ -30,18 +30,18 @@ var ore_veins: Array[Dictionary] = [
 	{"name": "Si", "angle_off": +0.50, "depth_r": 295.0, "color": Color(0.2, 0.95, 0.7)}
 ]
 
-# 星系内各惑星の公転パラメータ
+# 星系内各惑星の公転パラメータ (太陽系スケールへ調和配置)
 var vulcan_orbit_angle: float = -PI * 0.25
-var vulcan_orbit_radius: float = 1800.0
-var vulcan_orbit_speed: float = 0.024   # 内惑星：高速公転
+var vulcan_orbit_radius: float = 3400.0 # 灼熱の内惑星
+var vulcan_orbit_speed: float = 0.016
 
 var crystal_orbit_angle: float = PI * 0.85
-var crystal_orbit_radius: float = 3300.0
-var crystal_orbit_speed: float = 0.008  # 外惑星：低速公転
+var crystal_orbit_radius: float = 11400.0 # 極寒の外惑星
+var crystal_orbit_speed: float = 0.0035
 
 var aether_orbit_angle: float = PI * 0.15
-var aether_orbit_radius: float = 2850.0
-var aether_orbit_speed: float = 0.010
+var aether_orbit_radius: float = 8400.0
+var aether_orbit_speed: float = 0.005
 
 # 実体配置施設
 var placed_buildings: Array[Dictionary] = []
@@ -210,32 +210,32 @@ func _init_celestial_system() -> void:
 	comet_body = {
 		"id": "COMET-NEOWISE", "name": "COMET NEOWISE",
 		"focus_pos": SUN_POS,
-		"a": 2800.0,
-		"e": 0.72,
-		"tilt": 0.35,
+		"a": 7800.0,
+		"e": 0.74,
+		"tilt": 0.42,
 		"theta": 0.0,
-		"radius": 28.0,
-		"surface_g": 35.0,
-		"influence": 180.0,
+		"radius": 34.0,
+		"surface_g": 38.0,
+		"influence": 220.0,
 		"kind": "comet",
-		"pos": SUN_POS + Vector2(600.0, 450.0),
+		"pos": SUN_POS + Vector2(1800.0, 1200.0),
 		"tail_dir": Vector2(0.8, 0.6).normalized(),
 		"resource": "Ice"
 	}
 	
 	# 3. 小惑星帯 (Asteroid Belt: 太陽 Helios-Prime の周りを公転)
 	asteroid_belt.clear()
-	for i in range(22):
-		var ang = (TAU / 22.0) * float(i) + randf_range(-0.06, 0.06)
-		var rad = randf_range(2650.0, 2880.0)
-		var spd = randf_range(0.014, 0.022)
+	for i in range(28):
+		var ang = (TAU / 28.0) * float(i) + randf_range(-0.06, 0.06)
+		var rad = randf_range(8800.0, 9400.0)
+		var spd = randf_range(0.005, 0.008)
 		var ores = ["Fe", "Si", "Ti"]
 		asteroid_belt.append({
 			"id": "ASTEROID-%d" % (i + 1),
 			"orbit_angle": ang,
 			"orbit_radius": rad,
 			"orbit_speed": spd,
-			"radius": randf_range(14.0, 24.0),
+			"radius": randf_range(16.0, 28.0),
 			"pos": SUN_POS + Vector2(cos(ang), sin(ang)) * rad,
 			"kind": "asteroid",
 			"resource": ores[i % ores.size()]
@@ -249,8 +249,10 @@ func _update_celestial_simulation(delta: float) -> void:
 	home_delta_pos = HOME_CENTER - home_prev_pos
 
 	# 1. 月の物理公転 (母星の現在位置 HOME_CENTER の周りを二重公転！)
+	var moon_prev = moon_body.get("pos", HOME_CENTER)
 	moon_body["orbit_angle"] += moon_body["orbit_speed"] * delta
 	moon_body["pos"] = HOME_CENTER + Vector2(cos(moon_body["orbit_angle"]), sin(moon_body["orbit_angle"])) * moon_body["orbit_radius"]
+	var moon_delta = moon_body["pos"] - moon_prev
 	
 	# 2. 内惑星 Vulcan-IX の公転 (太陽周回)
 	vulcan_orbit_angle += vulcan_orbit_speed * delta
@@ -261,6 +263,7 @@ func _update_celestial_simulation(delta: float) -> void:
 	var crystal_pos = SUN_POS + Vector2(cos(crystal_orbit_angle), sin(crystal_orbit_angle)) * crystal_orbit_radius
 
 	# 4. 彗星のケプラー運動 (Keplerian Orbit: 太陽焦点)
+	var comet_prev = comet_body.get("pos", SUN_POS)
 	var e = comet_body["e"]
 	var a = comet_body["a"]
 	var r = a * (1.0 - e * e) / (1.0 + e * cos(comet_body["theta"]))
@@ -269,24 +272,31 @@ func _update_celestial_simulation(delta: float) -> void:
 	var comet_ang = comet_body["theta"] + comet_body["tilt"]
 	comet_body["pos"] = comet_body["focus_pos"] + Vector2(cos(comet_ang), sin(comet_ang)) * r
 	comet_body["tail_dir"] = (comet_body["pos"] - comet_body["focus_pos"]).normalized()
+	var comet_delta = comet_body["pos"] - comet_prev
 	
 	# 5. 小惑星帯の公転 (太陽周回)
 	for ast in asteroid_belt:
 		ast["orbit_angle"] += ast["orbit_speed"] * delta
 		ast["pos"] = SUN_POS + Vector2(cos(ast["orbit_angle"]), sin(ast["orbit_angle"])) * ast["orbit_radius"]
 
-	# active_planets 内の天体座標を同期
+	# active_planets 内の天体座標および公転変位ベクトル (delta_pos) を同期
 	for p in active_planets:
+		var p_prev = p.get("pos", Vector2.ZERO)
 		match p["id"]:
 			"ORIGIN-PRIME":
 				p["pos"] = HOME_CENTER
+				p["delta_pos"] = home_delta_pos
 			"LUNA-PRIME":
 				p["pos"] = moon_body["pos"]
+				p["delta_pos"] = moon_delta
 			"COMET-NEOWISE":
 				p["pos"] = comet_body["pos"]
+				p["delta_pos"] = comet_delta
 			"VULCAN-IX":
+				p["delta_pos"] = vulcan_pos - p_prev
 				p["pos"] = vulcan_pos
 			"CRYSTAL-IV":
+				p["delta_pos"] = crystal_pos - p_prev
 				p["pos"] = crystal_pos
 
 func ensure_sectors_around(world_pos: Vector2) -> void:
@@ -294,70 +304,75 @@ func ensure_sectors_around(world_pos: Vector2) -> void:
 	var cy = int(floor(world_pos.y / SECTOR_SIZE))
 	active_planets.clear()
 	
-	active_planets.append({
-		"id": "ORIGIN-PRIME",
-		"name": "ORIGIN-PRIME",
-		"pos": HOME_CENTER,
-		"radius": HOME_RADIUS,
-		"surface_g": HOME_SURFACE_G,
-		"influence": HOME_RADIUS * 4.2,
-		"kind": "home"
-	})
+	# 1. 太陽系恒久主要天体 (Persistent Major Celestial Bodies: 座標を問わず常時アクティブ)
+	var major_bodies = _get_persistent_solar_system_bodies()
+	for b in major_bodies:
+		active_planets.append(b)
 	
+	# 2. プロシージャル・ディープスペース遠方惑星セクター
 	for sy in range(cy - 2, cy + 3):
 		for sx in range(cx - 2, cx + 3):
 			var cell = Vector2i(sx, sy)
+			if cell == Vector2i(0, 0): continue # 太陽系コア領域は主要天体でカバー
 			if not generated_sectors.has(cell):
 				generated_sectors[cell] = _generate_sector_planets(cell)
 			for p in generated_sectors[cell]:
 				active_planets.append(p)
 
+func _get_persistent_solar_system_bodies() -> Array[Dictionary]:
+	var list: Array[Dictionary] = []
+	# 0. 母星 Origin-Prime
+	list.append({
+		"id": "ORIGIN-PRIME", "name": "ORIGIN-PRIME",
+		"pos": HOME_CENTER, "radius": HOME_RADIUS, "surface_g": HOME_SURFACE_G, "influence": HOME_RADIUS * 4.2,
+		"kind": "home"
+	})
+	# 1. 恒星 (Sun / Helios-Prime: 動的プラズマ恒星)
+	list.append({
+		"id": "HELIOS-PRIME", "name": "HELIOS-PRIME",
+		"pos": SUN_POS, "radius": SUN_RADIUS, "surface_g": SUN_SURFACE_G, "influence": SUN_INFLUENCE,
+		"kind": "sun", "resource": "Plasma"
+	})
+	# 2. 月 (Luna-Prime: 母星周回衛星)
+	list.append({
+		"id": "LUNA-PRIME", "name": "LUNA-PRIME",
+		"pos": moon_body.get("pos", HOME_CENTER), "radius": moon_body.get("radius", 64.0), "surface_g": moon_body.get("surface_g", 65.0), "influence": moon_body.get("influence", 280.0),
+		"kind": "moon", "resource": "He3"
+	})
+	# 3. 彗星 (Neowise-Omega: 楕円ケプラー軌道)
+	list.append({
+		"id": "COMET-NEOWISE", "name": "COMET NEOWISE",
+		"pos": comet_body.get("pos", SUN_POS), "radius": comet_body.get("radius", 34.0), "surface_g": comet_body.get("surface_g", 38.0), "influence": comet_body.get("influence", 220.0),
+		"kind": "comet", "resource": "Ice"
+	})
+	# 4. ブラックホール (Gargantua-Zero: 特異点)
+	list.append({
+		"id": "GARGANTUA-ZERO", "name": "GARGANTUA-ZERO",
+		"pos": SUN_POS + Vector2(14800.0, -7200.0), "radius": 140.0, "surface_g": 680.0, "influence": 3200.0,
+		"kind": "blackhole", "resource": "DarkMatter"
+	})
+	# 5. 中性子星 / パルサー (Pulsar-X)
+	list.append({
+		"id": "PULSAR-X", "name": "PULSAR-X",
+		"pos": SUN_POS + Vector2(-13600.0, -6400.0), "radius": 54.0, "surface_g": 360.0, "influence": 1600.0,
+		"kind": "pulsar", "resource": "Neutronium"
+	})
+	# 6. 小惑星帯 (Asteroid Belt)
+	for ast in asteroid_belt:
+		list.append({
+			"id": ast["id"], "name": ast["id"],
+			"pos": ast["pos"], "radius": ast["radius"], "surface_g": 25.0, "influence": 80.0,
+			"kind": "asteroid", "resource": ast["resource"]
+		})
+	# 7. 星系内惑星 (Vulcan-IX, Crystal-IV)
+	var v_pos = SUN_POS + Vector2(cos(vulcan_orbit_angle), sin(vulcan_orbit_angle)) * vulcan_orbit_radius
+	var c_pos = SUN_POS + Vector2(cos(crystal_orbit_angle), sin(crystal_orbit_angle)) * crystal_orbit_radius
+	list.append({"id": "VULCAN-IX", "name": "VULCAN-IX", "pos": v_pos, "radius": 160.0, "surface_g": 140.0, "influence": 450.0, "kind": "volcanic", "scale": 1.0, "resource": "Cu"})
+	list.append({"id": "CRYSTAL-IV", "name": "CRYSTAL-IV", "pos": c_pos, "radius": 130.0, "surface_g": 110.0, "influence": 400.0, "kind": "crystal", "scale": 1.0, "resource": "Si"})
+	return list
+
 func _generate_sector_planets(cell: Vector2i) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
-	if cell == Vector2i(0, 0):
-		# 1. 恒星 (Sun / Helios-Prime: 圧倒的巨躯の太陽プラズマ源)
-		list.append({
-			"id": "HELIOS-PRIME", "name": "HELIOS-PRIME",
-			"pos": SUN_POS, "radius": SUN_RADIUS, "surface_g": SUN_SURFACE_G, "influence": SUN_INFLUENCE,
-			"kind": "sun", "resource": "Plasma"
-		})
-		# 2. 月 (Luna-Prime: 母星を物理公転する衛星・ヘリウム3)
-		list.append({
-			"id": "LUNA-PRIME", "name": "LUNA-PRIME",
-			"pos": moon_body["pos"], "radius": moon_body["radius"], "surface_g": moon_body["surface_g"], "influence": moon_body["influence"],
-			"kind": "moon", "resource": "He3"
-		})
-		# 3. 彗星 (Neowise-Omega: 楕円ケプラー軌道・重水素氷)
-		list.append({
-			"id": "COMET-NEOWISE", "name": "COMET NEOWISE",
-			"pos": comet_body["pos"], "radius": comet_body["radius"], "surface_g": comet_body["surface_g"], "influence": comet_body["influence"],
-			"kind": "comet", "resource": "Ice"
-		})
-		# 4. ブラックホール (Gargantua-Zero: 超高重力特異点・暗黒物質)
-		list.append({
-			"id": "GARGANTUA-ZERO", "name": "GARGANTUA-ZERO",
-			"pos": SUN_POS + Vector2(3800.0, -1800.0), "radius": 80.0, "surface_g": 480.0, "influence": 1200.0,
-			"kind": "blackhole", "resource": "DarkMatter"
-		})
-		# 5. 中性子星 / パルサー (Pulsar-X: 高速回転極ジェット・中性子縮退物質)
-		list.append({
-			"id": "PULSAR-X", "name": "PULSAR-X",
-			"pos": SUN_POS + Vector2(-3600.0, -1400.0), "radius": 36.0, "surface_g": 220.0, "influence": 600.0,
-			"kind": "pulsar", "resource": "Neutronium"
-		})
-		# 6. 小惑星帯 (Asteroid Belt)
-		for ast in asteroid_belt:
-			list.append({
-				"id": ast["id"], "name": ast["id"],
-				"pos": ast["pos"], "radius": ast["radius"], "surface_g": 25.0, "influence": 80.0,
-				"kind": "asteroid", "resource": ast["resource"]
-			})
-		# 7. 星系内惑星 (Vulcan-IX, Crystal-IV)
-		var v_init_pos = SUN_POS + Vector2(cos(vulcan_orbit_angle), sin(vulcan_orbit_angle)) * vulcan_orbit_radius
-		var c_init_pos = SUN_POS + Vector2(cos(crystal_orbit_angle), sin(crystal_orbit_angle)) * crystal_orbit_radius
-		list.append({"id": "VULCAN-IX", "name": "VULCAN-IX", "pos": v_init_pos, "radius": 160.0, "surface_g": 140.0, "influence": 450.0, "kind": "volcanic", "scale": 1.0, "resource": "Cu"})
-		list.append({"id": "CRYSTAL-IV", "name": "CRYSTAL-IV", "pos": c_init_pos, "radius": 130.0, "surface_g": 110.0, "influence": 400.0, "kind": "crystal", "scale": 1.0, "resource": "Si"})
-		return list
 
 	var rng = RandomNumberGenerator.new()
 	rng.seed = int(abs((cell.x * 73856093) ^ (cell.y * 19349663) ^ 918273645))
@@ -377,10 +392,35 @@ func _generate_sector_planets(cell: Vector2i) -> Array[Dictionary]:
 	return list
 
 func compute_gravity_and_orbit(pos: Vector2, vel: Vector2 = Vector2.ZERO) -> Dictionary:
-	var total_acc = Vector2.ZERO
+	# 1. 最も支配的な天体 (Primary Celestial Body) の選定
 	var primary: Dictionary = active_planets[0] if not active_planets.is_empty() else {}
 	var best_weight: float = -1.0
 	
+	for p in active_planets:
+		var d_cand: Vector2 = pos - p["pos"]
+		var r_cand: float = maxf(1.0, d_cand.length())
+		var rp_cand: float = p["radius"]
+		var inf_cand: float = p["influence"]
+		if r_cand > inf_cand: continue
+		
+		var g_cand: float = p["surface_g"] * pow(rp_cand / maxf(r_cand, rp_cand), 2.0)
+		# 局所重力圏（高度2倍以内）の天体を最優先
+		var weight = g_cand * (4.0 if r_cand < rp_cand * 2.5 else 1.0)
+		if weight > best_weight:
+			best_weight = weight
+			primary = p
+
+	# 2. ヒル球（Hill Sphere / 局所重力支配圏）物理演算
+	# 主星以外の天体（母星・月・他惑星）の重力圏内にいる場合、太陽の引力は公転慣性系により相殺（等価原理）
+	var is_in_local_hill_sphere: bool = false
+	var hill_body_pos: Vector2 = Vector2.ZERO
+	if not primary.is_empty() and primary.get("kind", "") != "sun":
+		var dist_to_prim = (pos - primary["pos"]).length()
+		if dist_to_prim < primary["radius"] * 3.5:
+			is_in_local_hill_sphere = true
+			hill_body_pos = primary["pos"]
+
+	var total_acc = Vector2.ZERO
 	for p in active_planets:
 		var d: Vector2 = pos - p["pos"]
 		var r_sq: float = maxf(1.0, d.length_squared())
@@ -388,18 +428,26 @@ func compute_gravity_and_orbit(pos: Vector2, vel: Vector2 = Vector2.ZERO) -> Dic
 		var rp: float = p["radius"]
 		var inf: float = p["influence"]
 		if r > inf: continue
+		
 		var g_mag: float = 0.0
 		if r >= rp:
 			var ratio = rp / r
 			g_mag = p["surface_g"] * (ratio * ratio)
 		else:
 			g_mag = p["surface_g"] * (r / maxf(1.0, rp))
-		total_acc += (-d / r) * g_mag
+		var a_vec = (-d / r) * g_mag
 		
-		var w = g_mag * (2.5 if r < rp * 1.8 else 1.0)
-		if w > best_weight:
-			best_weight = w
-			primary = p
+		# 局所ヒル球内での太陽重力の潮汐力補正 (吸い込みの完全根絶)
+		if is_in_local_hill_sphere and p.get("kind", "") == "sun":
+			# 太陽が母星中心に及ぼす加速度
+			var d_sun_planet = hill_body_pos - p["pos"]
+			var r_sp = maxf(1.0, d_sun_planet.length())
+			var a_sun_planet = (-d_sun_planet / r_sp) * (p["surface_g"] * pow(rp / r_sp, 2.0))
+			# 正味の力は潮汐力（差分）のみ
+			var tidal_acc = a_vec - a_sun_planet
+			total_acc += tidal_acc * 0.1 # 潮汐力のみ微弱に反映
+		else:
+			total_acc += a_vec
 			
 	var d_prim = pos - primary.get("pos", HOME_CENTER)
 	var r_prim = maxf(1.0, d_prim.length())
@@ -420,9 +468,11 @@ func compute_gravity_and_orbit(pos: Vector2, vel: Vector2 = Vector2.ZERO) -> Dic
 	else:
 		state_str = "FREEFALL"
 		
+	var prim_delta = primary.get("delta_pos", Vector2.ZERO)
 	return {
 		"acc": total_acc,
 		"primary": primary,
+		"primary_delta_pos": prim_delta,
 		"v_circular": v_circular,
 		"v_escape": v_escape,
 		"altitude": r_prim - rp_prim,
@@ -468,7 +518,8 @@ func get_mining_info_at(target_p: Vector2) -> Dictionary:
 		var ppos: Vector2 = p["pos"]
 		var prad: float = p["radius"]
 		var d = target_p.distance_to(ppos)
-		if d <= prad + 120.0:
+		var harvest_reach = prad + maxf(140.0, prad * 0.38) # 太陽など超巨大天体のコロナ採掘リーチ対応
+		if d <= harvest_reach:
 			var res_type = p.get("resource", "Fe")
 			var beam_c = Color(0.0, 2.5, 3.0)
 			match res_type:
@@ -946,9 +997,9 @@ func draw_sheet_frame_rotated(tex: Texture2D, frame_idx: int, total_frames: int,
 func _draw_celestial_bodies() -> void:
 	# A. 太陽を中心とする惑星公転軌道ライン群 (Orbit Rails)
 	draw_arc(SUN_POS, vulcan_orbit_radius, 0, TAU, 96, Color(1.0, 0.45, 0.2, 0.12), 1.2)
-	draw_arc(SUN_POS, home_orbit_radius, 0, TAU, 128, Color(0.2, 0.85, 1.0, 0.16), 1.5)
-	draw_arc(SUN_POS, 2760.0, 0, TAU, 128, Color(0.35, 0.45, 0.65, 0.08), 40.0) # 小惑星帯
-	draw_arc(SUN_POS, crystal_orbit_radius, 0, TAU, 128, Color(0.2, 1.0, 0.7, 0.12), 1.2)
+	draw_arc(SUN_POS, home_orbit_radius, 0, TAU, 160, Color(0.2, 0.85, 1.0, 0.16), 1.5)
+	draw_arc(SUN_POS, 9100.0, 0, TAU, 160, Color(0.35, 0.45, 0.65, 0.12), 60.0) # 小惑星帯
+	draw_arc(SUN_POS, crystal_orbit_radius, 0, TAU, 180, Color(0.2, 1.0, 0.7, 0.12), 1.2)
 
 	# B. 月の母星周回軌道ライン
 	if not moon_body.is_empty():
@@ -964,32 +1015,104 @@ func _draw_celestial_bodies() -> void:
 
 		match pkind:
 			"sun":
-				# 1. 恒星 (Helios-Prime: 圧倒的巨躯の太陽)
-				# 巨大コロナ脈動リング (HDR Glow)
-				var c_pulse = (sin(anim_time * 2.5) * 0.5 + 0.5)
-				draw_arc(ppos, prad * 1.08 + c_pulse * 30.0, 0, TAU, 96, Color(1.0, 0.7, 0.1, 0.35), 8.0)
-				draw_arc(ppos, prad * 1.22 + c_pulse * 45.0, 0, TAU, 80, Color(1.0, 0.3, 0.1, 0.20), 12.0)
-				# 太陽核
-				draw_circle(ppos, prad, Color(1.2, 0.8, 0.2, 1.0))
-				draw_circle(ppos, prad * 0.75, Color(2.5, 2.0, 0.8, 1.0))
+				# 1. 恒星 (Helios-Prime: 圧倒的巨躯の動的プロシージャル太陽)
+				var c_pulse = (sin(anim_time * 2.2) * 0.5 + 0.5)
+				var fast_pulse = (sin(anim_time * 4.5) * 0.5 + 0.5)
+				
+				# (1) 希薄コロナ外層＆光芒レイヤー (Solar Rays & Outer Corona)
+				for ray_i in range(16):
+					var ray_ang = (TAU / 16.0) * float(ray_i) + anim_time * 0.03
+					var ray_len = prad * (1.35 + sin(ray_i * 1.7 + anim_time * 2.0) * 0.18 + c_pulse * 0.12)
+					var ray_vec = Vector2(cos(ray_ang), sin(ray_ang))
+					draw_line(ppos + ray_vec * (prad * 0.95), ppos + ray_vec * ray_len, Color(1.0, 0.45, 0.08, 0.22), 18.0)
+					draw_line(ppos + ray_vec * (prad * 0.98), ppos + ray_vec * (ray_len * 0.85), Color(1.0, 0.85, 0.25, 0.35), 6.0)
+
+				# (2) 多重コロナ脈動リング (HDR Glow Aura)
+				draw_arc(ppos, prad * 1.45 + c_pulse * 35.0, 0, TAU, 64, Color(1.0, 0.2, 0.05, 0.08), 24.0)
+				draw_arc(ppos, prad * 1.25 + c_pulse * 25.0, 0, TAU, 80, Color(1.0, 0.45, 0.1, 0.18), 16.0)
+				draw_arc(ppos, prad * 1.10 + fast_pulse * 15.0, 0, TAU, 96, Color(1.0, 0.75, 0.2, 0.35), 10.0)
+
+				# (3) 巨大プロミネンス（紅炎の磁場ループアーク）
+				for prom_i in range(5):
+					var base_a = (TAU / 5.0) * float(prom_i) + 0.35 + sin(anim_time * 0.4 + prom_i) * 0.15
+					var p_spread = 0.22 + sin(anim_time * 1.8 + prom_i * 2.0) * 0.05
+					var p_h = prad * (1.18 + sin(anim_time * 2.5 + prom_i * 1.5) * 0.14)
+					var p_start = ppos + Vector2(cos(base_a - p_spread), sin(base_a - p_spread)) * prad
+					var p_end = ppos + Vector2(cos(base_a + p_spread), sin(base_a + p_spread)) * prad
+					var p_peak = ppos + Vector2(cos(base_a), sin(base_a)) * p_h
+					
+					# 二次ベジェ近似ラインでループ紅炎を描画
+					var prev_pt = p_start
+					for b_step in range(1, 9):
+						var t_b = float(b_step) / 8.0
+						var pt = (1.0 - t_b) * (1.0 - t_b) * p_start + 2.0 * (1.0 - t_b) * t_b * p_peak + t_b * t_b * p_end
+						draw_line(prev_pt, pt, Color(1.5, 0.35, 0.05, 0.7), 4.5)
+						draw_line(prev_pt, pt, Color(2.5, 1.2, 0.3, 0.85), 1.8)
+						prev_pt = pt
+
+				# (4) 太陽風パーティクル (流れる光子プラズマ流)
+				for sw_i in range(14):
+					var sw_seed = float(sw_i * 97)
+					var sw_phase = fmod(anim_time * 0.8 + sw_seed * 0.13, 1.0)
+					var sw_a = sw_seed * 0.37
+					var sw_r = prad * (1.05 + sw_phase * 1.6)
+					var sw_pos = ppos + Vector2(cos(sw_a), sin(sw_a)) * sw_r
+					var sw_alpha = (1.0 - sw_phase) * 0.65
+					draw_circle(sw_pos, 3.5 * (1.0 - sw_phase * 0.5), Color(1.2, 0.85, 0.3, sw_alpha))
+
+				# (5) 太陽光球・核融合コア (Photosphere & Superheated Core)
+				draw_circle(ppos, prad, Color(1.1, 0.55, 0.12, 1.0))
+				draw_circle(ppos, prad * 0.90, Color(1.5, 0.85, 0.25, 1.0))
+				draw_circle(ppos, prad * 0.70, Color(2.2, 1.6, 0.6, 1.0))
+				draw_circle(ppos, prad * 0.42, Color(3.5, 3.0, 1.5, 1.0)) # 白熱する特異核
+
+				# (6) テクスチャブレンド（対流プラズマテクスチャの回転）
 				if tex_celestial_sun:
-					var sz = Vector2(prad * 2.4, prad * 2.4)
-					draw_set_transform(ppos, anim_time * 0.04, Vector2.ONE)
+					var sz = Vector2(prad * 2.2, prad * 2.2)
+					draw_set_transform(ppos, anim_time * 0.02, Vector2.ONE)
 					draw_texture_rect(tex_celestial_sun, Rect2(-sz * 0.5, sz), false)
+					draw_set_transform(ppos, -anim_time * 0.015 + 1.2, Vector2.ONE) # 逆回転ブレンド
+					draw_texture_rect(tex_celestial_sun, Rect2(-sz * 0.45, sz * 0.9), false)
 					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-				draw_string(ThemeDB.fallback_font, ppos + Vector2(-60, prad + 45), "HELIOS-PRIME [Plasma]", HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1.0, 0.85, 0.3))
+
+				# (7) 動的太陽黒点 (Sunspots)
+				for spot_i in range(3):
+					var spot_a = anim_time * 0.02 + float(spot_i) * 1.8
+					var spot_r = prad * (0.35 + float(spot_i) * 0.2)
+					var spot_pos = ppos + Vector2(cos(spot_a), sin(spot_a) * 0.45) * spot_r
+					draw_circle(spot_pos, 18.0 + float(spot_i) * 8.0, Color(0.35, 0.12, 0.02, 0.75))
+					draw_circle(spot_pos, 10.0 + float(spot_i) * 4.0, Color(0.12, 0.04, 0.01, 0.9))
+
+				# 恒星情報ラベル
+				draw_string(ThemeDB.fallback_font, ppos + Vector2(-90, prad + 50), "HELIOS-PRIME [Extreme Plasma / T: 5800K]", HORIZONTAL_ALIGNMENT_CENTER, -1, 15, Color(1.0, 0.85, 0.3))
 
 			"blackhole":
-				# 2. ブラックホール (Gargantua-Zero)
-				draw_arc(ppos, prad * 1.8, 0, TAU, 48, Color(0.0, 2.0, 3.0, 0.35), 2.0)
-				# 重力歪みアーク
-				draw_arc(ppos, prad * 2.8, 0, TAU, 48, Color(0.8, 0.2, 1.0, 0.15), 1.0)
+				# 2. ブラックホール (Gargantua-Zero: 相対論的降着円盤 ＆ 事象の地平面)
+				var spin = anim_time * 1.8
+				
+				# (1) アインシュタインリング (重力レンズ光輪)
+				draw_arc(ppos, prad * 3.2, 0, TAU, 64, Color(0.85, 0.35, 1.0, 0.18), 1.5)
+				draw_arc(ppos, prad * 2.4, 0, TAU, 64, Color(0.2, 1.8, 3.0, 0.28), 2.5)
+				
+				# (2) 超高速回転アクレッションディスク (Accretion Disk)
+				for ad_i in range(8):
+					var ad_r = prad * (1.15 + float(ad_i) * 0.18)
+					var ad_alpha = 0.55 - float(ad_i) * 0.05
+					var ad_col = Color(0.1 + float(ad_i) * 0.1, 0.8 - float(ad_i) * 0.08, 1.5, ad_alpha)
+					draw_arc(ppos, ad_r, spin * 0.8 + float(ad_i) * 0.4, spin * 0.8 + float(ad_i) * 0.4 + PI * 1.4, 40, ad_col, 3.0)
+
+				# (3) テクスチャブレンド
 				if tex_celestial_blackhole:
 					var sz = Vector2(prad * 2.8, prad * 2.8)
 					draw_set_transform(ppos, anim_time * 0.6, Vector2.ONE)
 					draw_texture_rect(tex_celestial_blackhole, Rect2(-sz * 0.5, sz), false)
 					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-				draw_string(ThemeDB.fallback_font, ppos + Vector2(-45, prad + 24), "SINGULARITY [DarkMatter]", HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.8, 0.4, 1.0))
+					
+				# (4) 完全漆黒の事象の地平面 (Event Horizon: 光すら脱出不能な絶対ブラック)
+				draw_circle(ppos, prad * 0.95, Color(0.0, 0.0, 0.0, 1.0))
+				draw_arc(ppos, prad * 0.96, 0, TAU, 48, Color(0.0, 2.5, 3.0, 0.8), 1.5)
+				
+				draw_string(ThemeDB.fallback_font, ppos + Vector2(-65, prad + 28), "GARGANTUA [DarkMatter / Singularity]", HORIZONTAL_ALIGNMENT_CENTER, -1, 11, Color(0.85, 0.45, 1.0))
 
 			"pulsar":
 				# 3. 中性子星 / パルサー (Pulsar-X)
@@ -1006,11 +1129,24 @@ func _draw_celestial_bodies() -> void:
 				draw_string(ThemeDB.fallback_font, ppos + Vector2(-36, prad + 20), "PULSAR [Neutronium]", HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.2, 1.0, 0.8))
 
 			"comet":
-				# 4. 彗星 (Neowise-Omega)
+				# 4. 彗星 (Neowise-Omega: 太陽放射圧による真の反太陽二重尾)
 				var tail_d = comet_body.get("tail_dir", Vector2(1, 0))
-				# イオン＆ダストの尾
-				draw_line(ppos, ppos + tail_d * 140.0, Color(0.2, 0.8, 1.0, 0.6), 8.0)
-				draw_line(ppos, ppos + tail_d * 140.0, Color(1.0, 1.0, 1.0, 0.8), 2.0)
+				var dist_sun = ppos.distance_to(SUN_POS)
+				var heat_boost = clampf(9000.0 / maxf(1200.0, dist_sun), 1.0, 3.8)
+				var tail_len = 160.0 * heat_boost
+				
+				# (1) イオンの尾 (Ion Tail: 反太陽方向へ直線的に伸びる超高温青色プラズマ)
+				draw_line(ppos, ppos + tail_d * tail_len, Color(0.1, 1.8, 2.5, 0.45 * heat_boost), 12.0)
+				draw_line(ppos, ppos + tail_d * tail_len, Color(1.0, 2.5, 3.0, 0.85), 3.0)
+				
+				# (2) ダストの尾 (Dust Tail: 軌道慣性で微小にカーブする白色ダスト流)
+				var curved_d = (tail_d + Vector2(-tail_d.y, tail_d.x) * 0.18).normalized()
+				draw_line(ppos, ppos + curved_d * (tail_len * 0.82), Color(1.0, 0.95, 0.7, 0.35 * heat_boost), 8.0)
+				
+				# (3) 彗星コマ (Coma: 昇華するシアン・エメラルドガス球)
+				draw_circle(ppos, prad * 1.6, Color(0.0, 2.0, 1.8, 0.35))
+				draw_circle(ppos, prad * 0.9, Color(1.5, 2.5, 2.8, 0.85))
+
 				if tex_celestial_comet:
 					var rot = atan2(tail_d.y, tail_d.x) + PI
 					var sz = Vector2(prad * 3.2, prad * 1.6)
@@ -1063,14 +1199,35 @@ func _draw() -> void:
 	# 1. 宇宙天体・軌道・惑星物理描画 (恒星・月・彗星・ブラックホール・パルサー・小惑星帯)
 	_draw_celestial_bodies()
 
-	# 2. 母星円形断面 (半径420pxに完全一致 ＆ 美麗大気圏グロー)
+	# 2. 母星円形断面 (半径420pxに完全一致 ＆ 太陽光デイ・ナイト大気圏グロー)
+	var sun_to_home_dir = (SUN_POS - HOME_CENTER).normalized()
+	var sun_angle = atan2(sun_to_home_dir.y, sun_to_home_dir.x)
+	
+	# (1) 基礎大気圏グロー
 	draw_arc(HOME_CENTER, HOME_RADIUS + 6.0, 0, TAU, 96, Color(0.2, 0.75, 1.0, 0.45), 3.0)
-	draw_arc(HOME_CENTER, HOME_RADIUS + 16.0, 0, TAU, 80, Color(0.0, 1.5, 2.5, 0.20), 8.0)
+	draw_arc(HOME_CENTER, HOME_RADIUS + 18.0, 0, TAU, 80, Color(0.0, 1.2, 2.2, 0.15), 10.0)
+	
+	# (2) 太陽光・昼半球大気散乱リム (Daylight Atmospheric Scatter)
+	# 太陽を向いている側の半周アークに強烈な昼光グローを描画
+	draw_arc(HOME_CENTER, HOME_RADIUS + 8.0, sun_angle - PI * 0.45, sun_angle + PI * 0.45, 48, Color(1.2, 1.0, 0.6, 0.65), 5.0)
+	draw_arc(HOME_CENTER, HOME_RADIUS + 22.0, sun_angle - PI * 0.35, sun_angle + PI * 0.35, 40, Color(1.0, 0.8, 0.3, 0.35), 12.0)
+	
+	# (3) 母星本体の描画
 	if tex_home_cross:
 		var d_sz = Vector2(HOME_RADIUS * 2.0, HOME_RADIUS * 2.0)
 		draw_texture_rect(tex_home_cross, Rect2(HOME_CENTER - d_sz * 0.5, d_sz), false)
 	else:
 		draw_circle(HOME_CENTER, HOME_RADIUS, Color(0.08, 0.16, 0.28))
+		
+	# (4) 夜半球の惑星シャドウ (Night Shadow Hemispheric Occlusion)
+	var night_angle = sun_angle + PI
+	# 反太陽側の夜半球に柔らかな漆黒の影をオーバーレイ
+	var shadow_pts: PackedVector2Array = []
+	shadow_pts.append(HOME_CENTER)
+	for s_i in range(25):
+		var s_a = night_angle - PI * 0.5 + (PI / 24.0) * float(s_i)
+		shadow_pts.append(HOME_CENTER + Vector2(cos(s_a), sin(s_a)) * (HOME_RADIUS + 2.0))
+	draw_colored_polygon(shadow_pts, Color(0.01, 0.02, 0.05, 0.42))
 
 	# 3. 地下鉱脈
 	for vein in ore_veins:
@@ -1195,11 +1352,11 @@ func get_current_mission_waypoint_info() -> Dictionary:
 			b_col = Color(1.5, 1.0, 0.2, 0.9)
 			name_tag = "HELIOS"
 		"GARGANTUA-ZERO":
-			beacon_p = Vector2(2300.0, -350.0)
+			beacon_p = SUN_POS + Vector2(14800.0, -7200.0)
 			b_col = Color(1.2, 0.4, 2.5, 0.9)
 			name_tag = "SINGULARITY"
 		"boss":
-			beacon_p = Vector2(1380.0, 150.0)
+			beacon_p = SUN_POS + Vector2(7600.0, -1200.0)
 			b_col = Color(2.5, 0.3, 0.3, 0.9)
 			name_tag = "BOSS CITADEL"
 			
@@ -1220,31 +1377,33 @@ func _draw_mission_waypoint_beacon() -> void:
 	draw_line(beacon_p - Vector2(0, 10), beacon_p + Vector2(0, 10), b_col, 1.5)
 
 func _draw_megastructures() -> void:
+	# 5. メガストラクチャー (動的公転座標系完全追従)
 	var ms_elev = GameState.megastructures["elevator"]
 	if ms_elev["built"] or ms_elev["progress"] > 0.0:
-		var elev_pos = Vector2(800.0, 310.0)
 		var ground_pos = surface_pos_at(0.0, 10.0)
+		var elev_pos = surface_pos_at(0.0, 360.0) # 母星真上360pxの静止軌道ターミナル
 		var cur_reach = ground_pos.lerp(elev_pos, ms_elev["progress"])
 		draw_line(ground_pos, cur_reach, Color(0.0, 2.0, 2.8, 0.9), 3.0)
 		draw_line(ground_pos, cur_reach, Color(2.5, 2.5, 2.5, 1.0), 1.0)
 		if tex_ms_elevator:
-			draw_texture(tex_ms_elevator, elev_pos - Vector2(48, 80), Color(1, 1, 1, 0.5 + 0.5 * ms_elev["progress"]))
+			draw_texture(tex_ms_elevator, cur_reach - Vector2(48, 80), Color(1, 1, 1, 0.5 + 0.5 * ms_elev["progress"]))
 
 	var ms_dyson = GameState.megastructures["dyson"]
 	if ms_dyson["built"] or ms_dyson["progress"] > 0.0:
-		var dyson_pos = Vector2(520.0, 90.0)
+		var dyson_pos = SUN_POS + Vector2(0, -SUN_RADIUS - 200.0)
+		draw_arc(SUN_POS, SUN_RADIUS + 200.0, -PI * 0.4, PI * 0.4, 64, Color(0.2, 1.2, 2.5, 0.4 * ms_dyson["progress"]), 4.0)
 		if tex_ms_dyson:
 			draw_texture(tex_ms_dyson, dyson_pos - Vector2(90, 55), Color(1, 1, 1, 0.5 + 0.5 * ms_dyson["progress"]))
 
 	var ms_cit = GameState.megastructures["citadel"]
 	if ms_cit["built"] or ms_cit["progress"] > 0.0:
-		var cit_pos = Vector2(1060.0, 240.0)
+		var cit_pos = surface_pos_at(PI * 0.35, 480.0)
 		if tex_ms_citadel:
 			draw_texture(tex_ms_citadel, cit_pos - Vector2(64, 64), Color(1, 1, 1, 0.5 + 0.5 * ms_cit["progress"]))
 
 	var ms_wg = GameState.megastructures["warpgate"]
 	if ms_wg["built"] or ms_wg["progress"] > 0.0:
-		var wg_pos = Vector2(1480.0, 80.0)
+		var wg_pos = SUN_POS + Vector2(9800.0, 3200.0)
 		if tex_ms_warpgate:
 			draw_texture(tex_ms_warpgate, wg_pos - Vector2(65, 65), Color(1, 1, 1, 0.5 + 0.5 * ms_wg["progress"]))
 

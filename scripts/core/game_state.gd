@@ -30,12 +30,21 @@ var resources = {
 	"Neutronium": 0  # 中性子星(Pulsar): 中性子縮退物質
 }
 
-# 鉱脈の有限埋蔵量
+# 鉱脈の有限埋蔵量 (母星地下)
 var vein_reserves = {
 	"Fe": 15000,
 	"Cu": 9500,
 	"Ti": 6000,
 	"Si": 8000
+}
+
+# 宇宙天体の有限資源埋蔵量
+var celestial_reserves: Dictionary = {
+	"LUNA-PRIME": 6000,
+	"COMET-NEOWISE": 4500,
+	"GARGANTUA-ZERO": 5000,
+	"PULSAR-X": 3000,
+	"HELIOS-PRIME": 999999 # 恒星プラズマ
 }
 
 # 2. 中間素材＆アイテムインベントリ
@@ -311,6 +320,16 @@ func add_resource(type: String, amount: int) -> void:
 		# ストーリーフェーズ自動進行: 40 Fe 到達でドローン造形開放
 		if story_phase == StoryPhase.MINE and resources.get("Fe", 0) >= 40:
 			set_story_phase(StoryPhase.DRONE)
+
+func mine_celestial_resource(body_id: String, res_type: String, amount: int) -> int:
+	var cur = celestial_reserves.get(body_id, 2500)
+	if cur <= 0:
+		add_log("CELESTIAL VEIN DEPLETED: %s HAS NO REMAINING %s" % [body_id, res_type])
+		return 0
+	var mined = mini(cur, amount)
+	celestial_reserves[body_id] = cur - mined
+	add_resource(res_type, mined)
+	return mined
 
 func consume_resource(type: String, amount: int) -> bool:
 	if resources.has(type) and resources[type] >= amount:

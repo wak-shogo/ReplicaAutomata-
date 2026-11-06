@@ -16,8 +16,8 @@ var hostile_positions: PackedVector2Array = []
 var hostile_velocities: PackedVector2Array = []
 var hostile_active_count: int = 800
 
-# 敵要塞コア＆巡洋艦
-var boss_core_pos: Vector2 = Vector2(1380.0, 150.0) # CRYSTAL-IV 周辺
+# 敵要塞コア＆巡洋艦 (太陽系外縁深宇宙セクター)
+var boss_core_pos: Vector2 = Vector2(8400.0, -2050.0)
 var tex_boss_core: Texture2D
 var tex_boss_cruiser: Texture2D
 
@@ -281,16 +281,17 @@ func update_combat_and_doctrines(delta: float) -> void:
 						"timer": 0.3
 					})
 					
-	# 2. メガストラクチャー建造レーザー演出
+	# 2. メガストラクチャー建造レーザー演出 (動的公転座標同期)
 	var is_building_mega = (GameState.active_megastructure_project != "")
 	if is_building_mega and friendly_active_count > 0:
-		var mega_pos = Vector2(800.0, 310.0)
+		var grid_m = get_parent().get_node_or_null("GridManager")
+		var mega_pos = grid_m.surface_pos_at(0.0, 360.0) if grid_m else Vector2(800.0, 310.0)
 		if GameState.active_megastructure_project == "dyson":
-			mega_pos = Vector2(520.0, 90.0)
+			mega_pos = (grid_m.SUN_POS + Vector2(0, -grid_m.SUN_RADIUS - 200.0)) if grid_m else Vector2(520.0, 90.0)
 		elif GameState.active_megastructure_project == "citadel":
-			mega_pos = Vector2(1060.0, 240.0)
+			mega_pos = grid_m.surface_pos_at(PI * 0.35, 480.0) if grid_m else Vector2(1060.0, 240.0)
 		elif GameState.active_megastructure_project == "warpgate":
-			mega_pos = Vector2(1480.0, 80.0)
+			mega_pos = (grid_m.SUN_POS + Vector2(9800.0, 3200.0)) if grid_m else Vector2(1480.0, 80.0)
 			
 		for k in range(3):
 			var f_idx = randi() % friendly_active_count
