@@ -697,11 +697,14 @@ func build_minimal_ui() -> void:
 	sb_mine.set_corner_radius_all(44)
 
 	btn_touch_mine = Button.new()
-	btn_touch_mine.text = "MINE"
+	btn_touch_mine.text = "⚡\nMINE"
 	btn_touch_mine.position = Vector2(92, 100)
 	btn_touch_mine.custom_minimum_size = Vector2(88, 88)
 	btn_touch_mine.add_theme_stylebox_override("normal", sb_mine)
-	btn_touch_mine.add_theme_font_size_override("font_size", 16)
+	btn_touch_mine.add_theme_stylebox_override("pressed", sb_mine)
+	btn_touch_mine.add_theme_stylebox_override("hover", sb_mine)
+	btn_touch_mine.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn_touch_mine.add_theme_font_size_override("font_size", 14)
 	btn_touch_mine.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
 	btn_touch_mine.button_down.connect(func(): if player_node: player_node.touch_mining_active = true)
 	btn_touch_mine.button_up.connect(func(): if player_node: player_node.touch_mining_active = false)
@@ -716,11 +719,14 @@ func build_minimal_ui() -> void:
 	sb_brake.set_corner_radius_all(32)
 
 	btn_touch_brake = Button.new()
-	btn_touch_brake.text = "BRAKE"
+	btn_touch_brake.text = "🛑\nSTOP"
 	btn_touch_brake.position = Vector2(104, 26)
 	btn_touch_brake.custom_minimum_size = Vector2(64, 64)
 	btn_touch_brake.add_theme_stylebox_override("normal", sb_brake)
-	btn_touch_brake.add_theme_font_size_override("font_size", 12)
+	btn_touch_brake.add_theme_stylebox_override("pressed", sb_brake)
+	btn_touch_brake.add_theme_stylebox_override("hover", sb_brake)
+	btn_touch_brake.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn_touch_brake.add_theme_font_size_override("font_size", 11)
 	btn_touch_brake.add_theme_color_override("font_color", Color(2.5, 0.7, 0.7))
 	btn_touch_brake.button_down.connect(func(): if player_node: player_node.touch_braking_active = true)
 	btn_touch_brake.button_up.connect(func(): if player_node: player_node.touch_braking_active = false)
@@ -735,17 +741,20 @@ func build_minimal_ui() -> void:
 	sb_bld.set_corner_radius_all(34)
 
 	btn_touch_build = Button.new()
-	btn_touch_build.text = "BUILD"
+	btn_touch_build.text = "🛠\nBUILD"
 	btn_touch_build.position = Vector2(12, 112)
 	btn_touch_build.custom_minimum_size = Vector2(68, 68)
 	btn_touch_build.add_theme_stylebox_override("normal", sb_bld)
-	btn_touch_build.add_theme_font_size_override("font_size", 13)
+	btn_touch_build.add_theme_stylebox_override("pressed", sb_bld)
+	btn_touch_build.add_theme_stylebox_override("hover", sb_bld)
+	btn_touch_build.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn_touch_build.add_theme_font_size_override("font_size", 12)
 	btn_touch_build.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 	btn_touch_build.pressed.connect(toggle_build_mode)
 	_apply_touch_button_anim(btn_touch_build)
 	action_cluster.add_child(btn_touch_build)
 
-	# [DRONE] ドローン合体ボタン (小・BUILDの上)
+	# [DRONE] ドローン自己複製ボタン (小・BUILDの上)
 	var sb_drn = StyleBoxFlat.new()
 	sb_drn.bg_color = Color(0.03, 0.14, 0.1, 0.9)
 	sb_drn.border_color = Color(0.2, 2.0, 0.7, 0.8)
@@ -753,10 +762,13 @@ func build_minimal_ui() -> void:
 	sb_drn.set_corner_radius_all(30)
 
 	btn_touch_drone = Button.new()
-	btn_touch_drone.text = "DRONE"
+	btn_touch_drone.text = "✦\n増殖"
 	btn_touch_drone.position = Vector2(22, 38)
 	btn_touch_drone.custom_minimum_size = Vector2(60, 60)
 	btn_touch_drone.add_theme_stylebox_override("normal", sb_drn)
+	btn_touch_drone.add_theme_stylebox_override("pressed", sb_drn)
+	btn_touch_drone.add_theme_stylebox_override("hover", sb_drn)
+	btn_touch_drone.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	btn_touch_drone.add_theme_font_size_override("font_size", 11)
 	btn_touch_drone.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
 	btn_touch_drone.pressed.connect(func():
@@ -1669,19 +1681,19 @@ func _update_objective_text() -> void:
 			return
 		GameState.StoryPhase.MINE:
 			var cur_fe = GameState.resources.get("Fe", 0)
-			objective_label.text = "[ STEP 2: [MINE]ボタンを押して鉄鉱石を自力採掘 (Fe: %d / 40) ]" % mini(40, cur_fe)
+			objective_label.text = "[ STEP 2: [⚡MINE] ボタンを長押しして鉄鉱石を自力採掘 (Fe: %d / 40) ]" % mini(40, cur_fe)
 			objective_label.add_theme_color_override("font_color", Color(0.3, 2.2, 2.8))
 			return
 		GameState.StoryPhase.DRONE:
-			objective_label.text = "[ STEP 3: [DRONE]ボタンを押して最初のサブユニットを自己複製 (40 Fe) ]"
+			objective_label.text = "[ STEP 3: 右下の緑色 [✦増殖] ボタンをタップしてサブドローンを自己複製！ (Fe 40) ]"
 			objective_label.add_theme_color_override("font_color", Color(0.2, 2.5, 1.0))
 			return
 		GameState.StoryPhase.BUILD_MINER:
-			objective_label.text = "[ STEP 4: [BUILD]を押して設備カタログから自動ドリルを選択・造形 ]"
+			objective_label.text = "[ STEP 4: [🛠BUILD] ボタンでカタログを開き、ドリルを選択・青い施設をタップ！ ]"
 			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 			return
 		GameState.StoryPhase.FACTORY:
-			objective_label.text = "[ STEP 5: コンベアと製錬炉を建造して完全自動化ラインを確立 ]"
+			objective_label.text = "[ STEP 5: [🛠BUILD] からコンベアと製錬炉を選び、青いバーチャル施設をタップして自動化！ ]"
 			objective_label.add_theme_color_override("font_color", Color(1.0, 2.0, 0.4))
 			return
 		GameState.StoryPhase.SPACE:
