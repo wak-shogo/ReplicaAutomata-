@@ -251,6 +251,9 @@ func _input(event: InputEvent) -> void:
 		elif event.keycode == KEY_8: _select_tool_by_id("solar")
 		elif event.keycode == KEY_9: _select_tool_by_id("geothermal")
 		elif event.keycode == KEY_0: _select_tool_by_id("demolish")
+		elif event.keycode == KEY_R:
+			if GameState.attach_drone():
+				AudioSynth.play_synth("build")
 
 func toggle_build_mode() -> void:
 	if not grid_manager: return

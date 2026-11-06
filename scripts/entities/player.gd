@@ -144,15 +144,16 @@ func _physics_process(delta: float) -> void:
 		# 大気圏・低空探査領域判定（高度 350px 未満）
 		var in_atmosphere: bool = (alt < 350.0)
 		
+		var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_key_pressed(KEY_SPACE) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
+		
 		if not in_atmosphere:
 			# 深宇宙空間（高度 350px 以上）：完全な等速直線運動（無抵抗慣性）＆万有引力軌道運動 + スラスター推力 + 手動ブレーキ
-			var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
 			is_inertial_braking = is_brake_key
 			thrusting_dir = input_vec.normalized()
 			
 			if is_inertial_braking:
-				# 手動操作による緊急アクティブ逆噴射ブレーキ (Shift / C / Joypad B / スマホブレーキ)
-				velocity = velocity.move_toward(Vector2.ZERO, 480.0 * delta)
+				# 手動操作による緊急アクティブ逆噴射ブレーキ (Shift / Space / C / Joypad B / スマホブレーキ)
+				velocity = velocity.move_toward(Vector2.ZERO, 540.0 * delta)
 				velocity += g_acc * delta
 			elif input_vec.length_squared() > 0.01:
 				var cur_thrust = thrust_accel + float(GameState.attached_drones) * 35.0
@@ -162,10 +163,12 @@ func _physics_process(delta: float) -> void:
 				velocity += g_acc * delta
 		else:
 			# 大気圏・地表低空領域：強力オートスタビライザー（指を離せばピタッと静止して通り過ぎない）
-			is_inertial_braking = false
+			is_inertial_braking = is_brake_key
 			thrusting_dir = input_vec.normalized()
 			
-			if input_vec.length_squared() > 0.01:
+			if is_brake_key:
+				velocity = velocity.move_toward(Vector2.ZERO, 950.0 * delta)
+			elif input_vec.length_squared() > 0.01:
 				var analog_mag = clampf(input_vec.length(), 0.0, 1.0)
 				var eased_mag = pow(analog_mag, 1.6) # 微小入力でのミリ単位精密微調整イージング
 				velocity = velocity.lerp(input_vec.normalized() * (target_cruise_speed * eased_mag), delta * 12.0)
