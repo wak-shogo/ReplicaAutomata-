@@ -1588,15 +1588,17 @@ func _draw() -> void:
 		# (3) 地表露頭マーカー (Surface Outcrop Marker)
 		draw_circle(surf_p, 5.0, v_col)
 		draw_arc(surf_p, 9.0 + pulse * 3.0, 0, TAU, 16, v_col * Color(1.5, 1.5, 1.5, 0.8), 1.5)
+		draw_string(ThemeDB.fallback_font, surf_p + radial * 14.0 - Vector2(25, 0), "[ %s ]" % vname, HORIZONTAL_ALIGNMENT_CENTER, 50, 9, v_col * Color(1.5, 1.5, 1.5))
 		
-		# (4) 初回手動採掘ガイダンスビーコン (MINEフェーズ時のFe鉱脈ターゲット)
-		if GameState.story_phase == GameState.StoryPhase.MINE and vname == "Fe":
+		# (4) 初回手動採掘ガイダンスビーコン (MOVE / MINEフェーズ時のFe鉱脈ターゲット)
+		if (GameState.story_phase == GameState.StoryPhase.MOVE or GameState.story_phase == GameState.StoryPhase.MINE) and vname == "Fe":
 			var guide_pulse = (sin(anim_time * 8.0) * 0.5 + 0.5)
-			var beacon_surf = HOME_CENTER + radial * (HOME_RADIUS + 28.0)
+			var beacon_surf = HOME_CENTER + radial * (HOME_RADIUS + 32.0)
 			var beacon_tip = HOME_CENTER + radial * (HOME_RADIUS + 8.0)
 			draw_line(beacon_surf, beacon_tip, Color(0.2, 2.5, 3.0, 0.95), 3.5)
 			draw_arc(beacon_surf, 16.0 + guide_pulse * 6.0, 0, TAU, 24, Color(0.0, 2.8, 3.5, 0.85), 2.0)
-			draw_string(ThemeDB.fallback_font, beacon_surf + Vector2(-45, -18), "[ HOLD MINE ]", HORIZONTAL_ALIGNMENT_CENTER, -1, 12, Color(0.2, 2.8, 3.5))
+			var guide_tag = "[ HOLD MINE ]" if GameState.story_phase == GameState.StoryPhase.MINE else "[ ▼ 鉄鉱脈 (Fe) ]"
+			draw_string(ThemeDB.fallback_font, beacon_surf + Vector2(-60, -18), guide_tag, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color(0.2, 2.8, 3.5))
 
 	# 4. 配置済み実体施設
 	var drill_frame = int(anim_time * 12.0) % 4

@@ -812,6 +812,22 @@ func _draw() -> void:
 		draw_line(Vector2.ZERO, local_target, Color(2.5, 2.5, 2.5, 1.0), 1.2)
 		draw_circle(local_target, 7.0, beam_col)
 		
+		# 採掘着弾点のスパーク閃光
+		var spark_pulse = sin(anim_time * 24.0) * 0.5 + 0.5
+		draw_circle(local_target, 5.0 + spark_pulse * 4.0, Color(2.5, 2.5, 2.5, 0.95))
+		draw_arc(local_target, 11.0 + spark_pulse * 6.0, 0, TAU, 16, beam_col * Color(1.5, 1.5, 1.5), 1.5)
+		
+		# 採掘地点から自機へ吸い込まれる鉱石吸引ストリーム (Ore Suction Stream)
+		var suction_count = 5
+		for k in range(suction_count):
+			var flow_t = fmod(anim_time * 2.4 + float(k) / float(suction_count), 1.0)
+			var stream_pos = local_target.lerp(Vector2.ZERO, flow_t)
+			var perp = Vector2(-local_target.y, local_target.x).normalized()
+			var wobble = sin(anim_time * 14.0 + float(k) * 2.0) * (1.0 - flow_t) * 8.0
+			var p_pt = stream_pos + perp * wobble
+			var p_alpha = sin(flow_t * PI)
+			draw_circle(p_pt, 2.6 * (1.0 - flow_t * 0.4), beam_col * Color(1.8, 1.8, 2.0, p_alpha * 0.9))
+		
 		# ドローンからのマルチ支援ビーム (採掘効率アップが視覚的に実感できる)
 		if drones > 0:
 			var step = TAU / float(drones)
