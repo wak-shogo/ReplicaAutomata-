@@ -145,6 +145,23 @@ func play_synth(type: String) -> void:
 			"celestial_depleted": # 天体埋蔵量枯渇ワーニング
 				var freq = 330.0 if fmod(t, 0.08) < 0.04 else 220.0
 				val = (0.4 if sin(t * freq * TAU) > 0.0 else -0.4) * (1.0 - t / duration)
+			"craft": # 設備建造確定チャープ音
+				var freq = 480.0 + (t / duration) * 440.0
+				val = (sin(t * freq * TAU) + sin(t * freq * 2.0 * TAU) * 0.4) * (1.0 - t / duration)
+			"alert": # 警告アラート
+				var freq = 740.0 if fmod(t, 0.08) < 0.04 else 490.0
+				val = (0.5 if sin(t * freq * TAU) > 0.0 else -0.5) * (1.0 - t / duration)
+			"error": # 資源不足エラーブザー
+				var freq = 130.0
+				val = (sin(t * freq * TAU) + (randf() * 2.0 - 1.0) * 0.3) * (1.0 - t / duration)
+			"select": # カタログ選択音
+				var freq = 1400.0
+				val = sin(t * freq * TAU) * exp(-t * 30.0) * 0.45
+			"replicate": # 自己複製ドローン合体アルペジオ和音
+				var step = clampi(int((t / duration) * 4.0), 0, 3)
+				var freqs = [523.25, 659.25, 783.99, 1046.50]
+				var f_cur = freqs[step]
+				val = (sin(t * f_cur * TAU) + sin(t * f_cur * 1.5 * TAU) * 0.3) * (1.0 - t / duration) * 0.75
 			_:
 				val = sin(t * 440.0 * TAU) * 0.5
 		

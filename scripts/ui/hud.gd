@@ -251,9 +251,6 @@ func _input(event: InputEvent) -> void:
 		elif event.keycode == KEY_8: _select_tool_by_id("solar")
 		elif event.keycode == KEY_9: _select_tool_by_id("geothermal")
 		elif event.keycode == KEY_0: _select_tool_by_id("demolish")
-		elif event.keycode == KEY_R:
-			if GameState.attach_drone():
-				AudioSynth.play_synth("build")
 
 func toggle_build_mode() -> void:
 	if not grid_manager: return
@@ -782,7 +779,12 @@ func build_minimal_ui() -> void:
 	btn_touch_drone.add_theme_font_size_override("font_size", 10)
 	btn_touch_drone.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
 	btn_touch_drone.pressed.connect(func():
-		if GameState.attach_drone(): AudioSynth.play_synth("build")
+		if GameState.attach_drone():
+			AudioSynth.play_synth("replicate")
+		else:
+			AudioSynth.play_synth("error")
+			var need_str = "40 Fe" if GameState.attached_drones == 0 else "30 Fe + 15 Si"
+			show_missing_res_alert(need_str)
 	)
 	_apply_touch_button_anim(btn_touch_drone)
 	action_cluster.add_child(btn_touch_drone)

@@ -592,7 +592,13 @@ func _input(event: InputEvent) -> void:
 			JOY_BUTTON_X:
 				# Xボタン: 小型ドローン合体 (Bキー)
 				if GameState.attach_drone():
-					AudioSynth.play_synth("build")
+					AudioSynth.play_synth("replicate")
+				else:
+					AudioSynth.play_synth("error")
+					var hud = get_parent().get_node_or_null("HUD")
+					if hud and hud.has_method("show_missing_res_alert"):
+						var need_str = "40 Fe" if GameState.attached_drones == 0 else "30 Fe + 15 Si"
+						hud.show_missing_res_alert(need_str)
 			JOY_BUTTON_Y:
 				# Yボタン: ビルドモード切替 (Tabキー)
 				var main_hud = get_parent().get_node_or_null("HUD")
@@ -632,10 +638,16 @@ func _input(event: InputEvent) -> void:
 				AudioSynth.play_synth("build")
 
 	if event is InputEventKey and event.pressed:
-		# Bキー: 小型プリントドローン合体（Chassis Expansion）
-		if event.keycode == KEY_B:
+		# Rキー: 小型プリントドローン合体（Self-Replication / Chassis Expansion）
+		if event.keycode == KEY_R:
 			if GameState.attach_drone():
-				AudioSynth.play_synth("build")
+				AudioSynth.play_synth("replicate")
+			else:
+				AudioSynth.play_synth("error")
+				var hud = get_parent().get_node_or_null("HUD")
+				if hud and hud.has_method("show_missing_res_alert"):
+					var need_str = "40 Fe" if GameState.attached_drones == 0 else "30 Fe + 15 Si"
+					hud.show_missing_res_alert(need_str)
 		# Oキー: 第一宇宙速度（衛星軌道投入）
 		elif event.keycode == KEY_O and not current_orbit_info.is_empty():
 			var prim = current_orbit_info["primary"]
