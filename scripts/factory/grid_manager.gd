@@ -95,6 +95,10 @@ var ghost_refresh_timer: float = 0.0
 # [{ pos: Vector2, text: String, timer: float, y_offset: float }]
 var floating_error_labels: Array[Dictionary] = []
 
+# ブループリント設置時のパルス波紋演出 (Placement Shockwave Ripples)
+# [{ pos: Vector2, radius: float, max_radius: float, timer: float, max_time: float, color: Color }]
+var placement_ripples: Array[Dictionary] = []
+
 # セクター惑星・宇宙天体管理 (公転物理演算・彗星・ブラックホール・恒星・中性子星・小惑星帯)
 var generated_sectors: Dictionary = {}
 var active_planets: Array[Dictionary] = []
@@ -689,6 +693,15 @@ func _place_blueprint_at_mouse(mouse_pos: Vector2) -> void:
 	last_placed_angle = ang_off
 	_add_blueprint(selected_tool, ang_off, alt, target_ore, false)
 	AudioSynth.play_synth("click")
+	var b_pos = surface_pos_at(ang_off, alt)
+	placement_ripples.append({
+		"pos": b_pos,
+		"radius": 12.0,
+		"max_radius": 60.0,
+		"timer": 0.35,
+		"max_time": 0.35,
+		"color": Color(0.0, 2.5, 3.0)
+	})
 
 func _add_blueprint(type_str: String, ang: float, alt: float, ore: String, is_demo: bool) -> void:
 	blueprints.append({
@@ -838,6 +851,16 @@ func _try_build_at_ghost_slot(target_pos: Vector2) -> bool:
 	_add_blueprint(best_slot["type"], best_slot["angle_off"], best_slot["alt"], best_slot["target_ore"], false)
 	AudioSynth.play_synth("craft")
 	
+	# タップ地点にSci-Fiパルス波紋ショックウェーブを発生
+	placement_ripples.append({
+		"pos": best_slot["pos"],
+		"radius": 12.0,
+		"max_radius": 65.0,
+		"timer": 0.4,
+		"max_time": 0.4,
+		"color": Color(0.0, 2.5, 3.0)
+	})
+	
 	# スロット更新
 	_update_available_ghost_slots()
 	return true
@@ -858,6 +881,16 @@ func _process(delta: float) -> void:
 		if err["timer"] > 0.0:
 			keep_errs.append(err)
 	floating_error_labels = keep_errs
+
+	# ブループリント配置パルス波紋の更新
+	var keep_ripples: Array[Dictionary] = []
+	for rip in placement_ripples:
+		rip["timer"] -= delta
+		var t_ratio = 1.0 - (rip["timer"] / rip["max_time"])
+		rip["radius"] = lerpf(12.0, rip["max_radius"], t_ratio)
+		if rip["timer"] > 0.0:
+			keep_ripples.append(rip)
+	placement_ripples = keep_ripples
 
 	# 設置可能場所の青いバーチャル施設ゴーストの更新
 	if selected_tool != "none" and selected_tool != "demolish":
@@ -1695,9 +1728,10 @@ func _draw() -> void:
 	# 12. マウスカーソルのホログラム設置プレビュー
 	_draw_placement_preview()
 
-	# 12.5 設置可能場所の青いバーチャル施設ゴースト ＆ 不足資源赤文字エラー警告
+	# 12.5 設置可能場所の青いバーチャル施設ゴースト ＆ 不足資源赤文字エラー警告 ＆ 設置確定パルス波紋
 	_draw_available_ghost_slots()
 	_draw_floating_error_labels()
+	_draw_placement_ripples()
 
 	# 13. 現在の目標地点ナビゲーション光輪 (Mission Waypoint Beacon)
 	_draw_mission_waypoint_beacon()
@@ -1862,3 +1896,19 @@ func _draw_floating_error_labels() -> void:
 		draw_rect(Rect2(epos.x - 90, epos.y - 14, 180, 22), Color(0.18, 0.02, 0.02, 0.88 * e_alpha))
 		draw_rect(Rect2(epos.x - 90, epos.y - 14, 180, 22), Color(2.2, 0.2, 0.2, 0.85 * e_alpha), false, 1.5)
 		draw_string(ThemeDB.fallback_font, Vector2(epos.x - 86, epos.y + 2), text, HORIZONTAL_ALIGNMENT_CENTER, 172, 11, e_col)
+
+func _draw_placement_ripples() -> void:
+	for rip in placement_ripples:
+		var rpos = rip["pos"]
+		var rad = rip["radius"]
+		var alpha = clampf(rip["timer"] / rip["max_time"], 0.0, 1.0)
+		var c_ring1 = Color(0.0, 2.5, 3.0, alpha * 0.95)
+		var c_ring2 = Color(1.0, 2.5, 3.0, alpha * 0.6)
+		# 外側に広がる二重Sci-Fiパルスリング
+		draw_arc(rpos, rad, 0, TAU, 32, c_ring1, 2.5)
+		if rad > 16.0:
+			draw_arc(rpos, rad * 0.65, 0, TAU, 24, c_ring2, 1.5)
+		# 中心パルス閃光
+		if rip["timer"] > rip["max_time"] * 0.6:
+			var flash_a = (rip["timer"] - rip["max_time"] * 0.6) / (rip["max_time"] * 0.4)
+			draw_circle(rpos, 10.0 * flash_a, Color(1.0, 2.8, 3.0, flash_a * 0.8))

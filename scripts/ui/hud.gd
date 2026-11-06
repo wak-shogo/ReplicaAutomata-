@@ -91,6 +91,14 @@ var milestone_sub_lbl: Label
 
 # 専用大型技術ツリー・設備建造カタログ画面 (Structure Architect Modal)
 var tech_tree_modal: PanelContainer = null
+var tech_tree_cards: Array[Dictionary] = []
+var build_cancel_btn: Button = null
+
+# ドローン自己複製アチーブメントバナー
+var drone_repl_banner: PanelContainer = null
+var drone_repl_lbl: Label = null
+var drone_repl_timer: float = 0.0
+var prev_fleet_count: int = 0
 
 func _ready() -> void:
 	main_node = get_parent()
@@ -171,6 +179,11 @@ func _process(delta: float) -> void:
 		missing_timer -= delta
 		if missing_panel:
 			missing_panel.visible = (missing_timer > 0.0)
+
+	if drone_repl_timer > 0.0:
+		drone_repl_timer -= delta
+		if drone_repl_banner:
+			drone_repl_banner.visible = (drone_repl_timer > 0.0)
 
 	if grid_manager:
 		var cur_tool = grid_manager.selected_tool
@@ -257,8 +270,45 @@ func open_tech_tree_modal() -> void:
 			var lbl = res_box.find_child("ResLbl_" + rk, true, false)
 			if lbl:
 				lbl.text = "所持 %s: %d" % [rk, GameState.resources.get(rk, 0)]
+	_update_tech_tree_cards_affordability()
 	tech_tree_modal.visible = true
 	AudioSynth.play_synth("click")
+
+func _update_tech_tree_cards_affordability() -> void:
+	if not grid_manager: return
+	var costs_dict = grid_manager.BUILD_COSTS
+	for c_info in tech_tree_cards:
+		var tid = c_info["id"]
+		var btn: Button = c_info["btn"]
+		var status_lbl: Label = c_info["status_lbl"]
+		var sb_n: StyleBoxFlat = c_info["sb_n"]
+		
+		if tid == "demolish":
+			status_lbl.text = "✔ いつでも使用可能"
+			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.2, 1.2))
+			sb_n.border_color = Color(0.0, 1.5, 2.0, 0.6)
+			continue
+			
+		var reqs: Dictionary = costs_dict.get(tid, {})
+		var can_afford = true
+		var missing_list: Array[String] = []
+		for r_k in reqs:
+			var need = reqs[r_k]
+			var have = GameState.resources.get(r_k, 0)
+			if have < need:
+				can_afford = false
+				missing_list.append("%s不足(-%d)" % [r_k, need - have])
+				
+		if can_afford:
+			status_lbl.text = "✔ 製造可能 (タップして配置)"
+			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
+			sb_n.border_color = Color(0.0, 2.2, 2.8, 0.8)
+			sb_n.bg_color = Color(0.04, 0.10, 0.18, 0.92)
+		else:
+			status_lbl.text = "❌ " + " / ".join(missing_list)
+			status_lbl.add_theme_color_override("font_color", Color(2.5, 0.4, 0.4))
+			sb_n.border_color = Color(0.6, 0.2, 0.2, 0.5)
+			sb_n.bg_color = Color(0.06, 0.04, 0.05, 0.88)
 
 func _on_tech_tree_item_selected(tool_id: String) -> void:
 	AudioSynth.play_synth("select")
@@ -282,6 +332,8 @@ func _update_build_mode_visuals() -> void:
 		if is_bm:
 			var tname = grid_manager.selected_tool.to_upper()
 			build_guide_label.text = "[ 🛠 選択中: %s | 近くの青いバーチャル施設をタップして造形 ]" % tname
+	if build_cancel_btn:
+		build_cancel_btn.visible = is_bm
 
 func build_minimal_ui() -> void:
 	# 共通透明Sci-Fiスタイル
@@ -811,6 +863,61 @@ func build_minimal_ui() -> void:
 	build_guide_label.visible = false
 	add_child(build_guide_label)
 
+	# 建築モード即時キャンセルボタン (Cancel Build Mode Button)
+	build_cancel_btn = Button.new()
+	build_cancel_btn.text = " ✕ 建築キャンセル "
+	build_cancel_btn.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	build_cancel_btn.anchor_left = 1.0
+	build_cancel_btn.anchor_right = 1.0
+	build_cancel_btn.anchor_top = 1.0
+	build_cancel_btn.anchor_bottom = 1.0
+	build_cancel_btn.offset_left = -160.0
+	build_cancel_btn.offset_right = -16.0
+	build_cancel_btn.offset_top = -272.0
+	build_cancel_btn.offset_bottom = -232.0
+	var sb_cncl = StyleBoxFlat.new()
+	sb_cncl.bg_color = Color(0.2, 0.04, 0.06, 0.92)
+	sb_cncl.border_color = Color(2.5, 0.3, 0.3, 0.85)
+	sb_cncl.set_border_width_all(2)
+	sb_cncl.set_corner_radius_all(6)
+	build_cancel_btn.add_theme_stylebox_override("normal", sb_cncl)
+	build_cancel_btn.add_theme_color_override("font_color", Color(2.5, 0.8, 0.8))
+	build_cancel_btn.add_theme_font_size_override("font_size", 12)
+	build_cancel_btn.visible = false
+	build_cancel_btn.pressed.connect(func():
+		if grid_manager:
+			grid_manager.select_tool("none")
+			_update_build_mode_visuals()
+			AudioSynth.play_synth("click")
+	)
+	add_child(build_cancel_btn)
+
+	# ドローン自己複製アチーブメントバナー (Drone Replication Banner)
+	drone_repl_banner = PanelContainer.new()
+	drone_repl_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	drone_repl_banner.anchor_left = 0.5
+	drone_repl_banner.anchor_right = 0.5
+	drone_repl_banner.offset_left = -180.0
+	drone_repl_banner.offset_right = 180.0
+	drone_repl_banner.offset_top = 145.0
+	drone_repl_banner.offset_bottom = 185.0
+	var sb_d_repl = StyleBoxFlat.new()
+	sb_d_repl.bg_color = Color(0.04, 0.12, 0.22, 0.94)
+	sb_d_repl.border_color = Color(0.0, 2.2, 3.0, 0.9)
+	sb_d_repl.set_border_width_all(2)
+	sb_d_repl.set_corner_radius_all(6)
+	drone_repl_banner.add_theme_stylebox_override("panel", sb_d_repl)
+	drone_repl_banner.visible = false
+	add_child(drone_repl_banner)
+
+	drone_repl_lbl = Label.new()
+	drone_repl_lbl.text = "✦ SUB-DRONE REPLICATED ✦"
+	drone_repl_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	drone_repl_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	drone_repl_lbl.add_theme_font_size_override("font_size", 12)
+	drone_repl_lbl.add_theme_color_override("font_color", Color(0.2, 2.5, 3.0))
+	drone_repl_banner.add_child(drone_repl_lbl)
+
 	# 6. メガストラクチャー・ミニマルパレット構築
 	_build_minimal_mega_palette(sb_slot)
 
@@ -1068,6 +1175,7 @@ func _build_tech_tree_modal() -> void:
 		}
 	]
 	
+	tech_tree_cards.clear()
 	for item in catalog_data:
 		var card = _create_tech_tree_card(item)
 		grid.add_child(card)
@@ -1075,7 +1183,7 @@ func _build_tech_tree_modal() -> void:
 func _create_tech_tree_card(item: Dictionary) -> Button:
 	var btn = Button.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 80)
+	btn.custom_minimum_size = Vector2(0, 88)
 	
 	var sb_n = StyleBoxFlat.new()
 	sb_n.bg_color = Color(0.04, 0.08, 0.15, 0.9)
@@ -1124,11 +1232,21 @@ func _create_tech_tree_card(item: Dictionary) -> Button:
 	lbl_name.add_theme_color_override("font_color", Color(2.5, 2.2, 0.4) if is_rec else Color(1.8, 2.4, 2.8))
 	v_box.add_child(lbl_name)
 	
+	var top_sub_hbox = HBoxContainer.new()
+	top_sub_hbox.add_theme_constant_override("separation", 12)
+	v_box.add_child(top_sub_hbox)
+
 	var lbl_cost = Label.new()
-	lbl_cost.text = "必要コスト: %s" % item["cost"]
+	lbl_cost.text = "コスト: %s" % item["cost"]
 	lbl_cost.add_theme_font_size_override("font_size", 10)
 	lbl_cost.add_theme_color_override("font_color", Color(0.0, 2.0, 2.8))
-	v_box.add_child(lbl_cost)
+	top_sub_hbox.add_child(lbl_cost)
+	
+	var lbl_status = Label.new()
+	lbl_status.text = "✔ 製造可能"
+	lbl_status.add_theme_font_size_override("font_size", 10)
+	lbl_status.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
+	top_sub_hbox.add_child(lbl_status)
 	
 	var lbl_desc = Label.new()
 	lbl_desc.text = item["desc"]
@@ -1140,6 +1258,13 @@ func _create_tech_tree_card(item: Dictionary) -> Button:
 	btn.pressed.connect(func():
 		_on_tech_tree_item_selected(item["id"])
 	)
+
+	tech_tree_cards.append({
+		"btn": btn,
+		"id": item["id"],
+		"status_lbl": lbl_status,
+		"sb_n": sb_n
+	})
 	return btn
 
 func _adjust_responsive_layout() -> void:
@@ -1464,6 +1589,19 @@ func _on_resource_changed(type: String, amount: int) -> void:
 
 func _on_fleet_changed(current: int, _max_val: int) -> void:
 	if fleet_lbl: fleet_lbl.text = str(current)
+	if current > prev_fleet_count:
+		# 自己複製達成バナーのポップアップ演出
+		if drone_repl_banner and drone_repl_lbl:
+			drone_repl_lbl.text = "✦ SUB-DRONE REPLICATED! (TOTAL: %d) ✦" % current
+			drone_repl_banner.visible = true
+			drone_repl_timer = 2.4
+			AudioSynth.play_synth("victory")
+			if is_inside_tree():
+				drone_repl_banner.pivot_offset = drone_repl_banner.size * 0.5
+				var tw = create_tween().set_parallel(true)
+				drone_repl_banner.scale = Vector2(1.15, 1.15)
+				tw.tween_property(drone_repl_banner, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	prev_fleet_count = current
 
 func _on_player_health_changed(hp: float, max_hp: float, shield: float, max_shield: float) -> void:
 	if hp_bar:

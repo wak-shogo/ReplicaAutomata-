@@ -166,7 +166,9 @@ func _physics_process(delta: float) -> void:
 			thrusting_dir = input_vec.normalized()
 			
 			if input_vec.length_squared() > 0.01:
-				velocity = velocity.lerp(input_vec.normalized() * target_cruise_speed, delta * 10.0)
+				var analog_mag = clampf(input_vec.length(), 0.0, 1.0)
+				var eased_mag = pow(analog_mag, 1.6) # 微小入力でのミリ単位精密微調整イージング
+				velocity = velocity.lerp(input_vec.normalized() * (target_cruise_speed * eased_mag), delta * 12.0)
 			else:
 				var stop_friction: float = 18.0 if is_precision_mode else 12.0
 				velocity = velocity.lerp(Vector2.ZERO, delta * stop_friction)
@@ -213,7 +215,9 @@ func _physics_process(delta: float) -> void:
 			var t_input = input_vec.dot(tangent)
 			var up_input = maxf(0.0, input_vec.dot(normal))
 			if input_vec.length_squared() > 0.01:
-				var target_v = (tangent * t_input * target_cruise_speed) + (normal * up_input * 260.0)
+				var analog_mag = clampf(input_vec.length(), 0.0, 1.0)
+				var eased_mag = pow(analog_mag, 1.5)
+				var target_v = (tangent * (t_input * eased_mag * target_cruise_speed)) + (normal * up_input * 260.0)
 				velocity = velocity.lerp(target_v, delta * 14.0)
 			else:
 				velocity = velocity.move_toward(Vector2.ZERO, 900.0 * delta)
