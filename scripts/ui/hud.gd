@@ -863,11 +863,11 @@ func _adjust_responsive_layout() -> void:
 	var is_portrait = (vp_rect.size.x < vp_rect.size.y)
 	var ui_scale = clampf(vp_rect.size.x / 440.0, 0.72, 1.0) if is_portrait else 1.0
 	
-	if dpad_cluster:
-		dpad_cluster.scale = Vector2(ui_scale, ui_scale)
-	if action_cluster:
-		action_cluster.scale = Vector2(ui_scale, ui_scale)
-		action_cluster.pivot_offset = Vector2(180.0, 200.0)
+	if vstick_base:
+		vstick_base.scale = Vector2(ui_scale, ui_scale)
+	if action_cluster_node:
+		action_cluster_node.scale = Vector2(ui_scale, ui_scale)
+		action_cluster_node.pivot_offset = Vector2(180.0, 200.0)
 		
 	if is_portrait:
 		if build_bar_panel:

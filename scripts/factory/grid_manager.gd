@@ -1016,6 +1016,11 @@ func draw_sheet_frame_rotated(tex: Texture2D, frame_idx: int, total_frames: int,
 	draw_texture_rect_region(tex, dst_rect, src_rect)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
+func is_daylight_at(pos: Vector2) -> bool:
+	var norm = (pos - HOME_CENTER).normalized()
+	var to_sun = (SUN_POS - HOME_CENTER).normalized()
+	return norm.dot(to_sun) > -0.15
+
 func _draw_celestial_bodies() -> void:
 	# A. 太陽を中心とする惑星公転軌道ライン群 (Orbit Rails)
 	draw_arc(SUN_POS, vulcan_orbit_radius, 0, TAU, 96, Color(1.0, 0.45, 0.2, 0.12), 1.2)
