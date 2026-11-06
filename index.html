@@ -2,21 +2,30 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
-		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
-		<title>STAR REPLICA: AUTOMA</title>
 		<script src="coi-serviceworker.js"></script>
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+		<title>STAR REPLICA: AUTOMA</title>
+		<script>
+			// Screen Wake Lock API
+			let wakeLock = null;
+			async function requestWakeLock() {
+				if ('wakeLock' in navigator) {
+					try {
+						wakeLock = await navigator.wakeLock.request('screen');
+					} catch (err) {}
+				}
+			}
+			document.addEventListener('visibilitychange', async () => {
+				if (wakeLock !== null && document.visibilityState === 'visible') {
+					await requestWakeLock();
+				}
+			});
+			window.addEventListener('pointerdown', () => { requestWakeLock(); }, { once: true });
+			// Prevent default gesture zoom
+			document.addEventListener('gesturestart', function(e) { e.preventDefault(); });
+			document.addEventListener('touchmove', function(e) { if (e.scale !== 1) { e.preventDefault(); } }, { passive: false });
+		</script>
 		<style>
-html, body {
-	position: fixed;
-	width: 100%;
-	height: 100%;
-	overflow: hidden;
-	overscroll-behavior: none;
-	touch-action: none;
-	-webkit-touch-callout: none;
-	-webkit-user-select: none;
-	user-select: none;
-}
 html, body, #canvas {
 	margin: 0;
 	padding: 0;
@@ -123,7 +132,7 @@ body {
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":431320,"index.wasm":39509339},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":431480,"index.wasm":39509339},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 
@@ -226,29 +235,6 @@ const engine = new Engine(GODOT_CONFIG);
 		}, displayFailureNotice);
 	}
 }());
-
-// Mobile Touch Guard: Disable double-tap zoom & context menu
-document.addEventListener('contextmenu', (e) => e.preventDefault());
-document.addEventListener('touchstart', (e) => {
-	if (e.touches.length > 1) {
-		e.preventDefault();
-	}
-}, { passive: false });
-document.addEventListener('gesturestart', (e) => e.preventDefault());
-
-// Screen Wake Lock API: Keep screen alive during factory operation
-let wakeLock = null;
-async function requestWakeLock() {
-	if ('wakeLock' in navigator) {
-		try {
-			wakeLock = await navigator.wakeLock.request('screen');
-		} catch (err) {}
-	}
-}
-document.addEventListener('pointerdown', () => { requestWakeLock(); }, { once: true });
-document.addEventListener('visibilitychange', () => {
-	if (document.visibilityState === 'visible') { requestWakeLock(); }
-});
 		</script>
 	</body>
 </html>
