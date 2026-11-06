@@ -1287,6 +1287,11 @@ func _adjust_responsive_layout() -> void:
 		if build_guide_label:
 			build_guide_label.offset_top = -288.0 * ui_scale
 			build_guide_label.offset_bottom = -268.0 * ui_scale
+		if build_cancel_btn:
+			build_cancel_btn.offset_left = -160.0
+			build_cancel_btn.offset_right = -16.0
+			build_cancel_btn.offset_top = -330.0 * ui_scale
+			build_cancel_btn.offset_bottom = -290.0 * ui_scale
 	else:
 		if build_bar_panel:
 			build_bar_panel.offset_left = 180.0
@@ -1296,6 +1301,11 @@ func _adjust_responsive_layout() -> void:
 		if build_guide_label:
 			build_guide_label.offset_top = -94.0
 			build_guide_label.offset_bottom = -74.0
+		if build_cancel_btn:
+			build_cancel_btn.offset_left = -160.0
+			build_cancel_btn.offset_right = -16.0
+			build_cancel_btn.offset_top = -68.0
+			build_cancel_btn.offset_bottom = -24.0
 
 	if tech_tree_modal:
 		var grid = tech_tree_modal.find_child("TechTreeGrid", true, false)
