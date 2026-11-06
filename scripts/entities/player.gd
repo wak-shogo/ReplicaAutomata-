@@ -38,6 +38,12 @@ var current_orbit_info: Dictionary = {}
 # スラスター・イオン排気パーティクル
 var thruster_particles: Array[Dictionary] = []
 
+# 自機横の累積資源ポップアップ (Floating Resource Popup)
+var floating_res_count: int = 0
+var floating_res_type: String = ""
+var floating_res_timer: float = 0.0
+var floating_res_scale: float = 1.0
+
 var player_sheet: Texture2D
 var drone_sheet: Texture2D
 
@@ -55,8 +61,11 @@ func _ready() -> void:
 
 func _on_drone_attached(_count: int) -> void:
 	drone_fabrication_timer = 1.4
-	replicate_text_timer = 2.2
+	replicate_text_timer = 2.4
 	AudioSynth.play_synth("victory")
+	var mn = get_parent()
+	if mn and mn.has_method("shake_camera"):
+		mn.shake_camera(2.5, 0.25)
 	GameState.add_log("SELF-REPLICATION MILESTONE: SUB-UNIT %02d FABRICATED! HARVEST & BUILD POWER MULTIPLIED." % _count)
 
 func wake_up_probe() -> void:
@@ -82,6 +91,11 @@ func _physics_process(delta: float) -> void:
 		drone_fabrication_timer -= delta
 	if replicate_text_timer > 0.0:
 		replicate_text_timer -= delta
+	if floating_res_timer > 0.0:
+		floating_res_timer -= delta
+		floating_res_scale = lerpf(floating_res_scale, 1.0, delta * 14.0)
+		if floating_res_timer <= 0.0:
+			floating_res_count = 0
 
 	# 休眠フェーズ判定（操作・推力はオフ）
 	if GameState.story_phase == GameState.StoryPhase.DORMANT:
@@ -118,39 +132,48 @@ func _physics_process(delta: float) -> void:
 	if touch_thrust_vec.length_squared() > 0.01:
 		input_vec = touch_thrust_vec
 
+	var is_precision_mode: bool = is_mining or (grid_manager and grid_manager.selected_tool != "none")
+	var target_cruise_speed: float = 100.0 if is_precision_mode else (160.0 + float(GameState.attached_drones) * 12.0)
+
 	if grid_manager and grid_manager.has_method("compute_gravity_and_orbit"):
 		grid_manager.ensure_sectors_around(global_position)
 		current_orbit_info = grid_manager.compute_gravity_and_orbit(global_position, velocity)
 		var g_acc: Vector2 = current_orbit_info["acc"]
 		var alt: float = current_orbit_info["altitude"]
 		
-		if alt > 12.0:
-			# 宇宙空間：完全な等速直線運動（無抵抗慣性）＆万有引力軌道運動 + スラスター推力 + 手動ブレーキ
+		# 大気圏・低空探査領域判定（高度 350px 未満）
+		var in_atmosphere: bool = (alt < 350.0)
+		
+		if not in_atmosphere:
+			# 深宇宙空間（高度 350px 以上）：完全な等速直線運動（無抵抗慣性）＆万有引力軌道運動 + スラスター推力 + 手動ブレーキ
 			var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
 			is_inertial_braking = is_brake_key
 			thrusting_dir = input_vec.normalized()
 			
 			if is_inertial_braking:
 				# 手動操作による緊急アクティブ逆噴射ブレーキ (Shift / C / Joypad B / スマホブレーキ)
-				velocity = velocity.move_toward(Vector2.ZERO, 380.0 * delta)
+				velocity = velocity.move_toward(Vector2.ZERO, 480.0 * delta)
 				velocity += g_acc * delta
 			elif input_vec.length_squared() > 0.01:
 				var cur_thrust = thrust_accel + float(GameState.attached_drones) * 35.0
 				velocity += (g_acc + input_vec.normalized() * cur_thrust) * delta
 			else:
-				# スラスター無入力時：自動減衰ダンパーなし。宇宙本来の完全な等速直線運動を維持
+				# スラスター無入力時：宇宙本来の等速直線運動を維持
 				velocity += g_acc * delta
 		else:
+			# 大気圏・地表低空領域：強力オートスタビライザー（指を離せばピタッと静止して通り過ぎない）
 			is_inertial_braking = false
 			thrusting_dir = input_vec.normalized()
-			# 地表付近：地殻ホバリング制御 (ドローン数に応じて巡航速度向上)
-			var cur_surf_spd = 240.0 + float(GameState.attached_drones) * 20.0
+			
 			if input_vec.length_squared() > 0.01:
-				velocity = velocity.lerp(input_vec.normalized() * cur_surf_spd, delta * 8.0)
+				velocity = velocity.lerp(input_vec.normalized() * target_cruise_speed, delta * 10.0)
 			else:
-				velocity = velocity.lerp(Vector2.ZERO, delta * 8.0)
+				var stop_friction: float = 18.0 if is_precision_mode else 12.0
+				velocity = velocity.lerp(Vector2.ZERO, delta * stop_friction)
+				if velocity.length_squared() < 6.0:
+					velocity = Vector2.ZERO
 	else:
-		velocity = input_vec.normalized() * 240.0
+		velocity = input_vec.normalized() * 160.0
 		
 	move_and_slide()
 
@@ -190,10 +213,10 @@ func _physics_process(delta: float) -> void:
 			var t_input = input_vec.dot(tangent)
 			var up_input = maxf(0.0, input_vec.dot(normal))
 			if input_vec.length_squared() > 0.01:
-				var target_v = (tangent * t_input * 240.0) + (normal * up_input * 320.0)
-				velocity = velocity.lerp(target_v, delta * 12.0)
+				var target_v = (tangent * t_input * target_cruise_speed) + (normal * up_input * 260.0)
+				velocity = velocity.lerp(target_v, delta * 14.0)
 			else:
-				velocity = velocity.move_toward(Vector2.ZERO, 500.0 * delta)
+				velocity = velocity.move_toward(Vector2.ZERO, 900.0 * delta)
 
 		# 3.5 母星大気圏再突入力学 (Atmospheric Re-entry Aerodynamic Drag & Heat Cone)
 		is_reentry = false
@@ -336,6 +359,15 @@ func _physics_process(delta: float) -> void:
 			else:
 				# 母星地表鉱脈
 				GameState.add_resource(current_mining_ore, amount)
+			
+			# 自機横の累積ポップアップ更新
+			if floating_res_type != current_mining_ore and floating_res_timer > 0.0:
+				floating_res_count = amount
+			else:
+				floating_res_count += amount
+			floating_res_type = current_mining_ore
+			floating_res_timer = 1.35
+			floating_res_scale = 1.35
 			
 			# レーザーで敵爆撃機を迎撃判定
 			var main_n = get_parent()
@@ -825,3 +857,26 @@ func _draw() -> void:
 			draw_circle(pip_pos, 2.5, v_col)
 			if d_vein < 320.0:
 				draw_string(ThemeDB.fallback_font, pip_pos + pip_dir * 12.0 - Vector2(10, -4), "%s:%.0fm" % [v["name"], d_vein * 0.1], HORIZONTAL_ALIGNMENT_CENTER, -1, 9, v_col)
+
+	# 10. 累積資源ポップアップ (Floating Accumulated Resource HUD)
+	if floating_res_timer > 0.0 and floating_res_count > 0:
+		var f_alpha = clampf(floating_res_timer / 0.35, 0.0, 1.0)
+		var float_y = -14.0 - (1.35 - floating_res_timer) * 14.0
+		var r_col = Color(0.3, 1.8, 2.5)
+		match floating_res_type:
+			"Fe": r_col = Color(0.3, 1.8, 2.5)
+			"Cu": r_col = Color(2.5, 1.2, 0.3)
+			"Ti": r_col = Color(0.3, 2.5, 1.2)
+			"Si": r_col = Color(2.5, 2.2, 0.4)
+			"He3": r_col = Color(0.4, 1.8, 2.8)
+			"Plasma": r_col = Color(2.5, 0.8, 0.2)
+			"Ice": r_col = Color(1.8, 2.5, 2.8)
+			"DarkMatter": r_col = Color(2.0, 0.4, 2.5)
+			"Neutronium": r_col = Color(2.5, 0.2, 0.8)
+		r_col.a = f_alpha
+		var f_text = "+%d %s" % [floating_res_count, floating_res_type]
+		var f_size = int(round(13.0 * floating_res_scale))
+		# 背景ミニバッジ（半透明黒角丸＋ネオン境界線）
+		draw_rect(Rect2(24, float_y - 12, 64, 18), Color(0.04, 0.08, 0.14, 0.75 * f_alpha))
+		draw_rect(Rect2(24, float_y - 12, 64, 18), r_col * Color(1, 1, 1, 0.65 * f_alpha), false, 1.2)
+		draw_string(ThemeDB.fallback_font, Vector2(30, float_y + 1), f_text, HORIZONTAL_ALIGNMENT_LEFT, -1, f_size, r_col)

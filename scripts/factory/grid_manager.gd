@@ -73,6 +73,28 @@ var gamepad_place_cooldown: float = 0.0
 
 var anim_time: float = 0.0
 
+# 建築コスト定義 (Building Resource Costs)
+const BUILD_COSTS: Dictionary = {
+	"miner": {"Fe": 20, "Cu": 10},
+	"smelter": {"Fe": 30, "Cu": 15},
+	"belt": {"Fe": 6},
+	"assembler": {"Fe": 40, "Cu": 20, "Si": 10},
+	"solar": {"Si": 15, "Cu": 10},
+	"geothermal": {"Fe": 60, "Ti": 20},
+	"turret": {"Fe": 30, "Ti": 15},
+	"depot": {"Fe": 25},
+	"mass_driver": {"Fe": 80, "Ti": 40, "Si": 30}
+}
+
+# 設置可能場所の青いバーチャル施設ゴースト (Available Blueprint Slots)
+# [{ pos: Vector2, angle_off: float, alt: float, type: String, target_ore: String }]
+var available_ghost_slots: Array[Dictionary] = []
+var ghost_refresh_timer: float = 0.0
+
+# 不足資源の地点直接赤文字ポップアップ (Floating Error Labels)
+# [{ pos: Vector2, text: String, timer: float, y_offset: float }]
+var floating_error_labels: Array[Dictionary] = []
+
 # セクター惑星・宇宙天体管理 (公転物理演算・彗星・ブラックホール・恒星・中性子星・小惑星帯)
 var generated_sectors: Dictionary = {}
 var active_planets: Array[Dictionary] = []
@@ -551,6 +573,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		if is_left_or_touch:
 			if is_pressed:
 				if selected_tool != "none":
+					# 0. 未完了ブループリントのタップによる即時キャンセル＆資源全額返還
+					for bp_i in range(blueprints.size() - 1, -1, -1):
+						var bp = blueprints[bp_i]
+						var bp_pos = surface_pos_at(bp["angle_off"], bp["alt"])
+						if mouse_pos.distance_to(bp_pos) < 36.0 and not bp["is_demolish"]:
+							var refund_costs = BUILD_COSTS.get(bp["type"], {})
+							for r_k in refund_costs:
+								GameState.add_resource(r_k, refund_costs[r_k])
+							blueprints.remove_at(bp_i)
+							AudioSynth.play_synth("click")
+							_update_available_ghost_slots()
+							GameState.add_log("BLUEPRINT CANCELLED: RESOURCES REFUNDED (100%)")
+							return
+							
+					# 1. 設置可能場所の青いバーチャル施設ゴーストへの直接タップ判定
+					if _try_build_at_ghost_slot(mouse_pos):
+						return
 					is_drag_placing = true
 					last_placed_angle = -999.0
 					_place_blueprint_at_mouse(mouse_pos)
@@ -602,18 +641,27 @@ func _place_blueprint_at_mouse(mouse_pos: Vector2) -> void:
 			return
 
 	# 素材在庫・クラフト可能チェック
-	var has_stock = GameState.items.get(selected_tool, 0) > 0
-	if not has_stock:
+	var costs: Dictionary = BUILD_COSTS.get(selected_tool, {})
+	var can_afford: bool = true
+	var missing_items: Array[String] = []
+	for r_type in costs:
+		var need: int = costs[r_type]
+		var have: int = GameState.resources.get(r_type, 0)
+		if have < need:
+			can_afford = false
+			missing_items.append("%d %s (NEED %d)" % [have, r_type, need])
+			
+	if not can_afford:
+		var err_str = "❌ " + ", ".join(missing_items)
+		show_building_cost_error_at(mouse_pos, err_str)
 		var hud = get_parent().get_node_or_null("HUD")
-		if selected_tool == "miner" and (GameState.resources.get("Fe", 0) < 20 or GameState.resources.get("Cu", 0) < 10):
-			if hud and hud.has_method("show_missing_res_alert"): hud.show_missing_res_alert("20 Fe + 10 Cu")
-			return
-		elif selected_tool == "belt" and GameState.resources.get("Fe", 0) < 6:
-			if hud and hud.has_method("show_missing_res_alert"): hud.show_missing_res_alert("6 Fe")
-			return
-		elif selected_tool == "smelter" and (GameState.resources.get("Fe", 0) < 30 or GameState.resources.get("Cu", 0) < 15):
-			if hud and hud.has_method("show_missing_res_alert"): hud.show_missing_res_alert("30 Fe + 15 Cu")
-			return
+		if hud and hud.has_method("show_missing_res_alert"):
+			hud.show_missing_res_alert(err_str)
+		return
+
+	# 資源消費
+	for r_type in costs:
+		GameState.consume_resource(r_type, costs[r_type])
 
 	var alt = 4.0
 	var target_ore = ""
@@ -654,6 +702,146 @@ func _add_blueprint(type_str: String, ang: float, alt: float, ore: String, is_de
 	})
 	next_bp_id += 1
 
+func show_building_cost_error_at(world_pos: Vector2, missing_text: String) -> void:
+	floating_error_labels.append({
+		"pos": world_pos,
+		"text": missing_text,
+		"timer": 1.6,
+		"y_offset": 0.0
+	})
+	AudioSynth.play_synth("error")
+
+func _update_available_ghost_slots() -> void:
+	available_ghost_slots.clear()
+	var player = get_parent().get_node_or_null("Player")
+	var p_pos = player.global_position if player else HOME_CENTER + Vector2(0, -HOME_RADIUS)
+	var p_ang = angle_off_from_pos(p_pos)
+	
+	if selected_tool == "miner":
+		# ドリルの場合：母星の鉱脈すべてで未設置のものをゴーストとして投影
+		for v in ore_veins:
+			var v_ang = v["angle_off"]
+			var has_miner = false
+			for b in placed_buildings:
+				if b["type"] == "miner" and abs(b["angle_off"] - v_ang) < 0.025:
+					has_miner = true
+					break
+			for bp in blueprints:
+				if bp["type"] == "miner" and abs(bp["angle_off"] - v_ang) < 0.025:
+					has_miner = true
+					break
+			if not has_miner:
+				var spos = surface_pos_at(v_ang, 20.0)
+				available_ghost_slots.append({
+					"pos": spos,
+					"angle_off": v_ang,
+					"alt": 20.0,
+					"type": "miner",
+					"target_ore": v["name"]
+				})
+	elif selected_tool == "belt":
+		# コンベアの場合：プレイヤー周囲の地表グリッド
+		var ang_step = 0.035
+		for i in range(-5, 6):
+			var cand_ang = p_ang + float(i) * ang_step
+			var spos = surface_pos_at(cand_ang, 4.0)
+			var is_dup = false
+			for bp in blueprints:
+				if bp["type"] == "belt" and abs(bp["angle_off"] - cand_ang) < 0.015:
+					is_dup = true
+					break
+			for b in placed_buildings:
+				if b["type"] == "belt" and abs(b["angle_off"] - cand_ang) < 0.015:
+					is_dup = true
+					break
+			if not is_dup:
+				available_ghost_slots.append({
+					"pos": spos,
+					"angle_off": cand_ang,
+					"alt": 4.0,
+					"type": "belt",
+					"target_ore": ""
+				})
+	else:
+		# その他の建物（smelter, assembler, solar, geothermal, turret, depot, mass_driver）
+		var alt = 16.0
+		match selected_tool:
+			"smelter": alt = 32.0
+			"assembler": alt = 34.0
+			"mass_driver": alt = 48.0
+			"depot": alt = 26.0
+			"turret": alt = 20.0
+			"solar": alt = 16.0
+			"geothermal": alt = -160.0
+		
+		var ang_step = 0.075 # 約32pxピッチ
+		for i in range(-4, 5):
+			var cand_ang = p_ang + float(i) * ang_step
+			var spos = surface_pos_at(cand_ang, alt)
+			var is_occupied = false
+			for b in placed_buildings:
+				if abs(b["angle_off"] - cand_ang) < 0.035:
+					is_occupied = true
+					break
+			for bp in blueprints:
+				if abs(bp["angle_off"] - cand_ang) < 0.035:
+					is_occupied = true
+					break
+			if not is_occupied:
+				available_ghost_slots.append({
+					"pos": spos,
+					"angle_off": cand_ang,
+					"alt": alt,
+					"type": selected_tool,
+					"target_ore": ""
+				})
+
+func _try_build_at_ghost_slot(target_pos: Vector2) -> bool:
+	if selected_tool == "none" or selected_tool == "demolish":
+		return false
+		
+	var best_slot: Dictionary = {}
+	var best_dist: float = 68.0 # モバイル・タッチ操作に最適化した寛容なタップ判定エリア
+	for slot in available_ghost_slots:
+		var d = target_pos.distance_to(slot["pos"])
+		if d < best_dist:
+			best_dist = d
+			best_slot = slot
+			
+	if best_slot.is_empty():
+		return false
+		
+	# コストチェック
+	var costs: Dictionary = BUILD_COSTS.get(selected_tool, {})
+	var can_afford: bool = true
+	var missing_items: Array[String] = []
+	for r_type in costs:
+		var need: int = costs[r_type]
+		var have: int = GameState.resources.get(r_type, 0)
+		if have < need:
+			can_afford = false
+			missing_items.append("%d %s (NEED %d)" % [have, r_type, need])
+			
+	if not can_afford:
+		var err_str = "❌ " + ", ".join(missing_items)
+		show_building_cost_error_at(best_slot["pos"], err_str)
+		var hud = get_parent().get_node_or_null("HUD")
+		if hud and hud.has_method("show_missing_res_alert"):
+			hud.show_missing_res_alert(err_str)
+		return true
+		
+	# 資源消費
+	for r_type in costs:
+		GameState.consume_resource(r_type, costs[r_type])
+		
+	# ブループリント確定配置
+	_add_blueprint(best_slot["type"], best_slot["angle_off"], best_slot["alt"], best_slot["target_ore"], false)
+	AudioSynth.play_synth("craft")
+	
+	# スロット更新
+	_update_available_ghost_slots()
+	return true
+
 # ========================================================
 # 自律建築ドローン (Fabricator Drones) のAI＆溶接シミュレーション
 # ========================================================
@@ -661,6 +849,24 @@ func _process(delta: float) -> void:
 	anim_time += delta
 	_update_celestial_simulation(delta)
 	_update_power_grid()
+	
+	# 不足資源赤文字エラーラベルの更新
+	var keep_errs: Array[Dictionary] = []
+	for err in floating_error_labels:
+		err["timer"] -= delta
+		err["y_offset"] += delta * 24.0
+		if err["timer"] > 0.0:
+			keep_errs.append(err)
+	floating_error_labels = keep_errs
+
+	# 設置可能場所の青いバーチャル施設ゴーストの更新
+	if selected_tool != "none" and selected_tool != "demolish":
+		ghost_refresh_timer -= delta
+		if ghost_refresh_timer <= 0.0:
+			ghost_refresh_timer = 0.15
+			_update_available_ghost_slots()
+	else:
+		available_ghost_slots.clear()
 	
 	# ゲームパッド配置判定 (RTトリガー or Aボタン)
 	if selected_tool != "none":
@@ -1375,6 +1581,11 @@ func _draw() -> void:
 				var buf = b.get("buffer", 0)
 				if buf > 0:
 					draw_string(ThemeDB.fallback_font, bpos + Vector2(-22, -28), "[%s: %d]" % [b.get("target_ore", "Fe"), buf], HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.2, 2.5, 1.2))
+				# 排出ポート（Output Port）の動的インジケータ
+				var out_tangent = Vector2(-sin(-PI * 0.5 + rot), cos(-PI * 0.5 + rot))
+				var out_pos = bpos + out_tangent * 18.0
+				draw_circle(out_pos, 2.2, Color(0.2, 2.2, 2.8, 0.85))
+				draw_line(bpos, out_pos, Color(0.2, 2.0, 2.8, 0.4), 1.0)
 				if is_power_short:
 					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -38), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
 			"smelter": 
@@ -1483,6 +1694,10 @@ func _draw() -> void:
 
 	# 12. マウスカーソルのホログラム設置プレビュー
 	_draw_placement_preview()
+
+	# 12.5 設置可能場所の青いバーチャル施設ゴースト ＆ 不足資源赤文字エラー警告
+	_draw_available_ghost_slots()
+	_draw_floating_error_labels()
 
 	# 13. 現在の目標地点ナビゲーション光輪 (Mission Waypoint Beacon)
 	_draw_mission_waypoint_beacon()
@@ -1608,3 +1823,42 @@ func _draw_placement_preview() -> void:
 	if selected_tool == "turret":
 		draw_arc(snap_pos, 650.0, 0, TAU, 48, Color(0.1, 0.8, 1.0, 0.25), 1.5)
 		draw_arc(snap_pos, 650.0, anim_time * 2.0, anim_time * 2.0 + PI * 0.5, 24, Color(0.2, 1.0, 0.5, 0.5), 2.0)
+
+func _draw_available_ghost_slots() -> void:
+	if selected_tool == "none" or selected_tool == "demolish":
+		return
+	var mpos = get_target_cursor_pos()
+	for slot in available_ghost_slots:
+		var spos = slot["pos"]
+		var rot = slot["angle_off"]
+		var is_hover = (mpos.distance_to(spos) < 44.0)
+		var pulse = (sin(anim_time * 5.0 + slot["angle_off"] * 4.0) * 0.5 + 0.5)
+		var g_col = Color(0.1, 1.8, 2.5, 0.85) if is_hover else Color(0.0, 1.4, 2.2, 0.35 + pulse * 0.25)
+		
+		# 1. 青いバーチャルリング＆回転スキャン枠
+		draw_set_transform(spos, rot, Vector2.ONE)
+		draw_rect(Rect2(-16, -16, 32, 32), g_col, false, 1.5 if is_hover else 1.0)
+		draw_line(Vector2(-16, -16), Vector2(16, 16), g_col * Color(1, 1, 1, 0.25), 1.0)
+		draw_line(Vector2(-16, 16), Vector2(16, -16), g_col * Color(1, 1, 1, 0.25), 1.0)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		
+		# 2. 円形脈動リング (青いバーチャル施設)
+		draw_arc(spos, 22.0, 0, TAU, 24, g_col * Color(1, 1, 1, 0.6), 1.2)
+		if is_hover:
+			draw_arc(spos, 26.0, anim_time * 3.0, anim_time * 3.0 + PI * 1.5, 24, Color(2.5, 2.5, 3.0, 0.9), 2.0)
+			
+		# 3. 頭上のタップ案内
+		var label_text = "[ TAP TO BUILD ]" if is_hover else "[ + ]"
+		var label_col = Color(2.5, 2.5, 3.0, 0.95) if is_hover else g_col
+		draw_string(ThemeDB.fallback_font, spos + Vector2(-35, -28), label_text, HORIZONTAL_ALIGNMENT_CENTER, 70, 9, label_col)
+
+func _draw_floating_error_labels() -> void:
+	for err in floating_error_labels:
+		var epos = err["pos"] + Vector2(0, -err["y_offset"])
+		var e_alpha = clampf(err["timer"] / 0.4, 0.0, 1.0)
+		var e_col = Color(2.5, 0.3, 0.3, e_alpha)
+		var text = err["text"]
+		# 背景の暗赤色警告プレート（太めの境界線）
+		draw_rect(Rect2(epos.x - 90, epos.y - 14, 180, 22), Color(0.18, 0.02, 0.02, 0.88 * e_alpha))
+		draw_rect(Rect2(epos.x - 90, epos.y - 14, 180, 22), Color(2.2, 0.2, 0.2, 0.85 * e_alpha), false, 1.5)
+		draw_string(ThemeDB.fallback_font, Vector2(epos.x - 86, epos.y + 2), text, HORIZONTAL_ALIGNMENT_CENTER, 172, 11, e_col)
