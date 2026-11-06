@@ -414,6 +414,12 @@ func _physics_process(delta: float) -> void:
 		# スラスター噴射中：推進方向へ機首を向ける
 		target_angle = thrusting_dir.angle()
 		has_rot_target = true
+	elif is_surface_attached:
+		# 惑星表面アタッチ待機中：地表から宇宙へ向けて直立（打ち上げスタンバイ姿勢）
+		var cur_ang = -PI * 0.5 + attached_angle_off
+		var normal = Vector2(cos(cur_ang), sin(cur_ang))
+		target_angle = normal.angle()
+		has_rot_target = true
 	elif velocity.length_squared() > 100.0 and current_orbit_info.get("altitude", 0.0) <= 8.0:
 		# 地表付近：進行方向へ緩やかに向く
 		target_angle = velocity.angle()
@@ -910,7 +916,8 @@ func _draw() -> void:
 		r_col.a = f_alpha
 		var f_text = "+%d %s" % [floating_res_count, floating_res_type]
 		var f_size = int(round(13.0 * floating_res_scale))
+		var badge_w = maxf(68.0, float(f_text.length()) * 8.5 * floating_res_scale + 14.0)
 		# 背景ミニバッジ（半透明黒角丸＋ネオン境界線）
-		draw_rect(Rect2(24, float_y - 12, 64, 18), Color(0.04, 0.08, 0.14, 0.75 * f_alpha))
-		draw_rect(Rect2(24, float_y - 12, 64, 18), r_col * Color(1, 1, 1, 0.65 * f_alpha), false, 1.2)
-		draw_string(ThemeDB.fallback_font, Vector2(30, float_y + 1), f_text, HORIZONTAL_ALIGNMENT_LEFT, -1, f_size, r_col)
+		draw_rect(Rect2(24, float_y - 12, badge_w, 20), Color(0.04, 0.08, 0.14, 0.82 * f_alpha))
+		draw_rect(Rect2(24, float_y - 12, badge_w, 20), r_col * Color(1, 1, 1, 0.75 * f_alpha), false, 1.4)
+		draw_string(ThemeDB.fallback_font, Vector2(30, float_y + 2), f_text, HORIZONTAL_ALIGNMENT_LEFT, -1, f_size, r_col)

@@ -265,6 +265,13 @@ func toggle_build_mode() -> void:
 
 func open_tech_tree_modal() -> void:
 	if not tech_tree_modal: return
+	# スマホ縦持ち・横持ちレスポンシブ列数調整
+	var grid = tech_tree_modal.find_child("TechTreeGrid", true, false)
+	if grid:
+		var vp = get_viewport()
+		if vp:
+			var vp_size = vp.get_visible_rect().size
+			grid.columns = 1 if vp_size.x < 720.0 else 2
 	# 所持資源ラベルの更新
 	var res_box = tech_tree_modal.find_child("TechTreeResBar", true, false)
 	if res_box:
