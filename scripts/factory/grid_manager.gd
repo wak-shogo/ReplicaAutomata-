@@ -1715,11 +1715,14 @@ func _draw() -> void:
 	for s in build_sparks:
 		draw_circle(s["pos"], 2.0, Color(3.0, 2.2, 0.5))
 
-	# 8. 実体コンベアアイテム
+	# 8. 実体コンベアアイテム (HDR Glow物流パルス)
 	for item in conveyor_items:
 		var ipos = surface_pos_at(item["angle_off"], 6.0)
-		draw_rect(Rect2(ipos - Vector2(3, 3), Vector2(6, 6)), item["color"])
-		draw_rect(Rect2(ipos - Vector2(4, 4), Vector2(8, 8)), item["color"] * Color(1.5, 1.5, 1.5, 0.4), false, 1.0)
+		var icol: Color = item["color"]
+		# 外側発光オーラ (遠目からでも鮮明に物流の流れが見える)
+		draw_circle(ipos, 6.0, icol * Color(1.0, 1.0, 1.0, 0.35))
+		draw_rect(Rect2(ipos - Vector2(3.5, 3.5), Vector2(7, 7)), icol * Color(1.5, 1.5, 1.5))
+		draw_rect(Rect2(ipos - Vector2(1.5, 1.5), Vector2(3, 3)), Color(2.5, 2.5, 2.5, 0.9))
 
 	# 9. タレットレーザー
 	for tl in turret_lasers:
