@@ -1091,13 +1091,15 @@ func _on_nav_overlay_draw() -> void:
 	var half_h = (vp_size.y * 0.5) / zoom.y
 	var screen_center = vp_size * 0.5
 
-	# ナビ対象天体リスト (文字化け防止・ASCII識別子)
+	# ナビ対象天体リスト (公転動的座標対応・ASCII識別子)
+	var h_pos = grid_manager.HOME_CENTER if grid_manager else Vector2(800.0, 1070.0)
+	var s_pos = grid_manager.SUN_POS if grid_manager else Vector2(800.0, -850.0)
 	var targets: Array[Dictionary] = [
-		{"name": "HOME", "pos": Vector2(800.0, 1070.0), "col": Color(0.2, 0.8, 1.0), "icon": "[HOME]"},
-		{"name": "SUN", "pos": Vector2(800.0, -850.0), "col": Color(1.0, 0.7, 0.1), "icon": "[SUN]"},
-		{"name": "SINGULARITY", "pos": Vector2(2300.0, -350.0), "col": Color(0.8, 0.3, 1.0), "icon": "[HOLE]"},
-		{"name": "PULSAR", "pos": Vector2(-700.0, -350.0), "col": Color(0.1, 1.0, 0.8), "icon": "[PULSAR]"},
-		{"name": "BOSS CORE", "pos": Vector2(1380.0, 150.0), "col": Color(1.0, 0.2, 0.2), "icon": "[BOSS]"}
+		{"name": "HOME", "pos": h_pos, "col": Color(0.2, 0.8, 1.0), "icon": "[HOME]"},
+		{"name": "SUN", "pos": s_pos, "col": Color(1.0, 0.7, 0.1), "icon": "[SUN]"},
+		{"name": "SINGULARITY", "pos": s_pos + Vector2(3800.0, -1800.0), "col": Color(0.8, 0.3, 1.0), "icon": "[HOLE]"},
+		{"name": "PULSAR", "pos": s_pos + Vector2(-3600.0, -1400.0), "col": Color(0.1, 1.0, 0.8), "icon": "[PULSAR]"},
+		{"name": "BOSS CORE", "pos": s_pos + Vector2(3800.0, 200.0), "col": Color(1.0, 0.2, 0.2), "icon": "[BOSS]"}
 	]
 	
 	if grid_manager and not grid_manager.moon_body.is_empty():

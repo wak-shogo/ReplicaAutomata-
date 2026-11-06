@@ -35,12 +35,15 @@ var player_sheet: Texture2D
 var drone_sheet: Texture2D
 
 func _ready() -> void:
-	# 母星の地表付近からスタート
-	position = Vector2(780.0, 520.0)
+	grid_manager = get_parent().get_node_or_null("GridManager")
+	# 母星の地表（北極付近）から安全・確実にスタート
+	if grid_manager and grid_manager.has_method("surface_pos_at"):
+		position = grid_manager.surface_pos_at(0.0, 16.0)
+	else:
+		position = Vector2(800.0, 634.0)
 	velocity = Vector2(0.0, 0.0)
 	player_sheet = load("res://assets/sprites/player_core_sheet.png")
 	drone_sheet = load("res://assets/sprites/fabricator_drone_sheet.png")
-	grid_manager = get_parent().get_node_or_null("GridManager")
 	GameState.drone_attached.connect(_on_drone_attached)
 
 func _on_drone_attached(_count: int) -> void:
@@ -70,6 +73,9 @@ func _physics_process(delta: float) -> void:
 		velocity = Vector2.ZERO
 		is_mining = false
 		thrusting_dir = Vector2.ZERO
+		# 休眠中も母星の公転に追従
+		if grid_manager and grid_manager.get("home_delta_pos"):
+			global_position += grid_manager.home_delta_pos
 		queue_redraw()
 		return
 
@@ -103,7 +109,7 @@ func _physics_process(delta: float) -> void:
 		var g_acc: Vector2 = current_orbit_info["acc"]
 		var alt: float = current_orbit_info["altitude"]
 		
-		if alt > 8.0:
+		if alt > 12.0:
 			# 宇宙空間：完全な等速直線運動（無抵抗慣性）＆万有引力軌道運動 + スラスター推力 + 手動ブレーキ
 			var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
 			is_inertial_braking = is_brake_key
@@ -121,15 +127,61 @@ func _physics_process(delta: float) -> void:
 		else:
 			is_inertial_braking = false
 			thrusting_dir = input_vec.normalized()
-			# 地表・地下：地殻ホバリング制御で軽快に採掘移動
+			# 地表付近：地殻ホバリング制御
 			if input_vec.length_squared() > 0.01:
 				velocity = velocity.lerp(input_vec.normalized() * 240.0, delta * 8.0)
 			else:
-				velocity = velocity.lerp(g_acc * 0.15, delta * 6.0)
+				velocity = velocity.lerp(Vector2.ZERO, delta * 8.0)
 	else:
 		velocity = input_vec.normalized() * 240.0
 		
 	move_and_slide()
+
+	# ========================================================
+	# 全天体共通：地表めり込み完全防止 ＆ 接地力学 (Surface Clamping)
+	# ========================================================
+	if grid_manager and not current_orbit_info.is_empty():
+		var prim = current_orbit_info["primary"]
+		var prim_pos: Vector2 = prim.get("pos", grid_manager.HOME_CENTER)
+		var prim_rad: float = prim.get("radius", 420.0)
+		var prim_kind: String = prim.get("kind", "")
+		
+		# 機体の物理半径 (16px)
+		var r_ship: float = 16.0
+		var min_radius: float = prim_rad + r_ship
+		var to_ship: Vector2 = global_position - prim_pos
+		var cur_r: float = to_ship.length()
+		
+		if cur_r > 0.001:
+			var normal = to_ship / cur_r
+			# 地表より内側にめり込んでいる場合
+			if cur_r < min_radius:
+				# 1. 物理位置を地表面に完全ハードクランプ (位置押し出し)
+				global_position = prim_pos + normal * min_radius
+				
+				# 2. 地面に向かう法線速度成分をゼロ化 (地面に衝突して停止)
+				var v_in = velocity.dot(normal)
+				if v_in < -40.0:
+					AudioSynth.play_synth("click")
+					var mn = get_parent()
+					if mn and mn.has_method("shake_camera"):
+						mn.shake_camera(clampf(abs(v_in) * 0.02, 1.0, 5.0), 0.15)
+				if v_in < 0.0:
+					velocity -= normal * v_in
+				
+				# 3. 接地中の入力制御: 水平移動と上空への離陸
+				var tangent = Vector2(-normal.y, normal.x)
+				var t_input = input_vec.dot(tangent)
+				var up_input = maxf(0.0, input_vec.dot(normal))
+				if input_vec.length_squared() > 0.01:
+					var target_v = (tangent * t_input * 240.0) + (normal * up_input * 320.0)
+					velocity = velocity.lerp(target_v, delta * 12.0)
+				else:
+					velocity = velocity.move_toward(Vector2.ZERO, 500.0 * delta)
+
+		# 4. 母星の公転運動に追従 (公転参照系)
+		if prim_kind == "home" and cur_r < prim_rad * 3.5:
+			global_position += grid_manager.home_delta_pos
 
 	# MOVEフェーズでの移動距離検知 ＆ 地質センサー波発信
 	if GameState.story_phase == GameState.StoryPhase.MOVE:

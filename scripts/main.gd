@@ -527,8 +527,7 @@ func _run_test_phase_8() -> void:
 func _run_test_phase_9() -> void:
 	print("TEST PHASE 9: BLACK HOLE GARGANTUA & SWARM HARVESTING")
 	if player and grid_manager:
-		# ブラックホールの近傍へカメラ移動
-		var bh_pos = Vector2(2300.0, -350.0)
+		var bh_pos = grid_manager.SUN_POS + Vector2(3800.0, -1800.0)
 		player.global_position = bh_pos + Vector2(-150.0, 40.0)
 		player.is_mining = true
 		player.mining_target = bh_pos
@@ -544,7 +543,62 @@ func _run_test_phase_9() -> void:
 
 	get_tree().create_timer(0.6).timeout.connect(func():
 		_save_test_screen("docs/art/test_09_blackhole_singularity.png")
-		print(">>> ALL CELESTIAL & BLUEPRINT TESTS FINISHED SUCCESSFULLY! <<<")
+		_run_test_phase_10()
+	)
+
+func _run_test_phase_10() -> void:
+	print("TEST PHASE 10: SURFACE COLLISION & CLAMPING TEST (NO PENETRATION)")
+	# プレイヤーを母星の地表に戻し、下向き最大推力（地面へ突進）をシミュレート
+	if player and grid_manager:
+		player.is_mining = false
+		player.global_position = grid_manager.HOME_CENTER + Vector2(0, -grid_manager.HOME_RADIUS - 16.0)
+		player.velocity = Vector2(0, 300.0) # 地面へ下向き突進
+		is_following_player = true
+		if camera:
+			camera.global_position = player.global_position
+			target_zoom = Vector2(1.3, 1.3)
+			camera.zoom = target_zoom
+
+	get_tree().create_timer(0.5).timeout.connect(func():
+		# 0.5秒激突後も、母星中心からの距離が HOME_RADIUS + 16.0 未満にめり込んでいないことを検証
+		if player and grid_manager:
+			var cur_dist = (player.global_position - grid_manager.HOME_CENTER).length()
+			var min_dist = grid_manager.HOME_RADIUS + 15.9
+			var is_clamped = (cur_dist >= min_dist)
+			print("ASSERTION: Surface clamping check -> cur_dist: %.2f, min_dist: %.2f, RESULT: %s" % [cur_dist, min_dist, "PASSED" if is_clamped else "FAILED"])
+			assert(is_clamped, "CRITICAL ERROR: Player penetrated inside planet surface!")
+		_save_test_screen("docs/art/test_10_surface_clamping.png")
+		_run_test_phase_11()
+	)
+
+func _run_test_phase_11() -> void:
+	print("TEST PHASE 11: CELESTIAL SCALE HIERARCHY (SUN >> PLANETS)")
+	if grid_manager:
+		print("ASSERTION: SUN_RADIUS: %.1f vs HOME_RADIUS: %.1f (Ratio: %.2fx)" % [grid_manager.SUN_RADIUS, grid_manager.HOME_RADIUS, grid_manager.SUN_RADIUS / grid_manager.HOME_RADIUS])
+		assert(grid_manager.SUN_RADIUS > grid_manager.HOME_RADIUS * 2.0, "CRITICAL ERROR: Sun is not significantly larger than home planet!")
+	
+	# 太陽系マクロ視点で巨大太陽と公転天体の全貌を撮影
+	toggle_map_view()
+	if camera:
+		camera.global_position = grid_manager.SUN_POS if grid_manager else Vector2(800, -850)
+		target_zoom = Vector2(0.22, 0.22)
+		camera.zoom = target_zoom
+
+	get_tree().create_timer(0.6).timeout.connect(func():
+		_save_test_screen("docs/art/test_11_solar_scale_hierarchy.png")
+		_run_test_phase_12()
+	)
+
+func _run_test_phase_12() -> void:
+	print("TEST PHASE 12: PLANETARY REVOLUTION AROUND SUN VERIFICATION")
+	var initial_home_pos = grid_manager.HOME_CENTER if grid_manager else Vector2.ZERO
+	get_tree().create_timer(0.6).timeout.connect(func():
+		var final_home_pos = grid_manager.HOME_CENTER if grid_manager else Vector2.ZERO
+		var moved_dist = initial_home_pos.distance_to(final_home_pos)
+		print("ASSERTION: Home planet orbital movement in 0.6s -> %.2f px" % moved_dist)
+		assert(moved_dist > 0.001, "CRITICAL ERROR: Home planet is static and not revolving around the sun!")
+		_save_test_screen("docs/art/test_12_planetary_orbit.png")
+		print(">>> ALL 12 CRITICAL & CELESTIAL REGRESSION TESTS PASSED 100%! <<<")
 		get_tree().quit(0)
 	)
 
