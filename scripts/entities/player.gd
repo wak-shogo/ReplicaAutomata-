@@ -31,6 +31,7 @@ var drone_rot_angle: float = 0.0
 var anim_time: float = 0.0
 var is_reentry: bool = false
 var reentry_intensity: float = 0.0
+var is_warp_jumping: bool = false
 var grid_manager: Node2D = null
 var current_orbit_info: Dictionary = {}
 
@@ -260,6 +261,18 @@ func _physics_process(delta: float) -> void:
 				var mn = get_parent()
 				if mn and mn.has_method("shake_camera"):
 					mn.shake_camera(2.5, 0.08)
+
+		# 8. 星間超大型レールガン・ワープゲート突入 ＆ 恒星間跳躍エンディング
+		if GameState.megastructures.get("warpgate", {}).get("built", false):
+			var wg_pos = grid_manager.SUN_POS + Vector2(9800.0, 3200.0)
+			if global_position.distance_to(wg_pos) < 120.0 and not is_warp_jumping:
+				is_warp_jumping = true
+				AudioSynth.play_synth("victory")
+				velocity = Vector2(1.0, 0.35).normalized() * 2500.0
+				GameState.add_log("★ HYPERDRIVE ENGAGED: INTERSTELLAR EXPEDITION INITIATED ★")
+				var hud = get_parent().get_node_or_null("HUD")
+				if hud and hud.has_method("_trigger_milestone_banner"):
+					hud._trigger_milestone_banner("★ VICTORY: STELLAR ACCELERATOR LAUNCH ★")
 
 		# リアルタイム天体音響・スラスターアンビエント合成
 		var sun_proximity = clampf((sun_r * 2.5 - dist_sun) / (sun_r * 1.8), 0.0, 1.0)
