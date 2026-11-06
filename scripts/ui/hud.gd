@@ -956,9 +956,9 @@ func build_minimal_ui() -> void:
 	boot_card.anchor_top = 0.5
 	boot_card.anchor_bottom = 0.5
 	boot_card.offset_left = -220.0
-	boot_card.offset_top = -80.0
+	boot_card.offset_top = -210.0
 	boot_card.offset_right = 220.0
-	boot_card.offset_bottom = 80.0
+	boot_card.offset_bottom = -50.0
 	boot_card.mouse_filter = Control.MOUSE_FILTER_PASS
 
 	var sb_boot = StyleBoxFlat.new()
@@ -1007,8 +1007,15 @@ func build_minimal_ui() -> void:
 	b_hint.text = "Controls: WASD / Joystick to Move | Pure Newton Inertia"
 	b_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b_hint.add_theme_font_size_override("font_size", 10)
-	b_hint.add_theme_color_override("font_color", Color(0.5, 0.7, 0.9, 0.65))
+	b_hint.add_theme_color_override("font_color", Color(0.8, 0.95, 1.0, 0.95))
 	boot_vbox.add_child(b_hint)
+
+	var b_pointer = Label.new()
+	b_pointer.text = "▼ DORMANT PROBE ON SURFACE BELOW ▼"
+	b_pointer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b_pointer.add_theme_font_size_override("font_size", 10)
+	b_pointer.add_theme_color_override("font_color", Color(0.2, 2.2, 2.8, 0.9))
+	boot_vbox.add_child(b_pointer)
 
 	# ========================================================
 	# 8. マイルストーン達成バナー (MILESTONE BANNER)
@@ -1019,8 +1026,8 @@ func build_minimal_ui() -> void:
 	milestone_panel.anchor_right = 0.5
 	milestone_panel.offset_left = -220.0
 	milestone_panel.offset_right = 220.0
-	milestone_panel.offset_top = 75.0
-	milestone_panel.offset_bottom = 135.0
+	milestone_panel.offset_top = 88.0
+	milestone_panel.offset_bottom = 148.0
 	var sb_mile = StyleBoxFlat.new()
 	sb_mile.bg_color = Color(0.04, 0.08, 0.16, 0.92)
 	sb_mile.border_color = Color(1.2, 0.8, 0.2, 0.85)
