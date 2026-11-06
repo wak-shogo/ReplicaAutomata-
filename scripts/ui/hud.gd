@@ -73,6 +73,10 @@ var btn_touch_mine: Button
 var btn_touch_brake: Button
 var btn_touch_build: Button
 var btn_touch_drone: Button
+
+var btn_doctrine_cluster: Array[Button] = []
+var btn_cam_cluster: Array[Button] = []
+var btn_sys_cluster: Array[Button] = []
 var btn_touch_map: Button
 var build_bar_panel: PanelContainer
 
@@ -194,6 +198,14 @@ func _process(delta: float) -> void:
 			btn_touch_drone.modulate = Color(1.0 + pulse * 1.5, 2.0 + pulse * 1.5, 1.5 + pulse * 1.5)
 		else:
 			btn_touch_drone.modulate = Color.WHITE
+
+	# 採掘機建造フェーズでのBUILDボタンパルス発光
+	if btn_touch_build and btn_touch_build.visible:
+		if GameState.story_phase == GameState.StoryPhase.BUILD_MINER and not (grid_manager and grid_manager.is_build_mode):
+			var bld_pulse = (sin(hud_anim_time * 8.0) * 0.5 + 0.5)
+			btn_touch_build.modulate = Color(1.0 + bld_pulse * 1.5, 2.0 + bld_pulse * 1.5, 2.5 + bld_pulse * 1.5)
+		else:
+			btn_touch_build.modulate = Color.WHITE
 
 	# 休眠探査機ガイダンスのパルス点滅
 	if boot_guide_overlay and boot_guide_overlay.visible and boot_prompt_lbl:
@@ -366,6 +378,7 @@ func build_minimal_ui() -> void:
 	btn_h.add_theme_font_size_override("font_size", 10)
 	btn_h.pressed.connect(func(): GameState.set_fleet_doctrine("HARVEST"))
 	right_hbox.add_child(btn_h)
+	btn_doctrine_cluster.append(btn_h)
 
 	var btn_m = Button.new()
 	btn_m.text = "M"
@@ -374,6 +387,7 @@ func build_minimal_ui() -> void:
 	btn_m.add_theme_font_size_override("font_size", 10)
 	btn_m.pressed.connect(func(): GameState.set_fleet_doctrine("MULTIPLY"))
 	right_hbox.add_child(btn_m)
+	btn_doctrine_cluster.append(btn_m)
 
 	var btn_a = Button.new()
 	btn_a.text = "A"
@@ -385,6 +399,7 @@ func build_minimal_ui() -> void:
 	btn_a.add_theme_color_override("font_color", Color(2.5, 0.6, 0.6))
 	btn_a.pressed.connect(func(): GameState.set_fleet_doctrine("ASSAULT"))
 	right_hbox.add_child(btn_a)
+	btn_doctrine_cluster.append(btn_a)
 
 	var btn_snap = Button.new()
 	btn_snap.text = "CORE"
@@ -393,6 +408,7 @@ func build_minimal_ui() -> void:
 	btn_snap.add_theme_font_size_override("font_size", 9)
 	btn_snap.pressed.connect(func(): if main_node and main_node.has_method("snap_camera_to_player"): main_node.snap_camera_to_player())
 	right_hbox.add_child(btn_snap)
+	btn_cam_cluster.append(btn_snap)
 
 	var btn_map = Button.new()
 	btn_map.text = "MAP"
@@ -401,6 +417,7 @@ func build_minimal_ui() -> void:
 	btn_map.add_theme_font_size_override("font_size", 9)
 	btn_map.pressed.connect(func(): if main_node and main_node.has_method("toggle_map_view"): main_node.toggle_map_view())
 	right_hbox.add_child(btn_map)
+	btn_cam_cluster.append(btn_map)
 
 	var btn_save = Button.new()
 	btn_save.text = "SAVE"
@@ -409,6 +426,7 @@ func build_minimal_ui() -> void:
 	btn_save.add_theme_font_size_override("font_size", 9)
 	btn_save.pressed.connect(func(): SaveManager.save_game(false))
 	right_hbox.add_child(btn_save)
+	btn_sys_cluster.append(btn_save)
 
 	var btn_mute = Button.new()
 	btn_mute.text = "SND"
@@ -421,6 +439,7 @@ func build_minimal_ui() -> void:
 		btn_mute.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4) if muted else Color(0.2, 0.9, 1.0))
 	)
 	right_hbox.add_child(btn_mute)
+	btn_sys_cluster.append(btn_mute)
 
 	var btn_rst = Button.new()
 	btn_rst.text = "RST"
@@ -432,6 +451,7 @@ func build_minimal_ui() -> void:
 	btn_rst.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
 	btn_rst.pressed.connect(func(): SaveManager.reset_save())
 	right_hbox.add_child(btn_rst)
+	btn_sys_cluster.append(btn_rst)
 
 	# 3行目: 目標導線バッジ (中央配置)
 	var top_row3 = HBoxContainer.new()
@@ -983,14 +1003,17 @@ func _update_progressive_ui(phase: int) -> void:
 	# 1. MOVE 以降: 上部バーとジョイスティック開放
 	if top_bar_node: top_bar_node.visible = true
 	if vstick_base: vstick_base.visible = true
-	if zoom_cluster_node: zoom_cluster_node.visible = (phase >= GameState.StoryPhase.SPACE)
+	if zoom_cluster_node: zoom_cluster_node.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
 	if nav_overlay: nav_overlay.visible = (phase >= GameState.StoryPhase.SPACE)
 	if action_cluster_node: action_cluster_node.visible = (phase >= GameState.StoryPhase.MINE)
 	if build_bar_panel: build_bar_panel.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
 
-	# ステータス行 (HP, Shield, Energy) と 右上ボタン (H, M, A, Core, Map, Save)
-	if stat_row_node: stat_row_node.visible = (phase >= GameState.StoryPhase.FACTORY)
-	if right_top_buttons: right_top_buttons.visible = (phase >= GameState.StoryPhase.SPACE)
+	# ステータス行 (HP, Shield, Energy) と 右上ボタンの細分化表示
+	if stat_row_node: stat_row_node.visible = (phase >= GameState.StoryPhase.MOVE)
+	if right_top_buttons: right_top_buttons.visible = true
+	for b in btn_doctrine_cluster: b.visible = (phase >= GameState.StoryPhase.SPACE)
+	for b in btn_cam_cluster: b.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
+	for b in btn_sys_cluster: b.visible = (phase >= GameState.StoryPhase.MOVE)
 
 	# 資源バッジの段階的表示
 	for r_id in res_badge_containers.keys():

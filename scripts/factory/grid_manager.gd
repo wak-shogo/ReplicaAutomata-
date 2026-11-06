@@ -1396,6 +1396,9 @@ func _draw() -> void:
 				# 旋回警戒スキャンアイ (Red Sentinel Eye)
 				var eye_off = Vector2(cos(anim_time * 3.5), sin(anim_time * 3.5)) * 5.0
 				draw_circle(bpos + eye_off, 1.8, Color(1.0, 0.2, 0.2, 0.95))
+				# 防衛ドームリング表示 (敵襲中 または タレット選択時)
+				if GameState.is_raid_active or selected_tool == "turret":
+					draw_arc(bpos, 650.0, 0, TAU, 40, Color(0.1, 0.8, 1.0, 0.18), 1.2)
 			"solar": 
 				if tex_solar: draw_texture(tex_solar, bpos - Vector2(22, 12))
 				# 蓄電パネルインジケータ (昼: Cyan / 夜: Amber)
@@ -1597,3 +1600,6 @@ func _draw_placement_preview() -> void:
 	draw_line(mouse_pos, snap_pos, Color(0.0, 1.8, 2.5, 0.4), 1.5)
 	draw_arc(snap_pos, 20.0, 0, TAU, 16, ghost_col, 2.0)
 	draw_circle(snap_pos, 5.0, ghost_col)
+	if selected_tool == "turret":
+		draw_arc(snap_pos, 650.0, 0, TAU, 48, Color(0.1, 0.8, 1.0, 0.25), 1.5)
+		draw_arc(snap_pos, 650.0, anim_time * 2.0, anim_time * 2.0 + PI * 0.5, 24, Color(0.2, 1.0, 0.5, 0.5), 2.0)

@@ -785,6 +785,13 @@ func _draw() -> void:
 	draw_rect(Rect2(-18, -34, 36 * hp_r, 3), Color(0.2, 2.0, 0.5))
 	draw_rect(Rect2(-18, -30, 36 * sh_r, 2), Color(0.0, 1.8, 2.8))
 
+	# 7.5 飛行テレメトリ表示 (Altitude & Speed HUD)
+	var alt = current_orbit_info.get("altitude", 0.0)
+	if alt > 30.0 and GameState.story_phase >= GameState.StoryPhase.MOVE:
+		var spd = velocity.length()
+		var telem_txt = "ALT: %.0f | SPD: %.0f" % [alt, spd]
+		draw_string(ThemeDB.fallback_font, Vector2(-45, 36), telem_txt, HORIZONTAL_ALIGNMENT_CENTER, 90, 8, Color(0.2, 0.8, 1.0, 0.75))
+
 	# 8. 自己複製達成ポップアップ (Self-Replication Feedback)
 	if replicate_text_timer > 0.0:
 		var txt_alpha = clampf(replicate_text_timer / 1.0, 0.0, 1.0)
