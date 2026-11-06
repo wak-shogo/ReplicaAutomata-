@@ -41,6 +41,8 @@ func save_game(is_auto: bool = false) -> bool:
 			"vx": player.velocity.x if player else 0.0,
 			"vy": player.velocity.y if player else 0.0
 		},
+		"story_phase": GameState.story_phase,
+		"unlocked_tools": GameState.unlocked_tools.duplicate(),
 		"resources": GameState.resources.duplicate(),
 		"items": GameState.items.duplicate(),
 		"fleet_count": GameState.fleet_count,
@@ -103,6 +105,14 @@ func load_game() -> bool:
 	if player and data.has("player"):
 		player.global_position = Vector2(data["player"]["x"], data["player"]["y"])
 		player.velocity = Vector2(data["player"]["vx"], data["player"]["vy"])
+
+	# ストーリーフェーズ ＆ 技術ツリー復元
+	if data.has("story_phase"):
+		GameState.set_story_phase(int(data["story_phase"]))
+	if data.has("unlocked_tools"):
+		for t_name in data["unlocked_tools"].keys():
+			if data["unlocked_tools"][t_name]:
+				GameState.unlock_tool(t_name)
 		
 	# リソース＆アイテム復元
 	if data.has("resources"):
@@ -153,3 +163,21 @@ func load_game() -> bool:
 	GameState.add_log("QUICK LOAD COMPLETED [F9] -> GAME RESTORED")
 	print("[SaveManager] Game loaded successfully")
 	return true
+
+func reset_save() -> void:
+	if FileAccess.file_exists(SAVE_PATH):
+		DirAccess.remove_absolute(SAVE_PATH)
+	GameState.add_log("SYSTEM RESET: SAVE DATA PURGED FOR NEW EXPEDITION")
+	AudioSynth.play_synth("alert")
+	GameState.story_phase = GameState.StoryPhase.DORMANT
+	GameState.attached_drones = 0
+	GameState.quest_index = 0
+	GameState.fleet_count = 0
+	GameState.hostile_core_health = GameState.hostile_core_max_health
+	for t in GameState.unlocked_tools.keys():
+		GameState.unlocked_tools[t] = false
+	for r in GameState.resources.keys():
+		GameState.resources[r] = 0
+	for it in GameState.items.keys():
+		GameState.items[it] = 0
+	get_tree().reload_current_scene()

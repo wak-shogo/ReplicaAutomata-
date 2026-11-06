@@ -144,41 +144,9 @@ func _ready() -> void:
 
 func init_starter_base() -> void:
 	placed_buildings.clear()
-	# 初期スターター
-	placed_buildings.append({
-		"type": "miner",
-		"angle_off": -0.52,
-		"alt": 20.0,
-		"target_ore": "Fe",
-		"timer": 0.0
-	})
-	placed_buildings.append({
-		"type": "smelter",
-		"angle_off": -0.38,
-		"alt": 32.0,
-		"target_ore": "Fe",
-		"timer": 0.0
-	})
-	placed_buildings.append({
-		"type": "turret",
-		"angle_off": -0.22,
-		"alt": 20.0,
-		"timer": 0.0
-	})
-	placed_buildings.append({
-		"type": "solar",
-		"angle_off": -0.10,
-		"alt": 16.0,
-		"timer": 0.0
-	})
-	for i in range(8):
-		var ba = lerpf(-0.52, -0.38, float(i) / 7.0)
-		placed_buildings.append({
-			"type": "belt",
-			"angle_off": ba,
-			"alt": 4.0,
-			"timer": 0.0
-		})
+	# 完全ゼロベース：初期状態の大地には人工物は一切存在しない。
+	# プレイヤー探査機自身が手動採掘し、自己複製ドローンを産み出し、
+	# ゼロから施設を建造して文明を拓く。
 
 func surface_pos_at(angle_off: float, altitude: float = 0.0) -> Vector2:
 	var a = -PI * 0.5 + angle_off
@@ -566,11 +534,22 @@ func get_mining_info_at(target_p: Vector2) -> Dictionary:
 # ブループリント配置 ＆ コンベアドラッグ入力
 # ========================================================
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
+	if event is InputEventMouseButton or event is InputEventScreenTouch:
 		last_input_was_gamepad = false
 		var mouse_pos = get_global_mouse_position()
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
+		var is_pressed = event.pressed
+		var is_left_or_touch = true
+		if event is InputEventMouseButton:
+			is_left_or_touch = (event.button_index == MOUSE_BUTTON_LEFT)
+			if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+				if selected_tool != "none":
+					selected_tool = "none"
+					is_build_mode = false
+					is_drag_placing = false
+					AudioSynth.play_synth("click")
+				return
+		if is_left_or_touch:
+			if is_pressed:
 				if selected_tool != "none":
 					is_drag_placing = true
 					last_placed_angle = -999.0
@@ -579,16 +558,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				is_drag_placing = false
 				last_placed_angle = -999.0
 				
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			if selected_tool != "none":
-				selected_tool = "none"
-				is_build_mode = false
-				is_drag_placing = false
-				AudioSynth.play_synth("click")
-				
-	elif event is InputEventMouseMotion and is_drag_placing:
+	elif (event is InputEventMouseMotion or event is InputEventScreenDrag) and is_drag_placing:
 		last_input_was_gamepad = false
-		# コンベア等の連続ドラッグ敷設
+		# コンベア等の連続ドラッグ敷設 (スマホスワイプ・PCドラッグ両対応)
 		if selected_tool == "belt":
 			var mouse_pos = get_global_mouse_position()
 			var ang_off = angle_off_from_pos(mouse_pos)
@@ -768,17 +740,30 @@ func _update_construction_drones(delta: float) -> void:
 	var player = get_parent().get_node_or_null("Player")
 	var player_pos = player.global_position if player else Vector2(800, 520)
 	
-	# 利用可能なドローン数 (最低2機、合体ドローン数に応じて最大8機)
-	var target_drone_count = maxi(2, mini(8, GameState.attached_drones + 2))
+	# 利用可能な自律建築ドローン数 (自己複製・合体させたドローン数に完全連動！)
+	# ※ 最初は何もない単機探査機のため0機！ [DRONE]で自己複製するごとに建築隊が増加する
+	var target_drone_count = mini(8, GameState.attached_drones)
 	while construction_drones.size() < target_drone_count:
 		construction_drones.append({
-			"pos": player_pos + Vector2(randf_range(-20, 20), randf_range(-20, 20)),
+			"pos": player_pos + Vector2(randf_range(-10, 10), randf_range(-10, 10)),
 			"vel": Vector2.ZERO,
 			"target_bp_id": -1,
 			"state": "idle"
 		})
 	while construction_drones.size() > target_drone_count:
 		construction_drones.pop_back()
+		
+	# ドローン未保有時：自機自身の手動ナノ溶接フェイルセーフ (初期サバイバル建造)
+	if construction_drones.is_empty() and player and not blueprints.is_empty():
+		for bp in blueprints:
+			var bpos = surface_pos_at(bp["angle_off"], bp["alt"])
+			var d_player = player_pos.distance_to(bpos)
+			if d_player < 85.0:
+				bp["progress"] += delta * 0.55
+				if bp["progress"] >= 1.0:
+					_finish_blueprint(bp)
+					break
+		return
 		
 	for drone in construction_drones:
 		# ターゲットのブループリントを割り当て
@@ -892,20 +877,51 @@ func _update_placed_buildings(delta: float) -> void:
 					var ore = b.get("target_ore", "Fe")
 					if GameState.vein_reserves.get(ore, 0) > 0:
 						GameState.vein_reserves[ore] -= 2
-						GameState.add_resource(ore, 2)
-						_spawn_conveyor_item(ore, b["angle_off"])
+						
+						# 隣接コンベアベルトの接続判定
+						var has_adjacent_belt = false
+						for other in placed_buildings:
+							if other["type"] == "belt" and abs(other["angle_off"] - b["angle_off"]) < 0.08:
+								has_adjacent_belt = true
+								break
+								
+						if has_adjacent_belt:
+							# ベルトへ自動排出
+							_spawn_conveyor_item(ore, b["angle_off"])
+							GameState.add_resource(ore, 2)
+						else:
+							# ベルト未接続：内部ストレージに蓄積 (最大50個)
+							b["buffer"] = mini(50, b.get("buffer", 0) + 2)
+							
 					var bpos = surface_pos_at(b["angle_off"], b["alt"])
 					smoke_particles.append({"pos": bpos, "vel": (bpos - HOME_CENTER).normalized() * 32.0, "radius": 4.0, "life": 0.7, "max_life": 0.7})
+				
+				# プレイヤー接近時の手動回収フェイルセーフ
+				var miner_pos = surface_pos_at(b["angle_off"], b.get("alt", 20.0))
+				var player_obj = get_parent().get_node_or_null("Player")
+				if player_obj and b.get("buffer", 0) > 0:
+					if player_obj.global_position.distance_to(miner_pos) < 68.0:
+						var take_amount = b["buffer"]
+						b["buffer"] = 0
+						GameState.add_resource(b.get("target_ore", "Fe"), take_amount)
+						AudioSynth.play_synth("mine")
+						GameState.add_log("COLLECTED: +%d %s FROM MINER BUFFER" % [take_amount, b.get("target_ore", "Fe")])
 			"smelter":
 				if b["timer"] >= 2.2:
 					b["timer"] = 0.0
+					var crafted_any = false
 					if GameState.consume_resource("Fe", 2):
 						GameState.add_item("plate_fe", 1)
 						_spawn_conveyor_item("plate_fe", b["angle_off"])
+						crafted_any = true
 					if GameState.consume_resource("Cu", 2):
 						GameState.add_item("wire_cu", 2)
+						crafted_any = true
 					if GameState.consume_resource("Si", 2):
 						GameState.add_item("silicon_wafer", 1)
+						crafted_any = true
+					if crafted_any:
+						AudioSynth.play_synth("build")
 					var bpos = surface_pos_at(b["angle_off"], b["alt"] + 24.0)
 					smoke_particles.append({"pos": bpos, "vel": (bpos - HOME_CENTER).normalized() * 38.0 + Vector2(randf_range(-5, 5), 0), "radius": 5.0, "life": 1.2, "max_life": 1.2})
 			"assembler":
@@ -928,8 +944,11 @@ func _update_placed_buildings(delta: float) -> void:
 					_turret_scan_and_fire(b)
 
 func _update_power_grid() -> void:
-	var gen = 40.0
-	var con = 10.0
+	var gen = 0.0
+	var con = 0.0
+	# 自機内蔵リアクター（最低限のサバイバル電力）
+	if GameState.story_phase >= GameState.StoryPhase.MOVE:
+		gen += 15.0
 	if GameState.megastructures["dyson"]["built"]: gen += 99999.0
 	for b in placed_buildings:
 		match b["type"]:
@@ -942,7 +961,10 @@ func _update_power_grid() -> void:
 			"turret": con += 12.0
 	GameState.power_generated = gen
 	GameState.power_consumed = con
-	GameState.power_ratio = clampf(gen / maxf(1.0, con), 0.25, 1.0)
+	if con <= 0.0:
+		GameState.power_ratio = 1.0
+	else:
+		GameState.power_ratio = clampf(gen / con, 0.15, 1.0)
 	GameState.resources["Energy"] = GameState.power_ratio * 100.0
 
 func _spawn_conveyor_item(item_type: String, start_angle: float) -> void:
@@ -1296,19 +1318,41 @@ func _draw() -> void:
 		shadow_pts.append(HOME_CENTER + Vector2(cos(s_a), sin(s_a)) * (HOME_RADIUS + 2.0))
 	draw_colored_polygon(shadow_pts, Color(0.01, 0.02, 0.05, 0.42))
 
-	# 3. 地下鉱脈
+	# 3. 地下鉱脈 ＆ 地殻露頭ホログラム (Subsurface Ore Deposits & Surface Outcrops)
 	for vein in ore_veins:
 		var a = -PI * 0.5 + vein["angle_off"]
 		var radial = Vector2(cos(a), sin(a))
 		var vpos = HOME_CENTER + radial * vein["depth_r"]
 		var surf_p = HOME_CENTER + radial * (HOME_RADIUS - 12.0)
 		var rot = vein["angle_off"]
-		draw_line(surf_p, vpos, Color(0.35, 0.5, 0.68, 0.6), 3.0)
+		var v_col: Color = vein["color"]
 		var vname = vein["name"]
+		
+		# (1) 地殻浸透ボーリングライン
+		draw_line(surf_p, vpos, v_col * Color(1, 1, 1, 0.4), 2.5)
+		
+		# (2) 地下鉱床コア ＆ 脈動オーラ
+		var pulse = (sin(anim_time * 4.0 + float(vein["depth_r"]) * 0.05) * 0.5 + 0.5)
+		draw_circle(vpos, 16.0 + pulse * 4.0, v_col * Color(1, 1, 1, 0.25))
+		draw_arc(vpos, 22.0 + pulse * 6.0, 0, TAU, 24, v_col * Color(1.5, 1.5, 1.5, 0.5), 1.5)
+		
 		if tex_ores.has(vname) and tex_ores[vname]:
 			draw_sheet_frame_rotated(tex_ores[vname], 0, 1, vpos, rot)
 		var res_val = GameState.vein_reserves.get(vname, 0)
-		draw_string(ThemeDB.fallback_font, vpos + radial * 44.0 - Vector2(18, 0), "%s:%d" % [vname, res_val], HORIZONTAL_ALIGNMENT_CENTER, -1, 11, vein["color"])
+		draw_string(ThemeDB.fallback_font, vpos + radial * 44.0 - Vector2(18, 0), "%s:%d" % [vname, res_val], HORIZONTAL_ALIGNMENT_CENTER, -1, 11, v_col)
+		
+		# (3) 地表露頭マーカー (Surface Outcrop Marker)
+		draw_circle(surf_p, 5.0, v_col)
+		draw_arc(surf_p, 9.0 + pulse * 3.0, 0, TAU, 16, v_col * Color(1.5, 1.5, 1.5, 0.8), 1.5)
+		
+		# (4) 初回手動採掘ガイダンスビーコン (MINEフェーズ時のFe鉱脈ターゲット)
+		if GameState.story_phase == GameState.StoryPhase.MINE and vname == "Fe":
+			var guide_pulse = (sin(anim_time * 8.0) * 0.5 + 0.5)
+			var beacon_surf = HOME_CENTER + radial * (HOME_RADIUS + 28.0)
+			var beacon_tip = HOME_CENTER + radial * (HOME_RADIUS + 8.0)
+			draw_line(beacon_surf, beacon_tip, Color(0.2, 2.5, 3.0, 0.95), 3.5)
+			draw_arc(beacon_surf, 16.0 + guide_pulse * 6.0, 0, TAU, 24, Color(0.0, 2.8, 3.5, 0.85), 2.0)
+			draw_string(ThemeDB.fallback_font, beacon_surf + Vector2(-45, -18), "[ HOLD MINE ]", HORIZONTAL_ALIGNMENT_CENTER, -1, 12, Color(0.2, 2.8, 3.5))
 
 	# 4. 配置済み実体施設
 	var drill_frame = int(anim_time * 12.0) % 4
@@ -1316,18 +1360,59 @@ func _draw() -> void:
 	for b in placed_buildings:
 		var bpos = surface_pos_at(b["angle_off"], b.get("alt", 0.0))
 		var rot = b["angle_off"]
+		var is_power_short = (GameState.power_generated < GameState.power_consumed)
+		
 		match b["type"]:
-			"miner": draw_sheet_frame_rotated(tex_drill_sheet, drill_frame, 4, bpos, rot)
-			"smelter": draw_sheet_frame_rotated(tex_factory_sheet, fact_frame, 4, bpos, rot)
-			"assembler": draw_sheet_frame_rotated(tex_factory_sheet, (fact_frame + 2) % 4, 4, bpos, rot, Vector2(1.15, 1.15))
-			"mass_driver": draw_sheet_frame_rotated(tex_mass_driver_sheet, int(anim_time * 4.0) % 4, 4, bpos, rot)
-			"depot": draw_sheet_frame_rotated(tex_container, 0, 1, bpos, rot)
-			"turret": if tex_turret: draw_texture(tex_turret, bpos - Vector2(16, 16))
-			"solar": if tex_solar: draw_texture(tex_solar, bpos - Vector2(22, 12))
-			"geothermal": if tex_geothermal: draw_texture(tex_geothermal, bpos - Vector2(20, 24))
+			"miner": 
+				draw_sheet_frame_rotated(tex_drill_sheet, drill_frame, 4, bpos, rot)
+				# 稼働ステータスLED (Cyan Neon)
+				draw_circle(bpos + Vector2(0, -14), 2.2, Color(0.1, 0.95, 1.0, 0.95))
+				var buf = b.get("buffer", 0)
+				if buf > 0:
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-22, -28), "[%s: %d]" % [b.get("target_ore", "Fe"), buf], HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.2, 2.5, 1.2))
+				if is_power_short:
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -38), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
+			"smelter": 
+				draw_sheet_frame_rotated(tex_factory_sheet, fact_frame, 4, bpos, rot)
+				# 精錬炉の赤熱サーマルパルス (Furnace Thermal Glow)
+				var heat_pulse = (sin(anim_time * 8.0) * 0.5 + 0.5)
+				draw_circle(bpos, 7.0 + heat_pulse * 3.0, Color(2.8, 1.2, 0.1, 0.45 + heat_pulse * 0.35))
+				draw_circle(bpos, 3.5, Color(3.5, 2.5, 1.0, 0.9))
+				if is_power_short:
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -32), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
+			"assembler": 
+				draw_sheet_frame_rotated(tex_factory_sheet, (fact_frame + 2) % 4, 4, bpos, rot, Vector2(1.15, 1.15))
+				draw_circle(bpos + Vector2(0, -16), 2.5, Color(0.2, 1.0, 0.4, 0.95))
+				if is_power_short:
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -32), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
+			"mass_driver": 
+				draw_sheet_frame_rotated(tex_mass_driver_sheet, int(anim_time * 4.0) % 4, 4, bpos, rot)
+				draw_arc(bpos, 16.0, 0, TAU, 16, Color(0.2, 0.8, 1.0, 0.4 + 0.4 * sin(anim_time * 5.0)), 1.5)
+			"depot": 
+				draw_sheet_frame_rotated(tex_container, 0, 1, bpos, rot)
+				draw_circle(bpos + Vector2(0, -12), 2.0, Color(1.0, 0.85, 0.2, 0.9))
+			"turret": 
+				if tex_turret: draw_texture(tex_turret, bpos - Vector2(16, 16))
+				# 旋回警戒スキャンアイ (Red Sentinel Eye)
+				var eye_off = Vector2(cos(anim_time * 3.5), sin(anim_time * 3.5)) * 5.0
+				draw_circle(bpos + eye_off, 1.8, Color(1.0, 0.2, 0.2, 0.95))
+			"solar": 
+				if tex_solar: draw_texture(tex_solar, bpos - Vector2(22, 12))
+				# 蓄電パネルインジケータ (昼: Cyan / 夜: Amber)
+				var day_light = is_daylight_at(bpos)
+				var sol_col = Color(0.1, 0.9, 1.0, 0.85) if day_light else Color(1.0, 0.6, 0.1, 0.5)
+				draw_circle(bpos + Vector2(0, -10), 2.0, sol_col)
+			"geothermal": 
+				if tex_geothermal: draw_texture(tex_geothermal, bpos - Vector2(20, 24))
+				draw_circle(bpos + Vector2(0, -20), 2.5, Color(1.0, 0.3, 0.1, 0.8 + 0.2 * sin(anim_time * 6.0)))
 			"belt":
-				draw_circle(bpos, 5.0, Color(0.14, 0.22, 0.32, 1.0))
-				draw_circle(bpos, 3.0, Color(0.0, 1.8, 2.5, 0.95))
+				# コンベア基盤トラック ＆ 動的シェブロンパルス (>>>)
+				draw_circle(bpos, 6.0, Color(0.12, 0.18, 0.28, 1.0))
+				draw_circle(bpos, 4.0, Color(0.0, 1.8, 2.5, 0.95))
+				var chev_phase = fmod(anim_time * 4.0 + b["angle_off"] * 8.0, 1.0)
+				var chev_tangent = Vector2(-sin(-PI * 0.5 + rot), cos(-PI * 0.5 + rot))
+				var arrow_p = bpos + chev_tangent * (chev_phase * 10.0 - 5.0)
+				draw_circle(arrow_p, 2.0, Color(2.5, 2.5, 3.0, 0.9))
 
 	# 5. ブループリントホログラム (建設予定ゴースト) の描画
 	for bp in blueprints:
@@ -1444,7 +1529,7 @@ func _draw_mission_waypoint_beacon() -> void:
 	draw_line(beacon_p - Vector2(0, 10), beacon_p + Vector2(0, 10), b_col, 1.5)
 
 func _draw_megastructures() -> void:
-	# 5. メガストラクチャー (動的公転座標系完全追従)
+	# 5. メガストラクチャー (動的公転座標系完全追従 ＆ ホログラム建設進捗)
 	var ms_elev = GameState.megastructures["elevator"]
 	if ms_elev["built"] or ms_elev["progress"] > 0.0:
 		var ground_pos = surface_pos_at(0.0, 10.0)
@@ -1454,25 +1539,37 @@ func _draw_megastructures() -> void:
 		draw_line(ground_pos, cur_reach, Color(2.5, 2.5, 2.5, 1.0), 1.0)
 		if tex_ms_elevator:
 			draw_texture(tex_ms_elevator, cur_reach - Vector2(48, 80), Color(1, 1, 1, 0.5 + 0.5 * ms_elev["progress"]))
+		if not ms_elev["built"]:
+			# 建設中ホログラムフレーム＆進捗
+			draw_line(cur_reach, elev_pos, Color(0.1, 0.6, 0.9, 0.35), 1.5)
+			draw_string(ThemeDB.fallback_font, cur_reach + Vector2(25, -10), "ELEVATOR: %d%%" % int(ms_elev["progress"] * 100.0), HORIZONTAL_ALIGNMENT_LEFT, 120, 10, Color(0.2, 1.0, 0.9))
 
 	var ms_dyson = GameState.megastructures["dyson"]
 	if ms_dyson["built"] or ms_dyson["progress"] > 0.0:
 		var dyson_pos = SUN_POS + Vector2(0, -SUN_RADIUS - 200.0)
-		draw_arc(SUN_POS, SUN_RADIUS + 200.0, -PI * 0.4, PI * 0.4, 64, Color(0.2, 1.2, 2.5, 0.4 * ms_dyson["progress"]), 4.0)
+		var ring_span = PI * 0.4 * (ms_dyson["progress"] if not ms_dyson["built"] else 1.0)
+		draw_arc(SUN_POS, SUN_RADIUS + 200.0, -ring_span, ring_span, 64, Color(0.2, 1.2, 2.5, 0.7 * ms_dyson["progress"]), 4.0)
 		if tex_ms_dyson:
 			draw_texture(tex_ms_dyson, dyson_pos - Vector2(90, 55), Color(1, 1, 1, 0.5 + 0.5 * ms_dyson["progress"]))
+		if not ms_dyson["built"]:
+			draw_string(ThemeDB.fallback_font, dyson_pos + Vector2(-50, -25), "DYSON RING: %d%%" % int(ms_dyson["progress"] * 100.0), HORIZONTAL_ALIGNMENT_CENTER, 100, 10, Color(1.0, 0.9, 0.3))
 
 	var ms_cit = GameState.megastructures["citadel"]
 	if ms_cit["built"] or ms_cit["progress"] > 0.0:
 		var cit_pos = surface_pos_at(PI * 0.35, 480.0)
 		if tex_ms_citadel:
 			draw_texture(tex_ms_citadel, cit_pos - Vector2(64, 64), Color(1, 1, 1, 0.5 + 0.5 * ms_cit["progress"]))
+		if not ms_cit["built"]:
+			draw_arc(cit_pos, 75.0, 0, TAU, 24, Color(0.3, 0.8, 1.0, 0.4 * (0.6 + 0.4 * sin(anim_time * 4.0))), 1.5)
+			draw_string(ThemeDB.fallback_font, cit_pos + Vector2(-50, -45), "CITADEL: %d%%" % int(ms_cit["progress"] * 100.0), HORIZONTAL_ALIGNMENT_CENTER, 100, 10, Color(0.4, 0.9, 1.0))
 
 	var ms_wg = GameState.megastructures["warpgate"]
 	if ms_wg["built"] or ms_wg["progress"] > 0.0:
 		var wg_pos = SUN_POS + Vector2(9800.0, 3200.0)
 		if tex_ms_warpgate:
 			draw_texture(tex_ms_warpgate, wg_pos - Vector2(65, 65), Color(1, 1, 1, 0.5 + 0.5 * ms_wg["progress"]))
+		if not ms_wg["built"]:
+			draw_string(ThemeDB.fallback_font, wg_pos + Vector2(-60, -50), "ACCELERATOR: %d%%" % int(ms_wg["progress"] * 100.0), HORIZONTAL_ALIGNMENT_CENTER, 120, 10, Color(1.0, 0.4, 0.4))
 
 func _draw_placement_preview() -> void:
 	if not is_build_mode or selected_tool == "none":

@@ -155,3 +155,9 @@ func play_synth(type: String) -> void:
 	stream.data = data
 	player.stream = stream
 	player.play()
+
+var is_muted: bool = false
+func toggle_mute() -> bool:
+	is_muted = not is_muted
+	AudioServer.set_bus_mute(0, is_muted)
+	return is_muted

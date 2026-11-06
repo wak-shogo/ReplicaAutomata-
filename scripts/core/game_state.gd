@@ -68,8 +68,8 @@ var items = {
 }
 
 # 3. 電力網ステータス (Power Grid)
-var power_generated: float = 80.0   # 総発電量 (kW)
-var power_consumed: float = 40.0    # 総消費電力 (kW)
+var power_generated: float = 0.0   # 総発電量 (kW)
+var power_consumed: float = 0.0    # 総消費電力 (kW)
 var power_ratio: float = 1.0        # 充足率 (0.0 ~ 1.0)
 
 # 4. 自機サバイバル（耐久値＆シールド）
@@ -99,6 +99,33 @@ var raid_timer: float = 0.0
 var raid_interval: float = 50.0
 var is_raid_active: bool = false
 var raid_wave_count: int = 0
+
+# 7.5 技術ツリー段階的自己開発システム (Progressive Tech Tree)
+signal tool_unlocked(tool_name: String)
+var unlocked_tools: Dictionary = {
+	"miner": false,
+	"belt": false,
+	"smelter": false,
+	"solar": false,
+	"assembler": false,
+	"depot": false,
+	"turret": false,
+	"mass_driver": false,
+	"geothermal": false,
+	"demolish": false
+}
+
+func unlock_tool(t_name: String) -> void:
+	if unlocked_tools.has(t_name) and not unlocked_tools[t_name]:
+		unlocked_tools[t_name] = true
+		tool_unlocked.emit(t_name)
+		add_log("TECH DISCOVERY: %s BLUEPRINT UNLOCKED!" % t_name.to_upper())
+		AudioSynth.play_synth("victory")
+
+func unlock_all_tools() -> void:
+	for k in unlocked_tools.keys():
+		unlocked_tools[k] = true
+		tool_unlocked.emit(k)
 
 # 8. メガストラクチャー建造進捗 (0.0 ~ 1.0)
 var megastructures = {
@@ -264,11 +291,15 @@ func set_story_phase(new_phase: StoryPhase) -> void:
 		StoryPhase.DRONE:
 			add_log("BLUEPRINT UNLOCKED: SUB-DRONE FABRICATION READY.")
 		StoryPhase.BUILD_MINER:
+			unlock_tool("miner")
 			if items.get("miner", 0) <= 0:
 				items["miner"] = 1
 				item_changed.emit("miner", items["miner"])
 			add_log("SCHEMATIC GRANTED: AUTOMATED DRILL (MINER x1).")
 		StoryPhase.FACTORY:
+			unlock_tool("belt")
+			unlock_tool("smelter")
+			unlock_tool("solar")
 			if items.get("belt", 0) <= 0:
 				items["belt"] = 10
 				item_changed.emit("belt", items["belt"])
@@ -277,6 +308,7 @@ func set_story_phase(new_phase: StoryPhase) -> void:
 				item_changed.emit("smelter", items["smelter"])
 			add_log("LOGISTICS PROTOCOL: CONVEYORS & SMELTERS UNLOCKED.")
 		StoryPhase.SPACE:
+			unlock_all_tools()
 			add_log("STELLAR ASCENSION: ALL SYSTEMS FULLY OPERATIONAL.")
 
 func _process(delta: float) -> void:
@@ -297,7 +329,11 @@ func _process(delta: float) -> void:
 func _trigger_hostile_air_raid() -> void:
 	raid_wave_count += 1
 	is_raid_active = true
-	var alert_msg = "WARNING: HOSTILE AIR RAID INCOMING (WAVE %d)" % raid_wave_count
+	unlock_tool("turret")
+	if items.get("turret", 0) <= 0:
+		items["turret"] = 1 # 初回防衛用タレット1基支給
+		item_changed.emit("turret", items["turret"])
+	var alert_msg = "WARNING: HOSTILE AIR RAID INCOMING (WAVE %d) - DEPLOY TURRET TO DEFEND!" % raid_wave_count
 	add_log(alert_msg)
 	AudioSynth.play_synth("laser")
 	raid_alert.emit(true, alert_msg)
@@ -392,8 +428,14 @@ func attach_drone() -> bool:
 
 		if can_craft:
 			attached_drones += 1
+			# 自己複製ボーナス：シールド・最大HPの強化
+			player_max_shield = 100.0 + float(attached_drones) * 25.0
+			player_shield = player_max_shield
+			player_max_hp = 100.0 + float(attached_drones) * 20.0
+			player_health_changed.emit(player_hp, player_max_hp, player_shield, player_max_shield)
+			
 			drone_attached.emit(attached_drones)
-			add_log("DRONE DOCKED: CHASSIS EXPANDED (%d/%d)" % [attached_drones, max_attached_drones])
+			add_log("DRONE DOCKED: CHASSIS EXPANDED (%d/%d) - SHIELD & THRUST BOOSTED!" % [attached_drones, max_attached_drones])
 			_check_quest_progress()
 			if story_phase == StoryPhase.DRONE:
 				set_story_phase(StoryPhase.BUILD_MINER)
@@ -519,9 +561,20 @@ func notify_building_constructed(btype: String) -> void:
 		if q.get("req_type") == "building" and q.get("building_type") == btype:
 			_advance_quest()
 
-	if btype == "miner" and story_phase == StoryPhase.BUILD_MINER:
-		set_story_phase(StoryPhase.FACTORY)
-	elif (btype == "belt" or btype == "smelter") and story_phase == StoryPhase.FACTORY:
+	if btype == "miner":
+		unlock_tool("belt")
+		unlock_tool("smelter")
+		unlock_tool("solar")
+		if story_phase == StoryPhase.BUILD_MINER:
+			set_story_phase(StoryPhase.FACTORY)
+	elif btype == "smelter":
+		unlock_tool("assembler")
+		unlock_tool("depot")
+		if story_phase == StoryPhase.FACTORY:
+			set_story_phase(StoryPhase.SPACE)
+	elif btype == "assembler":
+		unlock_tool("mass_driver")
+	elif (btype == "belt") and story_phase == StoryPhase.FACTORY:
 		set_story_phase(StoryPhase.SPACE)
 
 # メガストラクチャー建造開始

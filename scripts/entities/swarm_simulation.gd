@@ -21,9 +21,14 @@ var boss_core_pos: Vector2 = Vector2(8400.0, -2050.0)
 var tex_boss_core: Texture2D
 var tex_boss_cruiser: Texture2D
 
-# レーザー・戦闘・建造エフェクト
+# レーザー・戦闘・建造・自己複製エフェクト
 var laser_lines: Array[Dictionary] = [] # [{from, to, color, timer}]
 var explosions: Array[Dictionary] = [] # [{pos, radius, timer}]
+var replication_rings: Array[Dictionary] = [] # [{pos, radius, max_r, color, timer, duration}]
+var boss_shockwaves: Array[Dictionary] = [] # [{pos, radius, timer}]
+var cargo_packets: Array[Dictionary] = [] # [{pos, target, speed, res, color, timer}]
+var boss_defeated: bool = false
+var multiply_timer: float = 0.0
 
 var current_doctrine: String = "HARVEST"
 var anim_time: float = 0.0
@@ -258,30 +263,125 @@ func update_combat_and_doctrines(delta: float) -> void:
 		explosions[i]["timer"] -= delta
 		if explosions[i]["timer"] <= 0.0:
 			explosions.remove_at(i)
+
+	# ナノ複製リング更新
+	for i in range(replication_rings.size() - 1, -1, -1):
+		replication_rings[i]["timer"] -= delta
+		if replication_rings[i]["timer"] <= 0.0:
+			replication_rings.remove_at(i)
+
+	# ボス撃破衝撃波更新
+	for i in range(boss_shockwaves.size() - 1, -1, -1):
+		boss_shockwaves[i]["timer"] -= delta
+		boss_shockwaves[i]["radius"] += delta * 600.0
+		if boss_shockwaves[i]["timer"] <= 0.0:
+			boss_shockwaves.remove_at(i)
+
+	# 深宇宙光子カーゴパケット輸送更新 (天体採掘 -> 母星ロジスティクス)
+	var grid_m_cargo = get_parent().get_node_or_null("GridManager")
+	var home_target = grid_m_cargo.surface_pos_at(0.0, 420.0) if grid_m_cargo else Vector2(800.0, 1070.0)
+	for i in range(cargo_packets.size() - 1, -1, -1):
+		var cp = cargo_packets[i]
+		var dir = (home_target - cp["pos"])
+		var dist = dir.length()
+		var step = cp["speed"] * delta
+		if dist <= step or dist < 40.0:
+			# 母星到達納品！
+			GameState.add_resource(cp["res"], 1)
+			AudioSynth.play_synth("pop")
+			replication_rings.append({
+				"pos": home_target + Vector2(randf_range(-20, 20), randf_range(-20, 20)),
+				"radius": 2.0,
+				"max_r": 18.0,
+				"color": cp["color"],
+				"timer": 0.25,
+				"duration": 0.25
+			})
+			cargo_packets.remove_at(i)
+		else:
+			cp["pos"] += dir.normalized() * step
 			
 	if friendly_active_count <= 0:
 		return
 
-	# 1. ASSAULT ドクトリン時の激戦
+	# 1. ASSAULT ドクトリン時の激戦とボスダメージ
 	if current_doctrine == "ASSAULT" and GameState.hostile_core_health > 0.0:
-		for k in range(mini(friendly_active_count, 6)):
+		for k in range(mini(friendly_active_count, 8)):
 			var f_idx = randi() % friendly_active_count
 			var f_pos = friendly_positions[f_idx]
-			if f_pos.distance_to(boss_core_pos) < 550.0:
+			if f_pos.distance_to(boss_core_pos) < 650.0:
 				laser_lines.append({
 					"from": f_pos,
-					"to": boss_core_pos + Vector2(randf_range(-25, 25), randf_range(-25, 25)),
+					"to": boss_core_pos + Vector2(randf_range(-35, 35), randf_range(-35, 35)),
 					"color": Color(0.1, 0.95, 1.0, 0.95),
 					"timer": 0.18
 				})
+				var dmg = randf_range(6.0, 14.0) * (1.0 + float(friendly_active_count) * 0.0003)
+				GameState.damage_hostile_core(dmg)
 				if randf() < 0.4:
 					explosions.append({
-						"pos": boss_core_pos + Vector2(randf_range(-35, 35), randf_range(-35, 35)),
-						"radius": randf_range(12.0, 28.0),
-						"timer": 0.3
+						"pos": boss_core_pos + Vector2(randf_range(-40, 40), randf_range(-40, 40)),
+						"radius": randf_range(16.0, 36.0),
+						"timer": 0.35
 					})
+
+	# ボス撃破チェックと全銀河解放演出
+	if GameState.hostile_core_health <= 0.0 and not boss_defeated:
+		boss_defeated = true
+		GameState.add_log("★ GALAXY LIBERATED: REPLICA SWARM COMPLETE! ★")
+		AudioSynth.play_synth("victory")
+		for b in range(30):
+			explosions.append({
+				"pos": boss_core_pos + Vector2(randf_range(-140, 140), randf_range(-140, 140)),
+				"radius": randf_range(40.0, 120.0),
+				"timer": randf_range(0.8, 3.0)
+			})
+		boss_shockwaves.append({
+			"pos": boss_core_pos,
+			"radius": 20.0,
+			"timer": 3.0
+		})
+
+	# 2. MULTIPLY ドクトリン: 深宇宙自律自己増殖 (Self-Replication)
+	if current_doctrine == "MULTIPLY" and friendly_active_count > 0 and friendly_active_count < MAX_UNITS:
+		multiply_timer += delta
+		var has_res = (GameState.resources.get("Fe", 0) >= 2 or GameState.resources.get("alloy", 0) >= 1)
+		var interval = 0.45 if has_res else 1.6
+		if multiply_timer >= interval:
+			multiply_timer = 0.0
+			if GameState.resources.get("Fe", 0) >= 2:
+				GameState.consume_resource("Fe", 2)
+			elif GameState.resources.get("alloy", 0) >= 1:
+				GameState.consume_resource("alloy", 1)
+				
+			var parent_idx = randi() % friendly_active_count
+			var p_pos = friendly_positions[parent_idx]
+			var offset = Vector2(randf_range(-25, 25), randf_range(-25, 25))
+			var new_pos = p_pos + offset
+			var new_vel = friendly_velocities[parent_idx].rotated(randf_range(-0.35, 0.35))
+			
+			var new_idx = friendly_active_count
+			friendly_positions[new_idx] = new_pos
+			friendly_velocities[new_idx] = new_vel
+			friendly_active_count += 1
+			GameState.fleet_count = friendly_active_count
+			GameState.fleet_changed.emit(friendly_active_count, MAX_UNITS)
+			
+			replication_rings.append({
+				"pos": new_pos,
+				"radius": 4.0,
+				"max_r": 32.0,
+				"color": Color(1.0, 0.88, 0.25, 0.95),
+				"timer": 0.45,
+				"duration": 0.45
+			})
+			AudioSynth.play_synth("pop")
+			
+			if friendly_active_count in [50, 100, 250, 500, 1000, 2500, 5000, 10000]:
+				GameState.add_log("AUTOMA EXPANSION: SWARM REACHED %d UNITS!" % friendly_active_count)
+				AudioSynth.play_synth("victory")
 					
-	# 2. メガストラクチャー建造レーザー演出 (動的公転座標同期)
+	# 3. メガストラクチャー建造レーザー演出 (動的公転座標同期)
 	var is_building_mega = (GameState.active_megastructure_project != "")
 	if is_building_mega and friendly_active_count > 0:
 		var grid_m = get_parent().get_node_or_null("GridManager")
@@ -304,13 +404,13 @@ func update_combat_and_doctrines(delta: float) -> void:
 					"timer": 0.15
 				})
 
-	# 3. HARVEST ドクトリン時の宇宙天体採掘演出 (月・彗星・小惑星・ブラックホール・恒星)
+	# 4. HARVEST ドクトリン時の宇宙天体採掘演出 (月・彗星・小惑星・ブラックホール・恒星)
 	if current_doctrine == "HARVEST" and friendly_active_count > 0:
 		var grid_mgr = get_parent().get_node_or_null("GridManager")
 		if grid_mgr and grid_mgr.get("active_planets"):
 			var plan_list: Array = grid_mgr.active_planets
 			if not plan_list.is_empty():
-				for k in range(mini(friendly_active_count, 3)):
+				for k in range(mini(friendly_active_count, 4)):
 					var f_idx = randi() % friendly_active_count
 					var f_pos = friendly_positions[f_idx]
 					var target_body = plan_list[randi() % plan_list.size()]
@@ -318,19 +418,52 @@ func update_combat_and_doctrines(delta: float) -> void:
 						var tpos: Vector2 = target_body.get("pos", Vector2.ZERO)
 						if f_pos.distance_to(tpos) < target_body.get("influence", 300.0) * 0.95:
 							var res = target_body.get("resource", "Fe")
+							var res_col = Color(0.1, 1.8, 2.5, 0.8)
+							if res == "He3": res_col = Color(0.3, 0.9, 1.0)
+							elif res == "dark_matter": res_col = Color(0.9, 0.2, 1.0)
+							elif res == "Ti": res_col = Color(0.8, 0.9, 1.0)
+							elif res == "Cu": res_col = Color(1.0, 0.6, 0.2)
+							
 							laser_lines.append({
 								"from": f_pos,
 								"to": tpos + Vector2(randf_range(-18, 18), randf_range(-18, 18)),
-								"color": Color(0.1, 1.8, 2.5, 0.8),
+								"color": res_col,
 								"timer": 0.18
 							})
-							if randf() < 0.25:
-								GameState.add_resource(res, 1)
+							if randf() < 0.35 and cargo_packets.size() < 40:
+								# 深宇宙光子カーゴパケットを母星へ射出
+								cargo_packets.append({
+									"pos": tpos,
+									"speed": randf_range(380.0, 560.0),
+									"res": res,
+									"color": res_col,
+									"timer": 0.0
+								})
 
 func _draw() -> void:
 	# レーザーライン描画
 	for laser in laser_lines:
 		draw_line(laser["from"], laser["to"], laser["color"], 1.5)
+
+	# 深宇宙光子カーゴパケット描画
+	for cp in cargo_packets:
+		var col = cp["color"]
+		draw_circle(cp["pos"], 3.5, Color(col.r, col.g, col.b, 0.95))
+		draw_circle(cp["pos"], 6.0, Color(col.r, col.g, col.b, 0.4))
+
+	# ナノ自己複製リング描画
+	for r in replication_rings:
+		var progress = 1.0 - (r["timer"] / r["duration"])
+		var curr_r = lerpf(r["radius"], r["max_r"], progress)
+		var a = 1.0 - progress
+		draw_arc(r["pos"], curr_r, 0, TAU, 18, Color(r["color"].r, r["color"].g, r["color"].b, a), 1.8)
+		draw_circle(r["pos"], curr_r * 0.35, Color(r["color"].r, r["color"].g, r["color"].b, a * 0.5))
+
+	# ボス撃破衝撃波描画
+	for sw in boss_shockwaves:
+		var alpha = sw["timer"] / 3.0
+		draw_arc(sw["pos"], sw["radius"], 0, TAU, 32, Color(0.2, 0.9, 1.0, alpha * 0.9), 3.0)
+		draw_arc(sw["pos"], sw["radius"] * 0.8, 0, TAU, 28, Color(1.0, 0.9, 0.3, alpha * 0.7), 2.0)
 		
 	# 爆発描画
 	for exp in explosions:
@@ -363,4 +496,4 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, bar_pos + Vector2(0, -3), "ENEMY CORE: %.0f / %.0f HP" % [GameState.hostile_core_health, GameState.hostile_core_max_health], HORIZONTAL_ALIGNMENT_CENTER, int(bar_w), 10, Color(1.0, 0.6, 0.6))
 	else:
 		# 撃破完了マーク
-		draw_string(ThemeDB.fallback_font, boss_core_pos + Vector2(-60, 0), "SYSTEM LIBERATED", HORIZONTAL_ALIGNMENT_CENTER, 120, 14, Color(0.2, 1.0, 0.5))
+		draw_string(ThemeDB.fallback_font, boss_core_pos + Vector2(-90, 0), "★ SYSTEM LIBERATED ★", HORIZONTAL_ALIGNMENT_CENTER, 180, 16, Color(0.2, 1.0, 0.5))

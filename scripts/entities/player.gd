@@ -24,10 +24,13 @@ var moved_dist_accum: float = 0.0
 var sensor_pulse_timer: float = 0.0
 var sensor_pulse_radius: float = 0.0
 var drone_fabrication_timer: float = 0.0
+var replicate_text_timer: float = 0.0
 var wake_pulse_timer: float = 0.0
 
 var drone_rot_angle: float = 0.0
 var anim_time: float = 0.0
+var is_reentry: bool = false
+var reentry_intensity: float = 0.0
 var grid_manager: Node2D = null
 var current_orbit_info: Dictionary = {}
 
@@ -51,14 +54,20 @@ func _ready() -> void:
 
 func _on_drone_attached(_count: int) -> void:
 	drone_fabrication_timer = 1.4
-	AudioSynth.play_synth("build")
+	replicate_text_timer = 2.2
+	AudioSynth.play_synth("victory")
+	GameState.add_log("SELF-REPLICATION MILESTONE: SUB-UNIT %02d FABRICATED! HARVEST & BUILD POWER MULTIPLIED." % _count)
 
 func wake_up_probe() -> void:
 	if GameState.story_phase == GameState.StoryPhase.DORMANT:
 		GameState.set_story_phase(GameState.StoryPhase.MOVE)
 		wake_pulse_timer = 1.2
 		sensor_pulse_radius = 5.0
-		AudioSynth.play_synth("build")
+		AudioSynth.play_synth("launch")
+		var mn = get_parent()
+		if mn and mn.has_method("shake_camera"):
+			mn.shake_camera(2.5, 0.3)
+		GameState.add_log("AUTOMA CORE REBOOTED: UNCHARTED PLANET DETECTED. COMMENCING AUTONOMOUS SELF-REPLICATION.")
 
 func _physics_process(delta: float) -> void:
 	anim_time += delta
@@ -70,6 +79,8 @@ func _physics_process(delta: float) -> void:
 		sensor_pulse_radius += delta * 360.0
 	if drone_fabrication_timer > 0.0:
 		drone_fabrication_timer -= delta
+	if replicate_text_timer > 0.0:
+		replicate_text_timer -= delta
 
 	# 休眠フェーズ判定（操作・推力はオフ）
 	if GameState.story_phase == GameState.StoryPhase.DORMANT:
@@ -123,16 +134,18 @@ func _physics_process(delta: float) -> void:
 				velocity = velocity.move_toward(Vector2.ZERO, 380.0 * delta)
 				velocity += g_acc * delta
 			elif input_vec.length_squared() > 0.01:
-				velocity += (g_acc + input_vec.normalized() * thrust_accel) * delta
+				var cur_thrust = thrust_accel + float(GameState.attached_drones) * 35.0
+				velocity += (g_acc + input_vec.normalized() * cur_thrust) * delta
 			else:
 				# スラスター無入力時：自動減衰ダンパーなし。宇宙本来の完全な等速直線運動を維持
 				velocity += g_acc * delta
 		else:
 			is_inertial_braking = false
 			thrusting_dir = input_vec.normalized()
-			# 地表付近：地殻ホバリング制御
+			# 地表付近：地殻ホバリング制御 (ドローン数に応じて巡航速度向上)
+			var cur_surf_spd = 240.0 + float(GameState.attached_drones) * 20.0
 			if input_vec.length_squared() > 0.01:
-				velocity = velocity.lerp(input_vec.normalized() * 240.0, delta * 8.0)
+				velocity = velocity.lerp(input_vec.normalized() * cur_surf_spd, delta * 8.0)
 			else:
 				velocity = velocity.lerp(Vector2.ZERO, delta * 8.0)
 	else:
@@ -180,6 +193,19 @@ func _physics_process(delta: float) -> void:
 				velocity = velocity.lerp(target_v, delta * 12.0)
 			else:
 				velocity = velocity.move_toward(Vector2.ZERO, 500.0 * delta)
+
+		# 3.5 母星大気圏再突入力学 (Atmospheric Re-entry Aerodynamic Drag & Heat Cone)
+		is_reentry = false
+		reentry_intensity = 0.0
+		if prim_kind == "home" and cur_r > min_radius + 4.0 and cur_r < prim_rad + 150.0:
+			var alt_ratio = 1.0 - clampf((cur_r - min_radius) / 150.0, 0.0, 1.0)
+			var spd = velocity.length()
+			var v_down = -velocity.dot(normal)
+			if spd > 220.0 or v_down > 120.0:
+				is_reentry = true
+				reentry_intensity = clampf((spd - 200.0) / 250.0, 0.2, 1.0) * alt_ratio
+				var drag_force = -velocity.normalized() * (spd * spd * 0.0008 * alt_ratio)
+				velocity += drag_force * delta
 
 		# 4. 全天体共通：公転座標系自動追従 (Celestial Co-moving Reference Frame)
 		var p_delta = current_orbit_info.get("primary_delta_pos", Vector2.ZERO)
@@ -431,6 +457,17 @@ func _get_auto_aim_target() -> Vector2:
 					best_cel_dist = d
 					var to_ship = (global_position - ppos).normalized() if global_position != ppos else Vector2.UP
 					best_cel_pos = ppos + to_ship * prad
+					
+		# 小惑星帯の個別アステロイドもオートエイム対象に含める
+		if grid_manager.get("asteroid_belt"):
+			for ast in grid_manager.asteroid_belt:
+				var apos: Vector2 = ast.get("pos", Vector2.ZERO)
+				var arad: float = ast.get("radius", 18.0)
+				var d_ast = global_position.distance_to(apos) - arad
+				if d_ast < best_cel_dist:
+					best_cel_dist = d_ast
+					best_cel_pos = apos
+					
 		return best_cel_pos
 
 	# 2. 地表付近にいる場合：最も近い地下鉱脈へオートエイム
@@ -640,6 +677,23 @@ func _draw() -> void:
 			var sp_pos = Vector2(cos(sa), sin(sa)) * (f_rad + randf_range(-4.0, 4.0))
 			draw_circle(sp_pos, randf_range(1.5, 3.0), Color(2.8, 2.2, 0.6, 0.9))
 
+	# 4.5 前方探査サーチライト (Night Exploration Headlight Beam)
+	if GameState.story_phase >= GameState.StoryPhase.MOVE:
+		var forward_dir = Vector2(cos(ship_rotation), sin(ship_rotation))
+		var light_len = 260.0
+		var cone_half_a = deg_to_rad(32.0)
+		var l_tip1 = forward_dir.rotated(cone_half_a) * light_len
+		var l_tip2 = forward_dir.rotated(-cone_half_a) * light_len
+		
+		# 扇形ライトポリゴン (柔らかなシアン発光)
+		var light_pts = PackedVector2Array([Vector2.ZERO, l_tip1, forward_dir * (light_len * 1.05), l_tip2])
+		draw_colored_polygon(light_pts, Color(0.2, 0.8, 1.2, 0.08))
+		# コア光芒
+		var core_pts = PackedVector2Array([Vector2.ZERO, forward_dir.rotated(cone_half_a * 0.4) * (light_len * 0.7), forward_dir.rotated(-cone_half_a * 0.4) * (light_len * 0.7)])
+		draw_colored_polygon(core_pts, Color(0.6, 1.8, 2.5, 0.12))
+		# 自機周囲アンビエント照明
+		draw_circle(Vector2.ZERO, 38.0, Color(0.1, 0.6, 1.0, 0.14))
+
 	# 5. プレイヤー中央コア（Seed Unit: 48x48）
 	# スラスター・プラズマ排気パーティクルの描画
 	for p in thruster_particles:
@@ -674,6 +728,19 @@ func _draw() -> void:
 		# (4) 左右補助ノズル微小炎
 		draw_line(back_dir * 16.0 + side_n * 8.0, back_dir * (16.0 + flame_len * 0.4) + side_n * 8.0, Color(0.2, 1.8, 3.0, 0.8), 2.0)
 		draw_line(back_dir * 16.0 - side_n * 8.0, back_dir * (16.0 + flame_len * 0.4) - side_n * 8.0, Color(0.2, 1.8, 3.0, 0.8), 2.0)
+
+	# 大気圏再突入プラズマ熱衝撃波 (Atmospheric Re-entry Bow Shock)
+	if is_reentry and velocity.length_squared() > 100.0:
+		var fwd = velocity.normalized()
+		var bow_r = 26.0
+		var bow_a = fwd.angle()
+		draw_arc(fwd * 6.0, bow_r, bow_a - PI * 0.45, bow_a + PI * 0.45, 20, Color(1.0, 0.45, 0.1, 0.9 * reentry_intensity), 3.0)
+		draw_arc(fwd * 6.0, bow_r - 3.0, bow_a - PI * 0.35, bow_a + PI * 0.35, 16, Color(1.0, 0.9, 0.5, 0.95 * reentry_intensity), 1.5)
+		for sp in range(5):
+			var sp_ang = bow_a + (PI if sp % 2 == 0 else -PI) * 0.4 + randf_range(-0.15, 0.15)
+			var sp_start = fwd * 6.0 + Vector2(cos(sp_ang), sin(sp_ang)) * bow_r
+			var sp_len = randf_range(16.0, 38.0) * reentry_intensity
+			draw_line(sp_start, sp_start - fwd * sp_len, Color(1.0, 0.5, 0.1, 0.7 * reentry_intensity), 1.5)
 
 	if is_inertial_braking:
 		var rcs_pulse = (sin(anim_time * 25.0) * 0.5 + 0.5)
@@ -717,3 +784,24 @@ func _draw() -> void:
 	draw_rect(Rect2(-18, -34, 36, 3), Color(0.1, 0.1, 0.1, 0.8))
 	draw_rect(Rect2(-18, -34, 36 * hp_r, 3), Color(0.2, 2.0, 0.5))
 	draw_rect(Rect2(-18, -30, 36 * sh_r, 2), Color(0.0, 1.8, 2.8))
+
+	# 8. 自己複製達成ポップアップ (Self-Replication Feedback)
+	if replicate_text_timer > 0.0:
+		var txt_alpha = clampf(replicate_text_timer / 1.0, 0.0, 1.0)
+		var txt_y_off = -46.0 - (2.2 - replicate_text_timer) * 16.0
+		draw_string(ThemeDB.fallback_font, Vector2(-95, txt_y_off), "+1 REPLICATED SUB-UNIT", HORIZONTAL_ALIGNMENT_CENTER, -1, 14, Color(1.5, 2.2, 0.4, txt_alpha))
+
+	# 9. 地殻鉱脈探査コンパス (Subsurface Mineral Compass - 地表探索HUD)
+	if current_orbit_info.get("altitude", 99.0) <= 30.0 and grid_manager and grid_manager.get("ore_veins"):
+		draw_arc(Vector2.ZERO, 34.0, 0, TAU, 32, Color(0.1, 0.4, 0.6, 0.25), 1.0)
+		for v in grid_manager.ore_veins:
+			var va = -PI * 0.5 + v["angle_off"]
+			var vpos = grid_manager.HOME_CENTER + Vector2(cos(va), sin(va)) * grid_manager.HOME_RADIUS
+			var to_vein = vpos - global_position
+			var d_vein = to_vein.length()
+			var pip_dir = to_vein.normalized()
+			var pip_pos = pip_dir * 34.0
+			var v_col: Color = v["color"]
+			draw_circle(pip_pos, 2.5, v_col)
+			if d_vein < 320.0:
+				draw_string(ThemeDB.fallback_font, pip_pos + pip_dir * 12.0 - Vector2(10, -4), "%s:%.0fm" % [v["name"], d_vein * 0.1], HORIZONTAL_ALIGNMENT_CENTER, -1, 9, v_col)

@@ -80,6 +80,11 @@ var build_bar_panel: PanelContainer
 var boot_guide_overlay: Control
 var boot_prompt_lbl: Label
 
+# 歴史的マイルストーン達成バナー (Era Progression Banner)
+var milestone_panel: PanelContainer
+var milestone_title_lbl: Label
+var milestone_sub_lbl: Label
+
 func _ready() -> void:
 	main_node = get_parent()
 	grid_manager = get_parent().get_node_or_null("GridManager")
@@ -94,6 +99,8 @@ func _ready() -> void:
 	GameState.raid_alert.connect(_on_raid_alert)
 	GameState.quest_updated.connect(_on_quest_updated)
 	GameState.quest_completed.connect(_on_quest_completed)
+	GameState.tool_unlocked.connect(_on_tool_unlocked)
+	GameState.enemy_damaged.connect(_on_enemy_damaged)
 	
 	get_tree().root.size_changed.connect(_adjust_responsive_layout)
 	_adjust_responsive_layout()
@@ -104,6 +111,46 @@ func _ready() -> void:
 func _on_story_phase_changed(new_phase: int) -> void:
 	_update_progressive_ui(new_phase)
 	_update_objective_text()
+	
+	var era_names = {
+		GameState.StoryPhase.MOVE: "[ ERA 01: AWAKENING - PROBE REBOOTED ]",
+		GameState.StoryPhase.MINE: "[ ERA 02: PROSPECTOR - ORE VEIN LOCATED ]",
+		GameState.StoryPhase.DRONE: "[ ERA 03: SELF-REPLICATION - FIRST SUB-UNIT ]",
+		GameState.StoryPhase.BUILD_MINER: "[ ERA 04: AUTOMATION - EXTRACTION DRILL ]",
+		GameState.StoryPhase.FACTORY: "[ ERA 05: INDUSTRIAL DAWN - LOGISTICS PIPELINE ]",
+		GameState.StoryPhase.SPACE: "[ ERA 06: STELLAR VOYAGE - REACH FOR THE STARS ]"
+	}
+	if era_names.has(new_phase):
+		_trigger_milestone_banner(era_names[new_phase])
+
+func _trigger_milestone_banner(era_text: String) -> void:
+	if not milestone_panel or not milestone_sub_lbl: return
+	milestone_sub_lbl.text = era_text
+	milestone_panel.visible = true
+	milestone_panel.modulate.a = 0.0
+	milestone_panel.scale = Vector2(0.85, 0.85)
+	milestone_panel.pivot_offset = milestone_panel.size * 0.5
+	
+	AudioSynth.play_synth("victory")
+	
+	var tw = create_tween().set_parallel(true)
+	tw.tween_property(milestone_panel, "modulate:a", 1.0, 0.3)
+	tw.tween_property(milestone_panel, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	
+	get_tree().create_timer(2.6).timeout.connect(func():
+		if milestone_panel and is_inside_tree():
+			var tw_out = create_tween()
+			tw_out.tween_property(milestone_panel, "modulate:a", 0.0, 0.4)
+			tw_out.finished.connect(func():
+				if milestone_panel: milestone_panel.visible = false
+			)
+	)
+
+var boss_victory_announced: bool = false
+func _on_enemy_damaged(curr_hp: float, _max_hp: float) -> void:
+	if curr_hp <= 0.0 and not boss_victory_announced:
+		boss_victory_announced = true
+		_trigger_milestone_banner("★ GALAXY LIBERATED: REPLICA SWARM COMPLETE! ★")
 
 func _process(delta: float) -> void:
 	hud_anim_time += delta
@@ -363,6 +410,29 @@ func build_minimal_ui() -> void:
 	btn_save.pressed.connect(func(): SaveManager.save_game(false))
 	right_hbox.add_child(btn_save)
 
+	var btn_mute = Button.new()
+	btn_mute.text = "SND"
+	btn_mute.custom_minimum_size = Vector2(30, 24)
+	btn_mute.add_theme_stylebox_override("normal", sb_top_btn)
+	btn_mute.add_theme_font_size_override("font_size", 9)
+	btn_mute.pressed.connect(func():
+		var muted = AudioSynth.toggle_mute()
+		btn_mute.text = "MUT" if muted else "SND"
+		btn_mute.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4) if muted else Color(0.2, 0.9, 1.0))
+	)
+	right_hbox.add_child(btn_mute)
+
+	var btn_rst = Button.new()
+	btn_rst.text = "RST"
+	btn_rst.custom_minimum_size = Vector2(28, 24)
+	var sb_rst = sb_top_btn.duplicate()
+	sb_rst.border_color = Color(1.0, 0.4, 0.4, 0.6)
+	btn_rst.add_theme_stylebox_override("normal", sb_rst)
+	btn_rst.add_theme_font_size_override("font_size", 9)
+	btn_rst.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
+	btn_rst.pressed.connect(func(): SaveManager.reset_save())
+	right_hbox.add_child(btn_rst)
+
 	# 3行目: 目標導線バッジ (中央配置)
 	var top_row3 = HBoxContainer.new()
 	top_row3.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -524,6 +594,7 @@ func build_minimal_ui() -> void:
 	btn_touch_mine.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
 	btn_touch_mine.button_down.connect(func(): if player_node: player_node.touch_mining_active = true)
 	btn_touch_mine.button_up.connect(func(): if player_node: player_node.touch_mining_active = false)
+	_apply_touch_button_anim(btn_touch_mine)
 	action_cluster.add_child(btn_touch_mine)
 
 	# [BRAKE] 緊急ブレーキボタン (中・MINEの上)
@@ -542,6 +613,7 @@ func build_minimal_ui() -> void:
 	btn_touch_brake.add_theme_color_override("font_color", Color(2.5, 0.7, 0.7))
 	btn_touch_brake.button_down.connect(func(): if player_node: player_node.touch_braking_active = true)
 	btn_touch_brake.button_up.connect(func(): if player_node: player_node.touch_braking_active = false)
+	_apply_touch_button_anim(btn_touch_brake)
 	action_cluster.add_child(btn_touch_brake)
 
 	# [BUILD] ビルドモード切替ボタン (中・MINEの左)
@@ -559,6 +631,7 @@ func build_minimal_ui() -> void:
 	btn_touch_build.add_theme_font_size_override("font_size", 13)
 	btn_touch_build.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 	btn_touch_build.pressed.connect(toggle_build_mode)
+	_apply_touch_button_anim(btn_touch_build)
 	action_cluster.add_child(btn_touch_build)
 
 	# [DRONE] ドローン合体ボタン (小・BUILDの上)
@@ -578,6 +651,7 @@ func build_minimal_ui() -> void:
 	btn_touch_drone.pressed.connect(func():
 		if GameState.attach_drone(): AudioSynth.play_synth("build")
 	)
+	_apply_touch_button_anim(btn_touch_drone)
 	action_cluster.add_child(btn_touch_drone)
 
 	# ========================================================
@@ -722,18 +796,68 @@ func build_minimal_ui() -> void:
 	boot_prompt_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.5))
 	boot_vbox.add_child(boot_prompt_lbl)
 
+	# ========================================================
+	# 8. マイルストーン達成バナー (MILESTONE BANNER)
+	# ========================================================
+	milestone_panel = PanelContainer.new()
+	milestone_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	milestone_panel.anchor_left = 0.5
+	milestone_panel.anchor_right = 0.5
+	milestone_panel.offset_left = -220.0
+	milestone_panel.offset_right = 220.0
+	milestone_panel.offset_top = 75.0
+	milestone_panel.offset_bottom = 135.0
+	var sb_mile = StyleBoxFlat.new()
+	sb_mile.bg_color = Color(0.04, 0.08, 0.16, 0.92)
+	sb_mile.border_color = Color(1.2, 0.8, 0.2, 0.85)
+	sb_mile.set_border_width_all(2)
+	sb_mile.corner_radius_top_left = 6
+	sb_mile.corner_radius_top_right = 6
+	sb_mile.corner_radius_bottom_left = 6
+	sb_mile.corner_radius_bottom_right = 6
+	milestone_panel.add_theme_stylebox_override("panel", sb_mile)
+	milestone_panel.visible = false
+	add_child(milestone_panel)
+	
+	var m_vbox = VBoxContainer.new()
+	m_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	m_vbox.add_theme_constant_override("separation", 2)
+	milestone_panel.add_child(m_vbox)
+	
+	milestone_title_lbl = Label.new()
+	milestone_title_lbl.text = "★ MILESTONE ACHIEVED ★"
+	milestone_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	milestone_title_lbl.add_theme_font_size_override("font_size", 12)
+	milestone_title_lbl.add_theme_color_override("font_color", Color(1.5, 2.2, 0.4))
+	m_vbox.add_child(milestone_title_lbl)
+	
+	milestone_sub_lbl = Label.new()
+	milestone_sub_lbl.text = "[ ERA 01: AWAKENING ]"
+	milestone_sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	milestone_sub_lbl.add_theme_font_size_override("font_size", 14)
+	milestone_sub_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.8))
+	m_vbox.add_child(milestone_sub_lbl)
+
 func _adjust_responsive_layout() -> void:
 	var vp_rect = get_viewport().get_visible_rect()
 	var is_portrait = (vp_rect.size.x < vp_rect.size.y)
+	var ui_scale = clampf(vp_rect.size.x / 440.0, 0.72, 1.0) if is_portrait else 1.0
+	
+	if dpad_cluster:
+		dpad_cluster.scale = Vector2(ui_scale, ui_scale)
+	if action_cluster:
+		action_cluster.scale = Vector2(ui_scale, ui_scale)
+		action_cluster.pivot_offset = Vector2(180.0, 200.0)
+		
 	if is_portrait:
 		if build_bar_panel:
 			build_bar_panel.offset_left = 12.0
 			build_bar_panel.offset_right = -12.0
-			build_bar_panel.offset_top = -262.0
-			build_bar_panel.offset_bottom = -204.0
+			build_bar_panel.offset_top = -262.0 * ui_scale
+			build_bar_panel.offset_bottom = -204.0 * ui_scale
 		if build_guide_label:
-			build_guide_label.offset_top = -288.0
-			build_guide_label.offset_bottom = -268.0
+			build_guide_label.offset_top = -288.0 * ui_scale
+			build_guide_label.offset_bottom = -268.0 * ui_scale
 	else:
 		if build_bar_panel:
 			build_bar_panel.offset_left = 180.0
@@ -809,6 +933,18 @@ func _reset_vstick() -> void:
 		player_node.touch_thrust_vec = Vector2.ZERO
 	vstick_base.queue_redraw()
 
+func _apply_touch_button_anim(btn: Button) -> void:
+	btn.pivot_offset = btn.custom_minimum_size * 0.5
+	btn.button_down.connect(func():
+		var tw = btn.create_tween()
+		tw.tween_property(btn, "scale", Vector2(0.92, 0.92), 0.08)
+		AudioSynth.play_synth("click")
+	)
+	btn.button_up.connect(func():
+		var tw = btn.create_tween()
+		tw.tween_property(btn, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	)
+
 func create_res_badge(parent: Node, icon_p: String, init_v: String, col: Color, res_key: String = "") -> Label:
 	var h = HBoxContainer.new()
 	h.add_theme_constant_override("separation", 4)
@@ -876,18 +1012,26 @@ func _update_progressive_ui(phase: int) -> void:
 	if btn_touch_brake:
 		btn_touch_brake.visible = (phase >= GameState.StoryPhase.FACTORY)
 
-	# 建築ツールの段階的表示
+	# 建築ツールの段階的表示 (GameState.unlocked_tools に完全同期)
 	for t_id in tool_buttons.keys():
 		var slot_panel = tool_buttons[t_id]["panel"]
-		if t_id == "miner":
-			slot_panel.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
-		elif t_id in ["belt", "smelter", "solar"]:
-			slot_panel.visible = (phase >= GameState.StoryPhase.FACTORY)
-		else:
-			slot_panel.visible = (phase >= GameState.StoryPhase.SPACE)
+		var is_unlocked = GameState.unlocked_tools.get(t_id, false)
+		slot_panel.visible = is_unlocked
 
 	if mega_btn_node:
 		mega_btn_node.visible = (phase >= GameState.StoryPhase.SPACE)
+
+func _on_tool_unlocked(tool_name: String) -> void:
+	if tool_buttons.has(tool_name):
+		var slot_panel = tool_buttons[tool_name]["panel"]
+		slot_panel.visible = true
+		if is_inside_tree():
+			var tw = create_tween().set_parallel(true)
+			slot_panel.pivot_offset = slot_panel.size * 0.5
+			slot_panel.scale = Vector2(1.3, 1.3)
+			tw.tween_property(slot_panel, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		if grid_manager and grid_manager.selected_tool == "none":
+			grid_manager.select_tool(tool_name)
 
 func create_icon_btn(icon_p: String, _tip: String, on_click: Callable) -> Button:
 	var b = Button.new()
@@ -1115,6 +1259,27 @@ func _on_nav_overlay_draw() -> void:
 	var half_h = (vp_size.y * 0.5) / zoom.y
 	var screen_center = vp_size * 0.5
 
+	# 環境ハザードアラート (Solar Heat / Singularity Hazard Vignette)
+	if grid_manager:
+		var d_sun = player.global_position - grid_manager.SUN_POS
+		var dist_sun = d_sun.length()
+		if dist_sun < grid_manager.SUN_RADIUS * 1.4:
+			var heat_ratio = clampf((grid_manager.SUN_RADIUS * 1.4 - dist_sun) / (grid_manager.SUN_RADIUS * 0.4), 0.0, 1.0)
+			var h_pulse = (sin(hud_anim_time * 10.0) * 0.5 + 0.5)
+			var h_col = Color(1.0, 0.35, 0.05, (0.3 + 0.4 * h_pulse) * heat_ratio)
+			nav_overlay.draw_rect(Rect2(Vector2.ZERO, vp_size), h_col, false, 8.0)
+			nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 140, 150), "⚠ WARNING: EXTREME SOLAR RADIATION ⚠", HORIZONTAL_ALIGNMENT_CENTER, 280, 12, Color(1.0, 0.85, 0.2))
+
+		for p in grid_manager.active_planets:
+			if p.get("id", "") == "GARGANTUA-ZERO":
+				var d_bh = player.global_position - p["pos"]
+				if d_bh.length() < p["radius"] * 1.25:
+					var bh_ratio = clampf((p["radius"] * 1.25 - d_bh.length()) / (p["radius"] * 0.5), 0.0, 1.0)
+					var bh_pulse = (sin(hud_anim_time * 12.0) * 0.5 + 0.5)
+					var bh_col = Color(0.7, 0.1, 1.0, (0.35 + 0.45 * bh_pulse) * bh_ratio)
+					nav_overlay.draw_rect(Rect2(Vector2.ZERO, vp_size), bh_col, false, 8.0)
+					nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 150, 150), "⚠ EVENT HORIZON: TIDAL DISRUPTION ⚠", HORIZONTAL_ALIGNMENT_CENTER, 300, 12, Color(0.9, 0.4, 1.0))
+
 	# ナビ対象天体リスト (星系の主要天体 Key Solar Bodies のみに厳格選定)
 	var targets: Array[Dictionary] = []
 	if grid_manager:
@@ -1272,3 +1437,48 @@ func _on_nav_overlay_draw() -> void:
 				var m_dist_str = "%.1fkm" % m_dist_km if m_dist_km >= 1.0 else "%.0fm" % m_pdist
 				var m_txt = "GOAL: %s [%s]" % [m_info.get("name", "MISSION"), m_dist_str]
 				nav_overlay.draw_string(ThemeDB.fallback_font, marker_p - Vector2(40, 14), m_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(2.5, 2.5, 1.2))
+
+	# ========================================================
+	# 宇宙フェーズ: 星系俯瞰ミニレーダー (System Mini Radar)
+	# ========================================================
+	if GameState.story_phase >= GameState.StoryPhase.SPACE and grid_manager:
+		var r_center = Vector2(vp_size.x - 65.0, 68.0)
+		var r_rad = 42.0
+		var r_scale = r_rad / 10000.0 # 太陽系全域(約10000px)をマッピング
+		
+		# レーダー背景とリング
+		nav_overlay.draw_circle(r_center, r_rad, Color(0.02, 0.05, 0.1, 0.75))
+		nav_overlay.draw_arc(r_center, r_rad, 0, TAU, 32, Color(0.1, 0.7, 0.9, 0.6), 1.5)
+		nav_overlay.draw_arc(r_center, r_rad * 0.5, 0, TAU, 24, Color(0.1, 0.7, 0.9, 0.25), 1.0)
+		nav_overlay.draw_line(r_center - Vector2(r_rad, 0), r_center + Vector2(r_rad, 0), Color(0.1, 0.7, 0.9, 0.2), 1.0)
+		nav_overlay.draw_line(r_center - Vector2(0, r_rad), r_center + Vector2(0, r_rad), Color(0.1, 0.7, 0.9, 0.2), 1.0)
+		
+		var sun_p = grid_manager.SUN_POS
+		# 太陽 (中心相対)
+		nav_overlay.draw_circle(r_center, 3.5, Color(1.0, 0.8, 0.2, 0.95))
+		
+		# 母星
+		var home_r_pos = r_center + (grid_manager.HOME_CENTER - sun_p) * r_scale
+		if home_r_pos.distance_to(r_center) <= r_rad:
+			nav_overlay.draw_circle(home_r_pos, 2.8, Color(0.2, 0.8, 1.0, 0.95))
+			
+		# ブラックホール
+		for p in grid_manager.active_planets:
+			if p.get("id", "") == "GARGANTUA-ZERO":
+				var bh_r_pos = r_center + (p["pos"] - sun_p) * r_scale
+				if bh_r_pos.distance_to(r_center) <= r_rad:
+					nav_overlay.draw_circle(bh_r_pos, 2.5, Color(0.8, 0.2, 1.0, 0.9))
+					
+		# 敵要塞
+		var boss_pos = sun_p + Vector2(7600.0, -1200.0)
+		var boss_r_pos = r_center + (boss_pos - sun_p) * r_scale
+		if boss_r_pos.distance_to(r_center) <= r_rad and GameState.hostile_core_health > 0.0:
+			nav_overlay.draw_circle(boss_r_pos, 3.0, Color(1.0, 0.2, 0.2, 0.95))
+			
+		# 自機位置 (パルス点滅)
+		var p_r_pos = r_center + (player.global_position - sun_p) * r_scale
+		if p_r_pos.distance_to(r_center) <= r_rad:
+			var p_pulse = 0.5 + 0.5 * sin(hud_anim_time * 8.0)
+			nav_overlay.draw_circle(p_r_pos, 3.0, Color(1.0, 1.0, 1.0, p_pulse))
+			
+		nav_overlay.draw_string(ThemeDB.fallback_font, r_center + Vector2(-30, r_rad + 12), "RADAR: 10 AU", HORIZONTAL_ALIGNMENT_CENTER, 60, 8, Color(0.2, 0.8, 1.0, 0.8))
