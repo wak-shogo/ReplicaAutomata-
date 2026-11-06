@@ -1688,7 +1688,7 @@ func _draw() -> void:
 		# パーセンテージ表示 & キャンセル案内 (Progress & Refund Indicator)
 		var pct_txt = "%s %d%%" % [bp["type"].to_upper(), int(prog * 100.0)]
 		draw_string(ThemeDB.fallback_font, bpos + Vector2(-35, -26), pct_txt, HORIZONTAL_ALIGNMENT_CENTER, 70, 9, Color(0.2, 2.8, 1.8))
-		if prog < 0.35:
+		if prog < 0.35 and bp["type"] != "belt":
 			draw_string(ThemeDB.fallback_font, bpos + Vector2(-45, 28), "[ RE-TAP: REFUND ]", HORIZONTAL_ALIGNMENT_CENTER, 90, 8, Color(0.6, 0.8, 0.9, 0.75))
 
 	# 6. 自律建築ドローン (Fabricator Drones) ＆ 溶接ナノビーム
