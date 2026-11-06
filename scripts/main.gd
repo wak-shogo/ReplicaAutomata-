@@ -260,6 +260,12 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, p_pos + Vector2(-120, beacon_rad + 60), "SEED-01 (YOU)", HORIZONTAL_ALIGNMENT_CENTER, -1, 36, Color(0.3, 2.8, 3.5))
 
 func _input(event: InputEvent) -> void:
+	if GameState.story_phase == GameState.StoryPhase.DORMANT:
+		if (event is InputEventMouseButton and event.pressed) or (event is InputEventScreenTouch and event.pressed) or (event is InputEventKey and event.pressed):
+			if player and player.has_method("wake_up_probe"):
+				player.wake_up_probe()
+				return
+
 	if not camera:
 		return
 		
@@ -375,7 +381,7 @@ func toggle_map_view() -> void:
 
 func _update_camera_status_ui() -> void:
 	if hud and hud.has_method("update_camera_mode_indicator"):
-		var mode_name = "自機追従中 [SPACE]" if is_following_player else "自機へ戻る [SPACE]"
+		var mode_name = "CAMERA: FOLLOWING SHIP [SPACE]" if is_following_player else "CAMERA: SYSTEM MAP [SPACE]"
 		hud.update_camera_mode_indicator(mode_name, is_following_player)
 
 func _process_megastructure_building(delta: float) -> void:
@@ -639,14 +645,59 @@ func _run_test_phase_11() -> void:
 func _run_test_phase_12() -> void:
 	print("TEST PHASE 12: PLANETARY REVOLUTION AROUND SUN VERIFICATION")
 	var initial_home_pos = grid_manager.HOME_CENTER if grid_manager else Vector2.ZERO
-	get_tree().create_timer(0.6).timeout.connect(func():
+	get_tree().create_timer(0.5).timeout.connect(func():
 		var final_home_pos = grid_manager.HOME_CENTER if grid_manager else Vector2.ZERO
 		var moved_dist = initial_home_pos.distance_to(final_home_pos)
-		print("ASSERTION: Home planet orbital movement in 0.6s -> %.2f px" % moved_dist)
+		print("ASSERTION: Home planet orbital movement in 0.5s -> %.2f px" % moved_dist)
 		assert(moved_dist > 0.001, "CRITICAL ERROR: Home planet is static and not revolving around the sun!")
 		_save_test_screen("docs/art/test_12_planetary_orbit.png")
-		print(">>> ALL 12 CRITICAL & CELESTIAL REGRESSION TESTS PASSED 100%! <<<")
-		get_tree().quit(0)
+		_run_test_phase_13()
+	)
+
+func _run_test_phase_13() -> void:
+	print("TEST PHASE 13: SURFACE ATTACHMENT ZERO-DRIFT VERIFICATION")
+	if player and grid_manager:
+		player.is_surface_attached = true
+		player.attached_angle_off = 0.0
+		player.velocity = Vector2.ZERO
+	
+	get_tree().create_timer(0.5).timeout.connect(func():
+		if player and grid_manager:
+			var rel_offset = player.global_position - grid_manager.HOME_CENTER
+			var cur_radius = rel_offset.length()
+			var target_radius = grid_manager.HOME_RADIUS + 16.0
+			var rad_error = abs(cur_radius - target_radius)
+			print("ASSERTION: Surface attachment radius error: %.4f px (Target: %.1f, Actual: %.1f)" % [rad_error, target_radius, cur_radius])
+			assert(rad_error < 0.2, "CRITICAL ERROR: Player drifted in radius off planet surface!")
+			assert(player.is_surface_attached, "CRITICAL ERROR: Surface attachment flag was lost!")
+		_run_test_phase_14()
+	)
+
+func _run_test_phase_14() -> void:
+	print("TEST PHASE 14: DEEP SPACE NEWTONIAN INERTIAL MOTION (ZERO RIGHTWARD DRIFT)")
+	if player and grid_manager:
+		# 宇宙遠方へ配置（太陽・惑星の局所重力圏外）
+		player.is_surface_attached = false
+		player.global_position = grid_manager.SUN_POS + Vector2(25000.0, 25000.0)
+		player.velocity = Vector2(160.0, 0.0) # X方向に等速直線飛行
+	
+	get_tree().create_timer(0.5).timeout.connect(func():
+		if player:
+			var vx = player.velocity.x
+			print("ASSERTION: Deep space inertial velocity X -> %.2f px/s (Initial: 160.0)" % vx)
+			assert(abs(vx - 160.0) < 5.0, "CRITICAL ERROR: Artificial damping or unexpected force in deep space!")
+			
+			# 停止テスト（速度ゼロで静止した場合、右側ドリフトが一切発生しないこと）
+			player.velocity = Vector2.ZERO
+			var pos_before = player.global_position
+			get_tree().create_timer(0.3).timeout.connect(func():
+				var pos_after = player.global_position
+				var drift_dist = pos_before.distance_to(pos_after)
+				print("ASSERTION: Post-brake stationary drift -> %.4f px" % drift_dist)
+				assert(drift_dist < 0.05, "CRITICAL ERROR: Player drifts after stopping in space!")
+				print(">>> ALL 14 CRITICAL, CELESTIAL & ZERO-DRIFT REGRESSION TESTS PASSED 100%! <<<")
+				get_tree().quit(0)
+			)
 	)
 
 func _save_test_screen(rel_path: String) -> void:

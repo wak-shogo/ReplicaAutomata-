@@ -44,16 +44,24 @@ var floating_res_type: String = ""
 var floating_res_timer: float = 0.0
 var floating_res_scale: float = 1.0
 
+# 惑星表面アタッチ力学 (Surface Attachment & Drift Prevention)
+var is_surface_attached: bool = true
+var attached_primary_kind: String = "home"
+var attached_angle_off: float = 0.0
+var attached_altitude: float = 16.0
+
 var player_sheet: Texture2D
 var drone_sheet: Texture2D
 
 func _ready() -> void:
 	grid_manager = get_parent().get_node_or_null("GridManager")
-	# 母星の地表（北極付近）から安全・確実にスタート
+	# 母星の地表（北極付近）にアタッチ固定して安全・確実にスタート
+	attached_angle_off = 0.0
+	is_surface_attached = true
 	if grid_manager and grid_manager.has_method("surface_pos_at"):
-		position = grid_manager.surface_pos_at(0.0, 16.0)
+		global_position = grid_manager.surface_pos_at(0.0, 16.0)
 	else:
-		position = Vector2(800.0, 634.0)
+		global_position = Vector2(800.0, 634.0)
 	velocity = Vector2(0.0, 0.0)
 	player_sheet = load("res://assets/sprites/player_core_sheet.png")
 	drone_sheet = load("res://assets/sprites/fabricator_drone_sheet.png")
@@ -102,9 +110,10 @@ func _physics_process(delta: float) -> void:
 		velocity = Vector2.ZERO
 		is_mining = false
 		thrusting_dir = Vector2.ZERO
-		# 休眠中も母星の公転に追従
-		if grid_manager and grid_manager.get("home_delta_pos"):
-			global_position += grid_manager.home_delta_pos
+		# 母星の地表（北極）に厳密にアタッチ固定（公転ドリフト 0.000%）
+		if grid_manager:
+			var cur_ang = -PI * 0.5 + attached_angle_off
+			global_position = grid_manager.HOME_CENTER + Vector2(cos(cur_ang), sin(cur_ang)) * (grid_manager.HOME_RADIUS + attached_altitude)
 		queue_redraw()
 		return
 
@@ -133,115 +142,118 @@ func _physics_process(delta: float) -> void:
 		input_vec = touch_thrust_vec
 
 	var is_precision_mode: bool = is_mining or (grid_manager and grid_manager.selected_tool != "none")
-	var target_cruise_speed: float = 100.0 if is_precision_mode else (160.0 + float(GameState.attached_drones) * 12.0)
+	var target_cruise_speed: float = 110.0 if is_precision_mode else (175.0 + float(GameState.attached_drones) * 14.0)
+
+	var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_key_pressed(KEY_SPACE) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
+	is_inertial_braking = is_brake_key
 
 	if grid_manager and grid_manager.has_method("compute_gravity_and_orbit"):
 		grid_manager.ensure_sectors_around(global_position)
 		current_orbit_info = grid_manager.compute_gravity_and_orbit(global_position, velocity)
-		var g_acc: Vector2 = current_orbit_info["acc"]
-		var alt: float = current_orbit_info["altitude"]
-		
-		# 大気圏・低空探査領域判定（高度 350px 未満）
-		var in_atmosphere: bool = (alt < 350.0)
-		
-		var is_brake_key = Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_C) or Input.is_key_pressed(KEY_SPACE) or Input.is_joy_button_pressed(0, JOY_BUTTON_B) or touch_braking_active
-		
-		if not in_atmosphere:
-			# 深宇宙空間（高度 350px 以上）：完全な等速直線運動（無抵抗慣性）＆万有引力軌道運動 + スラスター推力 + 手動ブレーキ
-			is_inertial_braking = is_brake_key
-			thrusting_dir = input_vec.normalized()
-			
+		var prim: Dictionary = current_orbit_info.get("primary", {})
+		var prim_pos: Vector2 = prim.get("pos", grid_manager.HOME_CENTER)
+		var prim_rad: float = prim.get("radius", 420.0)
+		var prim_kind: String = prim.get("kind", "home")
+		var min_radius: float = prim_rad + 16.0
+
+		if is_surface_attached:
+			# =========================================================
+			# 1. 惑星表面完全アタッチ状態 (ドリフト完全ゼロ化 & 確実な接地固定)
+			# =========================================================
+			thrusting_dir = Vector2.ZERO
+			var cur_ang = -PI * 0.5 + attached_angle_off
+			var normal = Vector2(cos(cur_ang), sin(cur_ang))
+			var tangent = Vector2(-normal.y, normal.x)
+
+			# 接地走行入力 (A/D, 左右スティック) & 離陸入力 (W, 上スティック)
+			var t_input: float = input_vec.dot(tangent) if input_vec.length_squared() > 0.01 else 0.0
+			var up_input: float = 0.0
+			if input_vec.length_squared() > 0.01:
+				up_input = maxf(0.0, input_vec.dot(normal))
+				if input_vec.y < -0.3:
+					up_input = maxf(up_input, -input_vec.y)
+
+			# 離陸判定 (Wキー / スティック上でアタッチ解除して宇宙へ離脱)
+			if up_input > 0.25:
+				is_surface_attached = false
+				var launch_spd = 220.0 + float(GameState.attached_drones) * 25.0
+				var body_vel = prim.get("delta_pos", grid_manager.home_delta_pos) / delta
+				velocity = normal * launch_spd + body_vel
+				AudioSynth.play_synth("launch")
+			else:
+				# 地表周回走行 (指を離せばその場でピタッとアタッチ静止)
+				if abs(t_input) > 0.05:
+					var analog_mag = clampf(abs(t_input), 0.0, 1.0)
+					var move_v = sign(t_input) * target_cruise_speed * pow(analog_mag, 1.4)
+					attached_angle_off += (move_v * delta) / prim_rad
+					thrusting_dir = tangent * sign(t_input)
+
+				# 惑星中心・公転軌道に 100% 幾何学的同期 (ドリフト 0.000%)
+				cur_ang = -PI * 0.5 + attached_angle_off
+				global_position = prim_pos + Vector2(cos(cur_ang), sin(cur_ang)) * min_radius
+				velocity = Vector2.ZERO
+
+		else:
+			# =========================================================
+			# 2. 宇宙空間：完全な「等速直線運動（無抵抗・完全慣性）」
+			# =========================================================
+			thrusting_dir = input_vec.normalized() if input_vec.length_squared() > 0.01 else Vector2.ZERO
+			var g_acc: Vector2 = current_orbit_info.get("acc", Vector2.ZERO)
+
 			if is_inertial_braking:
-				# 手動操作による緊急アクティブ逆噴射ブレーキ (Shift / Space / C / Joypad B / スマホブレーキ)
-				velocity = velocity.move_toward(Vector2.ZERO, 540.0 * delta)
+				# 手動逆噴射ブレーキ (Space / Shift / C / Joypad B / スマホSTOP)
+				velocity = velocity.move_toward(Vector2.ZERO, 580.0 * delta)
 				velocity += g_acc * delta
 			elif input_vec.length_squared() > 0.01:
+				# スラスター噴射推進
 				var cur_thrust = thrust_accel + float(GameState.attached_drones) * 35.0
 				velocity += (g_acc + input_vec.normalized() * cur_thrust) * delta
 			else:
-				# スラスター無入力時：宇宙本来の等速直線運動を維持
+				# スラスター無入力時：完全な等速直線運動（無抵抗慣性＋重力場）！
 				velocity += g_acc * delta
-		else:
-			# 大気圏・地表低空領域：強力オートスタビライザー（指を離せばピタッと静止して通り過ぎない）
-			is_inertial_braking = is_brake_key
-			thrusting_dir = input_vec.normalized()
-			
-			if is_brake_key:
-				velocity = velocity.move_toward(Vector2.ZERO, 950.0 * delta)
-			elif input_vec.length_squared() > 0.01:
-				var analog_mag = clampf(input_vec.length(), 0.0, 1.0)
-				var eased_mag = pow(analog_mag, 1.6) # 微小入力でのミリ単位精密微調整イージング
-				velocity = velocity.lerp(input_vec.normalized() * (target_cruise_speed * eased_mag), delta * 12.0)
-			else:
-				var stop_friction: float = 18.0 if is_precision_mode else 12.0
-				velocity = velocity.lerp(Vector2.ZERO, delta * stop_friction)
-				if velocity.length_squared() < 6.0:
-					velocity = Vector2.ZERO
-	else:
-		velocity = input_vec.normalized() * 160.0
-		
-	move_and_slide()
 
-	# ========================================================
-	# 全天体共通：地表めり込み完全防止 ＆ 接地力学 (Surface Clamping)
-	# ========================================================
-	if grid_manager and not current_orbit_info.is_empty():
-		var prim = current_orbit_info["primary"]
-		var prim_pos: Vector2 = prim.get("pos", grid_manager.HOME_CENTER)
-		var prim_rad: float = prim.get("radius", 420.0)
-		var prim_kind: String = prim.get("kind", "")
-		
-		# 機体の物理半径 (16px)
-		var r_ship: float = 16.0
-		var min_radius: float = prim_rad + r_ship
-		var to_ship: Vector2 = global_position - prim_pos
-		var cur_r: float = to_ship.length()
-		var normal: Vector2 = to_ship / cur_r if cur_r > 0.001 else Vector2.UP
-		
-		# 地表より内側にめり込んでいる場合
-		if cur_r < min_radius:
-			# 1. 物理位置を地表面に完全ハードクランプ (位置押し出し)
-			global_position = prim_pos + normal * min_radius
-			
-			# 2. 地面に向かう法線速度成分をゼロ化 (地面に衝突して停止)
+			move_and_slide()
+
+			# ---------------------------------------------------------
+			# 地表タッチ判定 -> 惑星表面への自動アタッチ固定
+			# ---------------------------------------------------------
+			var to_ship = global_position - prim_pos
+			var cur_r = to_ship.length()
+			var normal = to_ship / cur_r if cur_r > 0.001 else Vector2.UP
 			var v_in = velocity.dot(normal)
-			if v_in < -40.0:
-				AudioSynth.play_synth("click")
-				var mn = get_parent()
-				if mn and mn.has_method("shake_camera"):
-					mn.shake_camera(clampf(abs(v_in) * 0.02, 1.0, 5.0), 0.15)
-			if v_in < 0.0:
-				velocity -= normal * v_in
-			
-			# 3. 接地中の入力制御: 水平移動と上空への離陸
-			var tangent = Vector2(-normal.y, normal.x)
-			var t_input = input_vec.dot(tangent)
-			var up_input = maxf(0.0, input_vec.dot(normal))
-			if input_vec.length_squared() > 0.01:
-				var analog_mag = clampf(input_vec.length(), 0.0, 1.0)
-				var eased_mag = pow(analog_mag, 1.5)
-				var target_v = (tangent * (t_input * eased_mag * target_cruise_speed)) + (normal * up_input * 260.0)
-				velocity = velocity.lerp(target_v, delta * 14.0)
-			else:
-				velocity = velocity.move_toward(Vector2.ZERO, 900.0 * delta)
+
+			# 地表に接触し、かつ地面に向かう速度のとき
+			if cur_r <= min_radius + 4.0 and v_in <= 25.0:
+				if prim_kind != "sun" and prim_kind != "blackhole":
+					is_surface_attached = true
+					attached_primary_kind = prim_kind
+					attached_angle_off = grid_manager.angle_off_from_pos(global_position)
+					var cur_ang = -PI * 0.5 + attached_angle_off
+					global_position = prim_pos + Vector2(cos(cur_ang), sin(cur_ang)) * min_radius
+					velocity = Vector2.ZERO
+					AudioSynth.play_synth("click")
+					var mn = get_parent()
+					if mn and mn.has_method("shake_camera") and abs(v_in) > 30.0:
+						mn.shake_camera(2.0, 0.15)
 
 		# 3.5 母星大気圏再突入力学 (Atmospheric Re-entry Aerodynamic Drag & Heat Cone)
 		is_reentry = false
 		reentry_intensity = 0.0
-		if prim_kind == "home" and cur_r > min_radius + 4.0 and cur_r < prim_rad + 150.0:
-			var alt_ratio = 1.0 - clampf((cur_r - min_radius) / 150.0, 0.0, 1.0)
+		var to_ship_all = global_position - prim_pos
+		var cur_r_all = to_ship_all.length()
+		var normal_all = to_ship_all / cur_r_all if cur_r_all > 0.001 else Vector2.UP
+		
+		if not is_surface_attached and prim_kind == "home" and cur_r_all > min_radius + 4.0 and cur_r_all < prim_rad + 150.0:
+			var alt_ratio = 1.0 - clampf((cur_r_all - min_radius) / 150.0, 0.0, 1.0)
 			var spd = velocity.length()
-			var v_down = -velocity.dot(normal)
+			var v_down = -velocity.dot(normal_all)
 			if spd > 220.0 or v_down > 120.0:
 				is_reentry = true
 				reentry_intensity = clampf((spd - 200.0) / 250.0, 0.2, 1.0) * alt_ratio
 				var drag_force = -velocity.normalized() * (spd * spd * 0.0008 * alt_ratio)
 				velocity += drag_force * delta
 
-		# 4. 全天体共通：公転座標系自動追従 (Celestial Co-moving Reference Frame)
-		var p_delta = current_orbit_info.get("primary_delta_pos", Vector2.ZERO)
-		if p_delta.length_squared() > 0.0001 and cur_r < prim_rad * 2.8:
-			global_position += p_delta
+		# 4. 宇宙空間の完全な等速直線運動（公転追従による右側ドリフトを完全排除、ニュートン力学を100%保持）
 
 		# 5. 恒星プラズマ過熱 ＆ スイングバイ熱放射 (Solar Heat Flux & Radiation Hazard)
 		var sun_p = grid_manager.SUN_POS
@@ -250,11 +262,9 @@ func _physics_process(delta: float) -> void:
 		var dist_sun = d_sun.length()
 		
 		if dist_sun < sun_r * 1.4:
-			# コロナ過熱圏突入：シールド蒸発 ＆ 熱ダメージ
 			var heat_ratio = clampf((sun_r * 1.4 - dist_sun) / (sun_r * 0.4), 0.0, 1.0)
 			GameState.damage_player(35.0 * heat_ratio * delta)
 			
-			# 太陽表面突入時：固体激突ではなく強烈なプラズマ熱衝撃波で外側へ吹き飛ばし
 			if dist_sun < sun_r:
 				var push_n = d_sun.normalized() if dist_sun > 0.1 else Vector2.UP
 				global_position = sun_p + push_n * (sun_r + 4.0)
@@ -264,28 +274,24 @@ func _physics_process(delta: float) -> void:
 
 		# 6. ブラックホール事象の地平面 ＆ 潮汐破壊・時空ワープ (Singularity Tidal Disruption)
 		if prim_kind == "blackhole":
-			if cur_r < prim_rad * 1.2:
-				# 事象の地平面突入：超重力潮汐力によるシールド浸食
+			if cur_r_all < prim_rad * 1.2:
 				GameState.damage_player(55.0 * delta)
-				# 降着円盤スイングバイ加速
-				var spin_tangent = Vector2(-normal.y, normal.x)
+				var spin_tangent = Vector2(-normal_all.y, normal_all.x)
 				velocity += spin_tangent * (480.0 * delta)
 				
-				# 特異点到達時：緊急時空ワームホール排出
-				if cur_r < 28.0:
+				if cur_r_all < 28.0:
 					var eject_dir = Vector2(randf_range(-1, 1), randf_range(-1, 1)).normalized()
 					global_position = prim_pos + eject_dir * (prim_rad * 2.2)
 					velocity = eject_dir * 780.0
 					AudioSynth.play_synth("wormhole_warp")
 					GameState.add_log("EVENT HORIZON WARP: QUANTUM EJECTION FROM SINGULARITY!")
 
-		# 7. パルサー極ジェット直撃 ＆ 相対論的放射圧加速 (Relativistic Jet Radiation Propulsion)
-		if prim_kind == "pulsar" and cur_r < 980.0:
+		# 7. パルサー極ジェット直撃 ＆ 相対論的放射圧加速
+		if prim_kind == "pulsar" and cur_r_all < 980.0:
 			var p_rot = grid_manager.anim_time * 6.5
 			var b_vec = Vector2(cos(p_rot), sin(p_rot))
-			# 自機がビーム直線（双極）上と交差しているかを外積で判定
-			if abs(normal.cross(b_vec)) < 0.14:
-				velocity += normal * (750.0 * delta)
+			if abs(normal_all.cross(b_vec)) < 0.14:
+				velocity += normal_all * (750.0 * delta)
 				GameState.damage_player(18.0 * delta)
 				AudioSynth.play_synth("pulsar_pulse")
 				var mn = get_parent()
@@ -301,6 +307,8 @@ func _physics_process(delta: float) -> void:
 				velocity = Vector2(1.0, 0.35).normalized() * 2500.0
 				GameState.add_log("★ HYPERDRIVE ENGAGED: INTERSTELLAR EXPEDITION INITIATED ★")
 				var hud = get_parent().get_node_or_null("HUD")
+				if hud and hud.has_method("trigger_victory_ending"):
+					hud.trigger_victory_ending()
 				if hud and hud.has_method("_trigger_milestone_banner"):
 					hud._trigger_milestone_banner("★ VICTORY: STELLAR ACCELERATOR LAUNCH ★")
 
@@ -308,9 +316,12 @@ func _physics_process(delta: float) -> void:
 		var sun_proximity = clampf((sun_r * 2.5 - dist_sun) / (sun_r * 1.8), 0.0, 1.0)
 		var bh_proximity = 0.0
 		if prim_kind == "blackhole":
-			bh_proximity = clampf((prim_rad * 3.0 - cur_r) / (prim_rad * 2.2), 0.0, 1.0)
+			bh_proximity = clampf((prim_rad * 3.0 - cur_r_all) / (prim_rad * 2.2), 0.0, 1.0)
 		var thrust_power = clampf(input_vec.length(), 0.0, 1.0)
 		AudioSynth.update_celestial_ambience(sun_proximity, bh_proximity, thrust_power)
+	else:
+		velocity = input_vec.normalized() * 160.0
+		move_and_slide()
 
 	# MOVEフェーズでの移動距離検知 ＆ 地質センサー波発信
 	if GameState.story_phase == GameState.StoryPhase.MOVE:

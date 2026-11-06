@@ -129,10 +129,10 @@ func unlock_all_tools() -> void:
 
 # 8. メガストラクチャー建造進捗 (0.0 ~ 1.0)
 var megastructures = {
-	"elevator": {"name": "軌道エレベーター (Orbital Space Elevator)", "cost": {"Fe": 250, "Cu": 180, "Ti": 120, "alloy": 30}, "progress": 0.0, "built": false, "bonus": "資源ピストン輸送効率 +300%"},
-	"dyson": {"name": "ダイソンリング (Dyson Ring Segment)", "cost": {"Fe": 400, "Cu": 300, "Si": 250, "alloy": 60}, "progress": 0.0, "built": false, "bonus": "全工場生産速度 x2 & 電力無限"},
-	"citadel": {"name": "軌道要塞シタデル (Orbital Citadel Fortress)", "cost": {"Fe": 500, "Ti": 300, "alloy": 100, "circuit": 50}, "progress": 0.0, "built": false, "bonus": "防衛プラズマ砲自動掃射"},
-	"warpgate": {"name": "星間超大型レールガン (Stellar Accelerator)", "cost": {"Fe": 800, "Ti": 600, "alloy": 200, "circuit": 120}, "progress": 0.0, "built": false, "bonus": "星系制覇最終兵器"}
+	"elevator": {"name": "Orbital Space Elevator", "cost": {"Fe": 250, "Cu": 180, "Ti": 120, "alloy": 30}, "progress": 0.0, "built": false, "bonus": "Resource Transfer Rate +300%"},
+	"dyson": {"name": "Dyson Ring Segment", "cost": {"Fe": 400, "Cu": 300, "Si": 250, "alloy": 60}, "progress": 0.0, "built": false, "bonus": "Factory Speed x2 & Infinite Power"},
+	"citadel": {"name": "Orbital Citadel Fortress", "cost": {"Fe": 500, "Ti": 300, "alloy": 100, "circuit": 50}, "progress": 0.0, "built": false, "bonus": "Auto Defense Plasma Battery"},
+	"warpgate": {"name": "Stellar Accelerator Cannon", "cost": {"Fe": 800, "Ti": 600, "alloy": 200, "circuit": 120}, "progress": 0.0, "built": false, "bonus": "Final Star System Liberation Weapon"}
 }
 var active_megastructure_project: String = ""
 
@@ -140,7 +140,7 @@ var active_megastructure_project: String = ""
 var quest_index: int = 0
 var quest_list: Array[Dictionary] = [
 	{
-		"title": "目覚めと手動採掘",
+		"title": "Awakening & Surface Mining",
 		"icon": "tool_pick",
 		"short": "MINE Fe",
 		"waypoint": "vein_Fe",
@@ -149,7 +149,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 40
 	},
 	{
-		"title": "機体拡張：ドローン合体",
+		"title": "Expansion: Attach Sub-Drone",
 		"icon": "item_drone_unit",
 		"short": "ATTACH DRONE",
 		"waypoint": "player",
@@ -157,7 +157,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 1
 	},
 	{
-		"title": "自動化の第一歩：ドリル設置",
+		"title": "Automation Dawn: Mining Drill",
 		"icon": "tool_drill",
 		"short": "BUILD DRILL",
 		"waypoint": "vein_Fe",
@@ -166,7 +166,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 1
 	},
 	{
-		"title": "コンベア物流網の敷設",
+		"title": "Logistics: Conveyor Pipeline",
 		"icon": "tool_belt",
 		"short": "BUILD BELT",
 		"waypoint": "surface",
@@ -175,7 +175,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 3
 	},
 	{
-		"title": "金属精錬ラインの構築",
+		"title": "Refining: Electric Smelter",
 		"icon": "tool_smelter",
 		"short": "BUILD SMELTER",
 		"waypoint": "surface",
@@ -184,7 +184,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 1
 	},
 	{
-		"title": "ドローン自動組立機の配置",
+		"title": "Fabrication: Auto Assembler",
 		"icon": "tool_assembler",
 		"short": "BUILD ASSEMBLER",
 		"waypoint": "surface",
@@ -193,7 +193,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 1
 	},
 	{
-		"title": "宇宙射出：マスドライバー建設",
+		"title": "Orbital Launch: Mass Driver",
 		"icon": "tool_mass_driver",
 		"short": "BUILD MASS DRIVER",
 		"waypoint": "surface",
@@ -202,7 +202,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 1
 	},
 	{
-		"title": "スウォーム艦隊100機突破",
+		"title": "Orbital Fleet: 100 Drone Swarm",
 		"icon": "item_drone_unit",
 		"short": "FLEET SWARM",
 		"waypoint": "space",
@@ -210,7 +210,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 100
 	},
 	{
-		"title": "月面探査：ヘリウム3採掘",
+		"title": "Lunar Expedition: Harvest Helium-3",
 		"icon": "res_he3",
 		"short": "HARVEST LUNA He3",
 		"waypoint": "LUNA-PRIME",
@@ -219,7 +219,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 3
 	},
 	{
-		"title": "深宇宙探査：彗星または太陽採掘",
+		"title": "Deep Space: Solar Plasma & Ice",
 		"icon": "res_plasma",
 		"short": "HARVEST PLASMA / ICE",
 		"waypoint": "HELIOS-PRIME",
@@ -227,7 +227,7 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 5
 	},
 	{
-		"title": "特異点突入：暗黒物質採掘",
+		"title": "Singularity: Dark Matter Extraction",
 		"icon": "res_darkmatter",
 		"short": "HARVEST DARK MATTER",
 		"waypoint": "GARGANTUA-ZERO",
@@ -236,14 +236,14 @@ var quest_list: Array[Dictionary] = [
 		"target_val": 2
 	},
 	{
-		"title": "大規模宇宙構造物の建造",
+		"title": "Megastructure Construction",
 		"icon": "icon_elevator",
 		"short": "BUILD MEGASTRUCTURE",
 		"waypoint": "megastructure",
 		"req_type": "megastructure"
 	},
 	{
-		"title": "敵性要塞制圧・星系解放",
+		"title": "Assault Hostile Core & Liberation",
 		"icon": "tool_turret",
 		"short": "ASSAULT HOSTILE CORE",
 		"waypoint": "boss",

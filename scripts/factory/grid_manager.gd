@@ -1597,7 +1597,7 @@ func _draw() -> void:
 			var beacon_tip = HOME_CENTER + radial * (HOME_RADIUS + 8.0)
 			draw_line(beacon_surf, beacon_tip, Color(0.2, 2.5, 3.0, 0.95), 3.5)
 			draw_arc(beacon_surf, 16.0 + guide_pulse * 6.0, 0, TAU, 24, Color(0.0, 2.8, 3.5, 0.85), 2.0)
-			var guide_tag = "[ HOLD MINE ]" if GameState.story_phase == GameState.StoryPhase.MINE else "[ ▼ 鉄鉱脈 (Fe) ]"
+			var guide_tag = "[ HOLD MINE ]" if GameState.story_phase == GameState.StoryPhase.MINE else "[ ▼ Fe ORE VEIN ]"
 			draw_string(ThemeDB.fallback_font, beacon_surf + Vector2(-60, -18), guide_tag, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color(0.2, 2.8, 3.5))
 
 	# 4. 配置済み実体施設

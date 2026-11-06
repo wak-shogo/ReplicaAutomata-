@@ -272,7 +272,7 @@ func open_tech_tree_modal() -> void:
 		for rk in res_types:
 			var lbl = res_box.find_child("ResLbl_" + rk, true, false)
 			if lbl:
-				lbl.text = "所持 %s: %d" % [rk, GameState.resources.get(rk, 0)]
+				lbl.text = "%s: %d" % [rk, GameState.resources.get(rk, 0)]
 	_update_tech_tree_cards_affordability()
 	tech_tree_modal.visible = true
 	AudioSynth.play_synth("click")
@@ -287,7 +287,7 @@ func _update_tech_tree_cards_affordability() -> void:
 		var sb_n: StyleBoxFlat = c_info["sb_n"]
 		
 		if tid == "demolish":
-			status_lbl.text = "✔ いつでも使用可能"
+			status_lbl.text = "✔ READY TO USE"
 			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.2, 1.2))
 			sb_n.border_color = Color(0.0, 1.5, 2.0, 0.6)
 			continue
@@ -300,15 +300,15 @@ func _update_tech_tree_cards_affordability() -> void:
 			var have = GameState.resources.get(r_k, 0)
 			if have < need:
 				can_afford = false
-				missing_list.append("%s不足(-%d)" % [r_k, need - have])
+				missing_list.append("%s (-%d)" % [r_k, need - have])
 				
 		if can_afford:
-			status_lbl.text = "✔ 製造可能 (タップして配置)"
+			status_lbl.text = "✔ READY TO CONSTRUCT"
 			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
 			sb_n.border_color = Color(0.0, 2.2, 2.8, 0.8)
 			sb_n.bg_color = Color(0.04, 0.10, 0.18, 0.92)
 		else:
-			status_lbl.text = "❌ " + " / ".join(missing_list)
+			status_lbl.text = "❌ NEED: " + " / ".join(missing_list)
 			status_lbl.add_theme_color_override("font_color", Color(2.5, 0.4, 0.4))
 			sb_n.border_color = Color(0.6, 0.2, 0.2, 0.5)
 			sb_n.bg_color = Color(0.06, 0.04, 0.05, 0.88)
@@ -334,7 +334,7 @@ func _update_build_mode_visuals() -> void:
 		build_guide_label.visible = is_bm
 		if is_bm:
 			var tname = grid_manager.selected_tool.to_upper()
-			build_guide_label.text = "[ 🛠 選択中: %s | 近くの青いバーチャル施設をタップして造形 ]" % tname
+			build_guide_label.text = "[ 🛠 SELECTED: %s | TAP BLUE GHOST TO CONSTRUCT ]" % tname
 	if build_cancel_btn:
 		build_cancel_btn.visible = is_bm
 
@@ -765,14 +765,14 @@ func build_minimal_ui() -> void:
 	sb_drn.set_corner_radius_all(30)
 
 	btn_touch_drone = Button.new()
-	btn_touch_drone.text = "✦\n増殖"
+	btn_touch_drone.text = "✦\nREPLICATE"
 	btn_touch_drone.position = Vector2(22, 38)
 	btn_touch_drone.custom_minimum_size = Vector2(60, 60)
 	btn_touch_drone.add_theme_stylebox_override("normal", sb_drn)
 	btn_touch_drone.add_theme_stylebox_override("pressed", sb_drn)
 	btn_touch_drone.add_theme_stylebox_override("hover", sb_drn)
 	btn_touch_drone.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn_touch_drone.add_theme_font_size_override("font_size", 11)
+	btn_touch_drone.add_theme_font_size_override("font_size", 10)
 	btn_touch_drone.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
 	btn_touch_drone.pressed.connect(func():
 		if GameState.attach_drone(): AudioSynth.play_synth("build")
@@ -880,7 +880,7 @@ func build_minimal_ui() -> void:
 
 	# 建築モード即時キャンセルボタン (Cancel Build Mode Button)
 	build_cancel_btn = Button.new()
-	build_cancel_btn.text = " ✕ 建築キャンセル "
+	build_cancel_btn.text = " ✕ CANCEL BUILD "
 	build_cancel_btn.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	build_cancel_btn.anchor_left = 1.0
 	build_cancel_btn.anchor_right = 1.0
@@ -941,7 +941,7 @@ func build_minimal_ui() -> void:
 	# ========================================================
 	boot_guide_overlay = Control.new()
 	boot_guide_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	boot_guide_overlay.mouse_filter = Control.MOUSE_FILTER_PASS
+	boot_guide_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	boot_guide_overlay.gui_input.connect(func(ev):
 		if (ev is InputEventMouseButton and ev.pressed) or (ev is InputEventScreenTouch and ev.pressed):
 			if player_node and player_node.has_method("wake_up_probe"):
@@ -949,33 +949,66 @@ func build_minimal_ui() -> void:
 	)
 	add_child(boot_guide_overlay)
 
+	var boot_card = PanelContainer.new()
+	boot_card.set_anchors_preset(Control.PRESET_CENTER)
+	boot_card.anchor_left = 0.5
+	boot_card.anchor_right = 0.5
+	boot_card.anchor_top = 0.5
+	boot_card.anchor_bottom = 0.5
+	boot_card.offset_left = -220.0
+	boot_card.offset_top = -80.0
+	boot_card.offset_right = 220.0
+	boot_card.offset_bottom = 80.0
+	boot_card.mouse_filter = Control.MOUSE_FILTER_PASS
+
+	var sb_boot = StyleBoxFlat.new()
+	sb_boot.bg_color = Color(0.02, 0.06, 0.12, 0.90)
+	sb_boot.border_color = Color(0.0, 1.8, 2.5, 0.85)
+	sb_boot.set_border_width_all(2)
+	sb_boot.corner_radius_top_left = 10
+	sb_boot.corner_radius_top_right = 10
+	sb_boot.corner_radius_bottom_left = 10
+	sb_boot.corner_radius_bottom_right = 10
+	sb_boot.content_margin_left = 16
+	sb_boot.content_margin_right = 16
+	sb_boot.content_margin_top = 14
+	sb_boot.content_margin_bottom = 14
+	boot_card.add_theme_stylebox_override("panel", sb_boot)
+	boot_guide_overlay.add_child(boot_card)
+
 	var boot_vbox = VBoxContainer.new()
-	boot_vbox.set_anchors_preset(Control.PRESET_CENTER)
-	boot_vbox.anchor_left = 0.5
-	boot_vbox.anchor_right = 0.5
-	boot_vbox.anchor_top = 0.5
-	boot_vbox.anchor_bottom = 0.5
-	boot_vbox.offset_left = -200.0
-	boot_vbox.offset_top = 60.0
-	boot_vbox.offset_right = 200.0
-	boot_vbox.offset_bottom = 140.0
 	boot_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	boot_vbox.add_theme_constant_override("separation", 6)
-	boot_guide_overlay.add_child(boot_vbox)
+	boot_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
+	boot_card.add_child(boot_vbox)
 
 	var b_tag = Label.new()
-	b_tag.text = ">>> DORMANT AUTOMA PROBE <<<"
+	b_tag.text = "✦ STAR REPLICA: AUTOMA ✦"
 	b_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b_tag.add_theme_font_size_override("font_size", 13)
-	b_tag.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
+	b_tag.add_theme_font_size_override("font_size", 16)
+	b_tag.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
 	boot_vbox.add_child(b_tag)
 
+	var b_sub = Label.new()
+	b_sub.text = "COLONY SEED-01 RESTING ON PLANET SURFACE"
+	b_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b_sub.add_theme_font_size_override("font_size", 11)
+	b_sub.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0, 0.8))
+	boot_vbox.add_child(b_sub)
+
 	boot_prompt_lbl = Label.new()
-	boot_prompt_lbl.text = "[ TAP SCREEN TO INITIALIZE CORE ]"
+	boot_prompt_lbl.text = ">>> [ TAP ANYWHERE TO INITIALIZE CORE ] <<<"
 	boot_prompt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	boot_prompt_lbl.add_theme_font_size_override("font_size", 14)
-	boot_prompt_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.5))
+	boot_prompt_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.8))
 	boot_vbox.add_child(boot_prompt_lbl)
+
+	var b_hint = Label.new()
+	b_hint.text = "Controls: WASD / Joystick to Move | Pure Newton Inertia"
+	b_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b_hint.add_theme_font_size_override("font_size", 10)
+	b_hint.add_theme_color_override("font_color", Color(0.5, 0.7, 0.9, 0.65))
+	boot_vbox.add_child(b_hint)
 
 	# ========================================================
 	# 8. マイルストーン達成バナー (MILESTONE BANNER)
@@ -1055,19 +1088,19 @@ func _build_tech_tree_modal() -> void:
 	header_hbox.add_child(title_vbox)
 	
 	var title_lbl = Label.new()
-	title_lbl.text = "STRUCTURE ARCHITECT // 設備建造・技術カタログ"
+	title_lbl.text = "STRUCTURE ARCHITECT // BLUEPRINT CATALOG"
 	title_lbl.add_theme_font_size_override("font_size", 15)
 	title_lbl.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
 	title_vbox.add_child(title_lbl)
 	
 	var sub_lbl = Label.new()
-	sub_lbl.text = "設備を選択するとメイン画面に戻り、地表の置ける場所に青いバーチャル施設が出現します。"
+	sub_lbl.text = "Select a facility to project holographic blueprints. Tap any blue ghost on the surface to construct."
 	sub_lbl.add_theme_font_size_override("font_size", 10)
 	sub_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.95))
 	title_vbox.add_child(sub_lbl)
 	
 	var btn_close = Button.new()
-	btn_close.text = " ✕ 閉じる "
+	btn_close.text = " ✕ CLOSE "
 	btn_close.custom_minimum_size = Vector2(84, 32)
 	var sb_cls = StyleBoxFlat.new()
 	sb_cls.bg_color = Color(0.2, 0.05, 0.08, 0.9)
@@ -1120,73 +1153,73 @@ func _build_tech_tree_modal() -> void:
 	var catalog_data = [
 		{
 			"id": "miner",
-			"name": "MINING DRILL [自動採掘ドリル]",
+			"name": "MINING DRILL",
 			"icon": "res://assets/ui/tool_drill.png",
-			"cost": "Fe: 20, Cu: 10 | 電力: -15 kW",
-			"desc": "鉱脈の上に設置。地下鉱石を毎秒自動採掘し、背面の排出口からコンベアへ排出する基本設備。"
+			"cost": "Fe: 20, Cu: 10 | Power: -15 kW",
+			"desc": "Place on ore veins. Automatically extracts raw ore and outputs to rear conveyor belt."
 		},
 		{
 			"id": "smelter",
-			"name": "ELECTRIC SMELTER [電気精錬炉]",
+			"name": "ELECTRIC SMELTER",
 			"icon": "res://assets/ui/tool_smelter.png",
-			"cost": "Fe: 30, Cu: 15 | 電力: -22 kW",
-			"desc": "コンベアから供給された鉄鉱石・銅鉱石を高熱精錬し、工業用金属板（鉄板・銅板）を量産する。"
+			"cost": "Fe: 30, Cu: 15 | Power: -22 kW",
+			"desc": "Smelts incoming Fe/Cu ores into refined industrial metal plates."
 		},
 		{
 			"id": "belt",
-			"name": "CONVEYOR BELT [高密度コンベアベルト]",
+			"name": "CONVEYOR BELT",
 			"icon": "res://assets/ui/tool_belt.png",
-			"cost": "Fe: 6 (5本組)",
-			"desc": "施設同士を接続。採掘された鉱石や精錬素材を詰まることなく滑らかに自動搬送する物流の大動脈。"
+			"cost": "Fe: 6 (Pack of 5)",
+			"desc": "Connects facilities. High-speed smooth logistics line to transport items without jamming."
 		},
 		{
 			"id": "assembler",
-			"name": "AUTO ASSEMBLER [自動ナノ組立機]",
+			"name": "AUTO ASSEMBLER",
 			"icon": "res://assets/ui/tool_assembler.png",
-			"cost": "Fe: 40, Cu: 20, Si: 10 | 電力: -28 kW",
-			"desc": "精錬された金属板と電子パーツを組み合わせ、自律ドローンや高度マシンコンポーネントを自動量産する。"
+			"cost": "Fe: 40, Cu: 20, Si: 10 | Power: -28 kW",
+			"desc": "Combines plates and microchips to automatically mass-produce autonomous drones and advanced parts."
 		},
 		{
 			"id": "solar",
-			"name": "SOLAR ARRAY [太陽光発電パネル]",
+			"name": "SOLAR ARRAY",
 			"icon": "res://assets/ui/tool_solar.png",
-			"cost": "Si: 15, Cu: 10 | 発電: +35 kW",
-			"desc": "太陽光を受光してクリーン電力を供給。夜間や惑星の裏側では発電量が低下する。"
+			"cost": "Si: 15, Cu: 10 | Power: +35 kW",
+			"desc": "Absorbs sunlight to provide clean power. Ineffective during planetary night."
 		},
 		{
 			"id": "geothermal",
-			"name": "GEOTHERMAL PLANT [惑星深部地熱発電所]",
+			"name": "GEOTHERMAL PLANT",
 			"icon": "res://assets/ui/tool_geothermal.png",
-			"cost": "Fe: 60, Ti: 20 | 発電: +130 kW",
-			"desc": "惑星深部のマグマ熱エネルギーを直接吸収。昼夜を問わず巨大なベースロード電力を常時発電する。"
+			"cost": "Fe: 60, Ti: 20 | Power: +130 kW",
+			"desc": "Taps planetary core magma energy. Supplies massive constant baseload power day and night."
 		},
 		{
 			"id": "turret",
-			"name": "DEFENSE TURRET [迎撃防衛ガトリング]",
+			"name": "DEFENSE TURRET",
 			"icon": "res://assets/ui/tool_turret.png",
-			"cost": "Fe: 30, Ti: 15 | 電力: -10 kW",
-			"desc": "周囲650pxに侵入した敵性爆撃機や自爆ドローンを自動捕捉・追尾し、パルス弾頭で迎撃粉砕する。"
+			"cost": "Fe: 30, Ti: 15 | Power: -10 kW",
+			"desc": "Automatically locks onto incoming hostile bombers and raiders within 650px with pulse lasers."
 		},
 		{
 			"id": "depot",
-			"name": "LOGISTICS DEPOT [物資貯蔵コンテナ]",
+			"name": "LOGISTICS DEPOT",
 			"icon": "res://assets/ui/tool_depot.png",
-			"cost": "Fe: 25 | 貯蔵容量: 10,000",
-			"desc": "大量の鉱石や完成品を安全に貯蔵。工場の過剰生産を吸収しバッファとして安定稼働を維持する。"
+			"cost": "Fe: 25 | Capacity: 10,000",
+			"desc": "Stores mass minerals and products to buffer factory production surges."
 		},
 		{
 			"id": "mass_driver",
-			"name": "MASS DRIVER [軌道マスドライバー]",
+			"name": "ORBITAL MASS DRIVER",
 			"icon": "res://assets/ui/tool_mass_driver.png",
-			"cost": "Fe: 80, Ti: 40, Si: 30 | 電力: -35 kW",
-			"desc": "製造されたドローンを宇宙軌道へ超音速射出。1万体規模の宇宙スウォーム艦隊を編隊・自己増殖させる。"
+			"cost": "Fe: 80, Ti: 40, Si: 30 | Power: -35 kW",
+			"desc": "Launches manufactured drones into space orbit at hypervelocity to expand the 10,000-unit Swarm."
 		},
 		{
 			"id": "demolish",
-			"name": "DEMOLISH TOOL [施設撤去・解体モード]",
+			"name": "DEMOLISH TOOL",
 			"icon": "res://assets/ui/tool_demolish.png",
-			"cost": "FREE (資材一部回収)",
-			"desc": "誤って配置した施設や不要なブループリントをクリックして撤去し、再配置スペースを確保する。"
+			"cost": "FREE (100% Refund)",
+			"desc": "Dismantle existing buildings or blueprints to reclaim construction space and materials."
 		}
 	]
 	
@@ -1252,13 +1285,13 @@ func _create_tech_tree_card(item: Dictionary) -> Button:
 	v_box.add_child(top_sub_hbox)
 
 	var lbl_cost = Label.new()
-	lbl_cost.text = "コスト: %s" % item["cost"]
+	lbl_cost.text = "COST: %s" % item["cost"]
 	lbl_cost.add_theme_font_size_override("font_size", 10)
 	lbl_cost.add_theme_color_override("font_color", Color(0.0, 2.0, 2.8))
 	top_sub_hbox.add_child(lbl_cost)
 	
 	var lbl_status = Label.new()
-	lbl_status.text = "✔ 製造可能"
+	lbl_status.text = "✔ READY"
 	lbl_status.add_theme_font_size_override("font_size", 10)
 	lbl_status.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
 	top_sub_hbox.add_child(lbl_status)
@@ -1675,28 +1708,28 @@ func _update_objective_text() -> void:
 	
 	match GameState.story_phase:
 		GameState.StoryPhase.DORMANT:
-			objective_label.text = "[ >>> 画面をタップして休眠探査機を起動 <<< ]"
+			objective_label.text = "[ >>> TAP ANYWHERE TO INITIALIZE PROBE <<< ]"
 			objective_label.add_theme_color_override("font_color", Color(0.2, 2.0, 2.8))
 			return
 		GameState.StoryPhase.MOVE:
-			objective_label.text = "[ STEP 1: ジョイスティック / WASDで移動して鉄鉱脈を探査 ]"
+			objective_label.text = "[ STEP 1: MOVE TO EXPLORE SURFACE FOR Fe ORE VEIN (WASD / V-STICK) ]"
 			objective_label.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
 			return
 		GameState.StoryPhase.MINE:
 			var cur_fe = GameState.resources.get("Fe", 0)
-			objective_label.text = "[ STEP 2: [⚡MINE] ボタンを長押しして鉄鉱石を自力採掘 (Fe: %d / 40) ]" % mini(40, cur_fe)
+			objective_label.text = "[ STEP 2: HOLD [⚡MINE] TO HARVEST Fe ORE (%d / 40) ]" % mini(40, cur_fe)
 			objective_label.add_theme_color_override("font_color", Color(0.3, 2.2, 2.8))
 			return
 		GameState.StoryPhase.DRONE:
-			objective_label.text = "[ STEP 3: 右下の緑色 [✦増殖] ボタンをタップしてサブドローンを自己複製！ (Fe 40) ]"
+			objective_label.text = "[ STEP 3: TAP GREEN [✦REPLICATE] TO FABRICATE SUB-DRONE (40 Fe) ]"
 			objective_label.add_theme_color_override("font_color", Color(0.2, 2.5, 1.0))
 			return
 		GameState.StoryPhase.BUILD_MINER:
-			objective_label.text = "[ STEP 4: [🛠BUILD] ボタンでカタログを開き、ドリルを選択・青い施設をタップ！ ]"
+			objective_label.text = "[ STEP 4: OPEN [🛠BUILD] -> CHOOSE MINING DRILL -> TAP BLUE GHOST ]"
 			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 			return
 		GameState.StoryPhase.FACTORY:
-			objective_label.text = "[ STEP 5: [🛠BUILD] からコンベアと製錬炉を選び、青いバーチャル施設をタップして自動化！ ]"
+			objective_label.text = "[ STEP 5: BUILD BELT & SMELTER TO AUTOMATE ORE REFINING ]"
 			objective_label.add_theme_color_override("font_color", Color(1.0, 2.0, 0.4))
 			return
 		GameState.StoryPhase.SPACE:
