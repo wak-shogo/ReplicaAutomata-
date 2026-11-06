@@ -1198,10 +1198,17 @@ func _on_quest_updated(_idx: int, _info: Dictionary) -> void:
 
 func _on_quest_completed(_idx: int, _info: Dictionary) -> void:
 	AudioSynth.play_synth("victory")
-	if objective_panel:
-		objective_panel.modulate = Color(0.2, 2.5, 0.6)
-		get_tree().create_timer(0.6).timeout.connect(func():
-			if objective_panel: objective_panel.modulate = Color.WHITE
+	if objective_panel and is_inside_tree():
+		objective_panel.pivot_offset = objective_panel.size * 0.5
+		var tw = create_tween().set_parallel(true)
+		tw.tween_property(objective_panel, "scale", Vector2(1.12, 1.12), 0.15).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(objective_panel, "modulate", Color(0.2, 2.8, 1.2), 0.15)
+		
+		get_tree().create_timer(0.45).timeout.connect(func():
+			if objective_panel and is_inside_tree():
+				var tw_back = create_tween().set_parallel(true)
+				tw_back.tween_property(objective_panel, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_SINE)
+				tw_back.tween_property(objective_panel, "modulate", Color.WHITE, 0.25)
 		)
 
 func show_missing_res_alert(res_name: String) -> void:
