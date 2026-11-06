@@ -228,6 +228,37 @@ func _draw() -> void:
 		draw_circle(exp["pos"], exp["radius"] * (1.6 - alpha), Color(3.0, 1.2, 0.2, alpha * 0.85))
 		draw_arc(exp["pos"], exp["radius"] * (2.2 - alpha), 0, TAU, 16, Color(3.0, 2.5, 0.8, alpha), 2.0)
 
+	# マクロマップ時の自機ナビゲーションビーコン (Ship Beacon & Direction Vector)
+	if camera and camera.zoom.x < 0.25 and player:
+		var p_pos = player.global_position
+		var pulse = (sin(Time.get_ticks_msec() * 0.006) * 0.5 + 0.5)
+		var beacon_rad = 120.0 + pulse * 45.0
+		
+		# 1. 巨大パルスビーコンリング
+		draw_arc(p_pos, beacon_rad, 0, TAU, 32, Color(0.0, 2.8, 3.5, 0.9), 4.0)
+		draw_arc(p_pos, beacon_rad * 1.4, 0, TAU, 32, Color(0.2, 1.8, 2.5, 0.35), 2.0)
+		draw_circle(p_pos, 45.0, Color(0.0, 2.5, 3.0, 0.6))
+		
+		# 2. 進行方向ベクター矢印
+		var p_vel = player.velocity
+		var vel_dir = p_vel.normalized() if p_vel.length() > 5.0 else Vector2.UP
+		var arrow_len = 220.0
+		var arrow_tip = p_pos + vel_dir * arrow_len
+		draw_line(p_pos, arrow_tip, Color(1.5, 2.8, 3.5, 0.95), 5.0)
+		var side_arrow = Vector2(-vel_dir.y, vel_dir.x) * 40.0
+		draw_colored_polygon(PackedVector2Array([arrow_tip, arrow_tip - vel_dir * 55.0 + side_arrow, arrow_tip - vel_dir * 55.0 - side_arrow]), Color(0.2, 2.8, 3.5, 0.9))
+		
+		# 3. 母星へのナビゲーションリンク点線
+		if grid_manager:
+			var home_p = grid_manager.HOME_CENTER
+			var d_home = p_pos.distance_to(home_p)
+			draw_line(p_pos, home_p, Color(0.0, 1.5, 2.2, 0.3), 2.0)
+			var mid_p = (p_pos + home_p) * 0.5
+			draw_string(ThemeDB.fallback_font, mid_p, "HOME LINK: %.0f AU" % (d_home * 0.01), HORIZONTAL_ALIGNMENT_CENTER, -1, 32, Color(0.2, 1.8, 2.5, 0.8))
+
+		# 4. 「SEED-01 (YOU)」視認ラベル
+		draw_string(ThemeDB.fallback_font, p_pos + Vector2(-120, beacon_rad + 60), "SEED-01 (YOU)", HORIZONTAL_ALIGNMENT_CENTER, -1, 36, Color(0.3, 2.8, 3.5))
+
 func _input(event: InputEvent) -> void:
 	if not camera:
 		return

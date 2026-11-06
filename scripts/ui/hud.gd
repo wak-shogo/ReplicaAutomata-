@@ -972,16 +972,39 @@ func _update_tool_badges() -> void:
 			item["lbl"].add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 
 func _on_resource_changed(type: String, amount: int) -> void:
+	var target_lbl: Label = null
+	var flash_col = Color(1.5, 2.5, 1.2)
 	match type:
-		"Fe": if fe_label: fe_label.text = str(amount)
-		"Cu": if cu_label: cu_label.text = str(amount)
-		"Ti": if ti_label: ti_label.text = str(amount)
-		"Si": if si_label: si_label.text = str(amount)
-		"He3": if he3_label: he3_label.text = str(amount)
-		"Plasma": if plasma_label: plasma_label.text = str(amount)
-		"Ice": if ice_label: ice_label.text = str(amount)
-		"DarkMatter": if dm_label: dm_label.text = str(amount)
-		"Neutronium": if nt_label: nt_label.text = str(amount)
+		"Fe": 
+			if fe_label: target_lbl = fe_label
+		"Cu": 
+			if cu_label: target_lbl = cu_label
+		"Ti": 
+			if ti_label: target_lbl = ti_label
+		"Si": 
+			if si_label: target_lbl = si_label
+		"He3": 
+			if he3_label: target_lbl = he3_label
+		"Plasma": 
+			if plasma_label: target_lbl = plasma_label
+		"Ice": 
+			if ice_label: target_lbl = ice_label
+		"DarkMatter": 
+			if dm_label: target_lbl = dm_label
+		"Neutronium": 
+			if nt_label: target_lbl = nt_label
+
+	if target_lbl:
+		target_lbl.text = str(amount)
+		# 採掘・生産フィードバック (ポップアップバンプ ＆ フラッシュ)
+		var p_badge = target_lbl.get_parent()
+		if p_badge and is_inside_tree():
+			var tw = create_tween().set_parallel(true)
+			p_badge.pivot_offset = p_badge.size * 0.5
+			p_badge.scale = Vector2(1.22, 1.22)
+			target_lbl.add_theme_color_override("font_color", flash_col)
+			tw.tween_property(p_badge, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+			tw.tween_property(target_lbl, "theme_override_colors/font_color", Color(1.0, 1.0, 1.0), 0.3)
 
 func _on_fleet_changed(current: int, _max_val: int) -> void:
 	if fleet_lbl: fleet_lbl.text = str(current)

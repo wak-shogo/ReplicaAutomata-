@@ -1115,18 +1115,34 @@ func _draw_celestial_bodies() -> void:
 				draw_string(ThemeDB.fallback_font, ppos + Vector2(-65, prad + 28), "GARGANTUA [DarkMatter / Singularity]", HORIZONTAL_ALIGNMENT_CENTER, -1, 11, Color(0.85, 0.45, 1.0))
 
 			"pulsar":
-				# 3. 中性子星 / パルサー (Pulsar-X)
-				var pulse_rot = anim_time * 5.5
-				# 回転パルスビーム
+				# 3. 中性子星 / パルサー (Pulsar-X: 相対論的超長距離極ジェット ＆ 放射線パルス)
+				var pulse_rot = anim_time * 6.5
 				var beam_dir = Vector2(cos(pulse_rot), sin(pulse_rot))
-				draw_line(ppos - beam_dir * 180.0, ppos + beam_dir * 180.0, Color(0.0, 2.5, 3.0, 0.7), 2.5)
-				draw_line(ppos - beam_dir * 180.0, ppos + beam_dir * 180.0, Color(2.5, 2.5, 2.5, 0.9), 1.0)
+				var jet_len = 980.0
+				
+				# (1) 極ジェット放射ビーム (Polar Relativistic Jets: 宇宙空間を裂く双極レーザー)
+				draw_line(ppos - beam_dir * jet_len, ppos + beam_dir * jet_len, Color(0.0, 2.5, 3.0, 0.45), 10.0)
+				draw_line(ppos - beam_dir * jet_len, ppos + beam_dir * jet_len, Color(1.2, 2.8, 3.5, 0.85), 3.0)
+				draw_line(ppos - beam_dir * (jet_len * 0.4), ppos + beam_dir * (jet_len * 0.4), Color(3.5, 3.5, 3.5, 1.0), 1.5)
+				
+				# (2) 磁気圏パルス衝撃波リング (Magnetic Shockwaves)
+				for pw_i in range(3):
+					var pw_phase = fmod(anim_time * 3.5 + float(pw_i) * 0.33, 1.0)
+					var pw_rad = prad * (1.2 + pw_phase * 2.5)
+					var pw_alpha = (1.0 - pw_phase) * 0.5
+					draw_arc(ppos, pw_rad, 0, TAU, 32, Color(0.1, 2.2, 2.8, pw_alpha), 2.0)
+
+				# (3) 中性子核 (Neutron Degenerate Core)
+				draw_circle(ppos, prad * 1.1, Color(0.0, 1.5, 2.2, 0.5))
+				draw_circle(ppos, prad * 0.75, Color(2.0, 2.8, 3.5, 1.0))
+				draw_circle(ppos, prad * 0.35, Color(3.5, 3.5, 3.5, 1.0))
+
 				if tex_celestial_pulsar:
 					var sz = Vector2(prad * 2.4, prad * 2.4)
 					draw_set_transform(ppos, pulse_rot, Vector2.ONE)
 					draw_texture_rect(tex_celestial_pulsar, Rect2(-sz * 0.5, sz), false)
 					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-				draw_string(ThemeDB.fallback_font, ppos + Vector2(-36, prad + 20), "PULSAR [Neutronium]", HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.2, 1.0, 0.8))
+				draw_string(ThemeDB.fallback_font, ppos + Vector2(-55, prad + 22), "PULSAR-X [Neutronium / Relativistic Jet]", HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.2, 1.2, 1.0))
 
 			"comet":
 				# 4. 彗星 (Neowise-Omega: 太陽放射圧による真の反太陽二重尾)
@@ -1156,31 +1172,72 @@ func _draw_celestial_bodies() -> void:
 				draw_string(ThemeDB.fallback_font, ppos + Vector2(-30, prad + 18), "COMET [Ice]", HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.4, 0.9, 1.0))
 
 			"moon":
-				# 5. 月 (Luna-Prime: 物理公転中)
+				# 5. 月 (Luna-Prime: 物理公転中 ＆ 潮汐固定自転)
 				draw_arc(ppos, prad * 1.3, 0, TAU, 32, Color(0.2, 0.85, 1.0, 0.22), 1.2)
 				if tex_moon:
 					var sz = Vector2(prad * 2.0, prad * 2.0)
-					draw_texture_rect(tex_moon, Rect2(ppos - sz * 0.5, sz), false)
+					var moon_orbit_rot = anim_time * 0.12 # 母星に対する潮汐ロック自転
+					draw_set_transform(ppos, moon_orbit_rot, Vector2.ONE)
+					draw_texture_rect(tex_moon, Rect2(-sz * 0.5, sz), false)
+					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 				draw_string(ThemeDB.fallback_font, ppos + Vector2(-24, prad + 18), "LUNA [He3]", HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.2, 0.8, 1.0))
 
 			"asteroid":
-				# 6. 小惑星 (Asteroid)
+				# 6. 小惑星 (Asteroid: 資源種別カラーティント ＆ 自転 ＆ 結晶きらめき)
+				var a_col = Color(0.4, 0.45, 0.55)
+				var glint_col = Color(1.0, 1.0, 1.0)
+				match pres:
+					"Fe":
+						a_col = Color(0.25, 0.65, 0.95)
+						glint_col = Color(0.3, 0.9, 1.5)
+					"Si":
+						a_col = Color(0.2, 0.85, 0.6)
+						glint_col = Color(0.4, 1.5, 0.9)
+					"Ti":
+						a_col = Color(0.75, 0.4, 0.95)
+						glint_col = Color(1.2, 0.6, 1.5)
+				
+				# 鉱石の微弱オーラ
+				draw_arc(ppos, prad * 1.25, 0, TAU, 16, a_col * Color(1, 1, 1, 0.25), 1.2)
+				
+				var a_rot = anim_time * 0.25 + ppos.x * 0.01 + ppos.y * 0.01
 				if tex_celestial_asteroid:
 					var sz = Vector2(prad * 2.0, prad * 2.0)
-					draw_texture_rect(tex_celestial_asteroid, Rect2(ppos - sz * 0.5, sz), false)
+					draw_set_transform(ppos, a_rot, Vector2.ONE)
+					draw_texture_rect(tex_celestial_asteroid, Rect2(-sz * 0.5, sz), false, a_col * 0.75 + Color(0.25, 0.25, 0.25))
+					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 				else:
-					draw_circle(ppos, prad, Color(0.4, 0.45, 0.55))
+					draw_circle(ppos, prad, a_col)
+					
+				# 周期的な結晶グリント (きらめき光芒)
+				var glint_phase = sin(anim_time * 4.0 + ppos.x * 0.05 + ppos.y * 0.05)
+				if glint_phase > 0.65:
+					var g_sz = (glint_phase - 0.65) * 18.0
+					draw_line(ppos - Vector2(g_sz, 0), ppos + Vector2(g_sz, 0), glint_col, 1.2)
+					draw_line(ppos - Vector2(0, g_sz), ppos + Vector2(0, g_sz), glint_col, 1.2)
+					
+				if pres != "":
+					draw_string(ThemeDB.fallback_font, ppos + Vector2(-12, prad + 14), pres, HORIZONTAL_ALIGNMENT_CENTER, -1, 9, glint_col)
 
 			_:
-				# その他惑星 (Aether, Vulcan, Crystal)
+				# その他惑星 (Aether, Vulcan, Crystal: 固有自転)
 				draw_arc(ppos, prad * 1.35, 0, TAU, 48, Color(0.0, 0.85, 1.0, 0.18), 1.5)
 				var ptex = tex_planet_blue
-				if pkind == "volcanic": ptex = tex_planet_volcanic
-				elif pkind == "crystal": ptex = tex_planet_crystal
+				var spin_speed = 0.08
+				if pkind == "volcanic": 
+					ptex = tex_planet_volcanic
+					spin_speed = 0.05
+				elif pkind == "crystal": 
+					ptex = tex_planet_crystal
+					spin_speed = 0.12
+				
 				if ptex:
 					var sc = (prad * 2.0) / float(ptex.get_width())
 					var sz = Vector2(ptex.get_width(), ptex.get_height()) * sc
-					draw_texture_rect(ptex, Rect2(ppos - sz * 0.5, sz), false)
+					var prot = anim_time * spin_speed + ppos.x * 0.005
+					draw_set_transform(ppos, prot, Vector2.ONE)
+					draw_texture_rect(ptex, Rect2(-sz * 0.5, sz), false)
+					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 				if pres != "":
 					draw_string(ThemeDB.fallback_font, ppos + Vector2(-20, prad + 16), "[%s]" % pres, HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(0.7, 0.9, 1.0))
 
@@ -1219,6 +1276,16 @@ func _draw() -> void:
 	else:
 		draw_circle(HOME_CENTER, HOME_RADIUS, Color(0.08, 0.16, 0.28))
 		
+	# (3.5) 地殻稜線・山脈クレーターディテール (Crust Terrain Elevation & Mineral Highlights)
+	var terrain_pts: PackedVector2Array = []
+	var num_terrain_steps = 128
+	for t_i in range(num_terrain_steps + 1):
+		var ta = (TAU / float(num_terrain_steps)) * float(t_i)
+		var h_elev = sin(ta * 14.0) * 2.5 + sin(ta * 32.0) * 1.2 + sin(ta * 64.0) * 0.6
+		var tr = HOME_RADIUS + h_elev
+		terrain_pts.append(HOME_CENTER + Vector2(cos(ta), sin(ta)) * tr)
+	draw_polyline(terrain_pts, Color(0.15, 0.55, 0.75, 0.45), 1.5)
+
 	# (4) 夜半球の惑星シャドウ (Night Shadow Hemispheric Occlusion)
 	var night_angle = sun_angle + PI
 	# 反太陽側の夜半球に柔らかな漆黒の影をオーバーレイ

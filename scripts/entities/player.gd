@@ -31,6 +31,9 @@ var anim_time: float = 0.0
 var grid_manager: Node2D = null
 var current_orbit_info: Dictionary = {}
 
+# スラスター・イオン排気パーティクル
+var thruster_particles: Array[Dictionary] = []
+
 var player_sheet: Texture2D
 var drone_sheet: Texture2D
 
@@ -216,8 +219,29 @@ func _physics_process(delta: float) -> void:
 					var eject_dir = Vector2(randf_range(-1, 1), randf_range(-1, 1)).normalized()
 					global_position = prim_pos + eject_dir * (prim_rad * 2.2)
 					velocity = eject_dir * 780.0
-					AudioSynth.play_synth("launch")
+					AudioSynth.play_synth("wormhole_warp")
 					GameState.add_log("EVENT HORIZON WARP: QUANTUM EJECTION FROM SINGULARITY!")
+
+		# 7. パルサー極ジェット直撃 ＆ 相対論的放射圧加速 (Relativistic Jet Radiation Propulsion)
+		if prim_kind == "pulsar" and cur_r < 980.0:
+			var p_rot = grid_manager.anim_time * 6.5
+			var b_vec = Vector2(cos(p_rot), sin(p_rot))
+			# 自機がビーム直線（双極）上と交差しているかを外積で判定
+			if abs(normal.cross(b_vec)) < 0.14:
+				velocity += normal * (750.0 * delta)
+				GameState.damage_player(18.0 * delta)
+				AudioSynth.play_synth("pulsar_pulse")
+				var mn = get_parent()
+				if mn and mn.has_method("shake_camera"):
+					mn.shake_camera(2.5, 0.08)
+
+		# リアルタイム天体音響・スラスターアンビエント合成
+		var sun_proximity = clampf((sun_r * 2.5 - dist_sun) / (sun_r * 1.8), 0.0, 1.0)
+		var bh_proximity = 0.0
+		if prim_kind == "blackhole":
+			bh_proximity = clampf((prim_rad * 3.0 - cur_r) / (prim_rad * 2.2), 0.0, 1.0)
+		var thrust_power = clampf(input_vec.length(), 0.0, 1.0)
+		AudioSynth.update_celestial_ambience(sun_proximity, bh_proximity, thrust_power)
 
 	# MOVEフェーズでの移動距離検知 ＆ 地質センサー波発信
 	if GameState.story_phase == GameState.StoryPhase.MOVE:
@@ -313,6 +337,57 @@ func _physics_process(delta: float) -> void:
 	# リアクションホイールによる姿勢角速度減衰（回転の減衰）
 	angular_velocity = lerpf(angular_velocity, 0.0, angular_damping * delta)
 	ship_rotation += angular_velocity * delta
+
+	# スラスター噴煙・プラズマパーティクルの生成
+	if thrusting_dir != Vector2.ZERO:
+		var back_dir = -thrusting_dir
+		for i in range(2):
+			var spread = randf_range(-0.45, 0.45)
+			var p_vel = back_dir.rotated(spread) * randf_range(90.0, 220.0)
+			var spawn_offset = back_dir * 18.0 + Vector2(-back_dir.y, back_dir.x) * randf_range(-6.0, 6.0)
+			thruster_particles.append({
+				"pos": spawn_offset,
+				"vel": p_vel,
+				"life": 0.4,
+				"max_life": 0.4,
+				"color": Color(0.1, 1.8, 2.8, 0.9) if randf() > 0.3 else Color(2.0, 2.0, 2.5, 1.0),
+				"size": randf_range(2.5, 5.0)
+			})
+	elif is_inertial_braking:
+		# RCS逆噴射パフ
+		var rcs_dirs = [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]
+		for rd in rcs_dirs:
+			thruster_particles.append({
+				"pos": rd * 16.0,
+				"vel": rd * randf_range(60.0, 140.0),
+				"life": 0.25,
+				"max_life": 0.25,
+				"color": Color(0.2, 2.2, 2.8, 0.8),
+				"size": randf_range(1.5, 3.5)
+			})
+	
+	# 地表ホバリング砂塵（Surface Dust Kickup）
+	if current_orbit_info.get("altitude", 99.0) <= 12.0 and velocity.length() > 20.0:
+		var ground_dir = (global_position - grid_manager.HOME_CENTER).normalized() if grid_manager else Vector2.DOWN
+		var dust_spread = Vector2(-ground_dir.y, ground_dir.x) * randf_range(-1.0, 1.0)
+		thruster_particles.append({
+			"pos": ground_dir * 14.0 + dust_spread * 12.0,
+			"vel": dust_spread * randf_range(25.0, 70.0) - ground_dir * randf_range(5.0, 18.0),
+			"life": 0.35,
+			"max_life": 0.35,
+			"color": Color(0.35, 0.65, 0.85, 0.45),
+			"size": randf_range(2.0, 4.0)
+		})
+	
+	# パーティクルの更新と寿命判定
+	var alive_particles: Array[Dictionary] = []
+	for p in thruster_particles:
+		p["life"] -= delta
+		if p["life"] > 0.0:
+			p["pos"] += p["vel"] * delta
+			p["vel"] *= 0.94
+			alive_particles.append(p)
+	thruster_particles = alive_particles
 
 	drone_rot_angle += delta * 1.6
 	queue_redraw()
@@ -566,12 +641,40 @@ func _draw() -> void:
 			draw_circle(sp_pos, randf_range(1.5, 3.0), Color(2.8, 2.2, 0.6, 0.9))
 
 	# 5. プレイヤー中央コア（Seed Unit: 48x48）
-	# スラスター噴射 ＆ 逆噴射ブレーキ (RCS)
+	# スラスター・プラズマ排気パーティクルの描画
+	for p in thruster_particles:
+		var a_ratio = p["life"] / p["max_life"]
+		var p_col: Color = p["color"]
+		p_col.a *= a_ratio
+		var p_sz: float = p["size"] * a_ratio
+		draw_circle(p["pos"], p_sz, p_col)
+
+	# メインスラスター噴射炎 ＆ ショックダイヤモンド
 	if thrusting_dir != Vector2.ZERO:
-		var flame_len = 16.0 + sin(anim_time * 30.0) * 4.0
-		var flame_p = -thrusting_dir * (20.0 + flame_len)
-		draw_line(-thrusting_dir * 18.0, flame_p, Color(0.2, 2.0, 3.0, 0.9), 4.0)
-		draw_line(-thrusting_dir * 18.0, flame_p * 0.7, Color(2.5, 2.5, 2.5, 1.0), 2.0)
+		var back_dir = -thrusting_dir
+		var side_n = Vector2(-back_dir.y, back_dir.x)
+		var flame_len = 24.0 + sin(anim_time * 38.0) * 6.0
+		var flame_tip = back_dir * (18.0 + flame_len)
+		
+		# (1) 外層プラズマコーン（シアン発光）
+		var p1 = back_dir * 18.0 + side_n * 6.0
+		var p2 = back_dir * 18.0 - side_n * 6.0
+		draw_colored_polygon(PackedVector2Array([p1, flame_tip, p2]), Color(0.1, 1.6, 2.8, 0.75))
+		
+		# (2) 内層白熱コア（極高熱ホワイトプラズマ）
+		var c1 = back_dir * 18.0 + side_n * 2.5
+		var c2 = back_dir * 18.0 - side_n * 2.5
+		var core_tip = back_dir * (18.0 + flame_len * 0.65)
+		draw_colored_polygon(PackedVector2Array([c1, core_tip, c2]), Color(2.5, 2.5, 3.0, 0.95))
+		
+		# (3) ショックダイヤモンド（超音速排気波）
+		var sd_pos = back_dir * (18.0 + flame_len * 0.38)
+		draw_circle(sd_pos, 2.8, Color(3.0, 3.0, 3.5, 1.0))
+		
+		# (4) 左右補助ノズル微小炎
+		draw_line(back_dir * 16.0 + side_n * 8.0, back_dir * (16.0 + flame_len * 0.4) + side_n * 8.0, Color(0.2, 1.8, 3.0, 0.8), 2.0)
+		draw_line(back_dir * 16.0 - side_n * 8.0, back_dir * (16.0 + flame_len * 0.4) - side_n * 8.0, Color(0.2, 1.8, 3.0, 0.8), 2.0)
+
 	if is_inertial_braking:
 		var rcs_pulse = (sin(anim_time * 25.0) * 0.5 + 0.5)
 		var rcs_len = 12.0 + rcs_pulse * 6.0
