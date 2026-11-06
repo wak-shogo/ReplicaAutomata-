@@ -39,7 +39,10 @@ func save_game(is_auto: bool = false) -> bool:
 			"x": player.global_position.x if player else 780.0,
 			"y": player.global_position.y if player else 520.0,
 			"vx": player.velocity.x if player else 0.0,
-			"vy": player.velocity.y if player else 0.0
+			"vy": player.velocity.y if player else 0.0,
+			"is_surface_attached": player.is_surface_attached if player else true,
+			"attached_angle_off": player.attached_angle_off if player else 0.0,
+			"attached_primary_kind": player.attached_primary_kind if player else "home"
 		},
 		"story_phase": GameState.story_phase,
 		"unlocked_tools": GameState.unlocked_tools.duplicate(),
@@ -105,6 +108,10 @@ func load_game() -> bool:
 	if player and data.has("player"):
 		player.global_position = Vector2(data["player"]["x"], data["player"]["y"])
 		player.velocity = Vector2(data["player"]["vx"], data["player"]["vy"])
+		if data["player"].has("is_surface_attached"):
+			player.is_surface_attached = data["player"]["is_surface_attached"]
+			player.attached_angle_off = data["player"].get("attached_angle_off", 0.0)
+			player.attached_primary_kind = data["player"].get("attached_primary_kind", "home")
 
 	# ストーリーフェーズ ＆ 技術ツリー復元
 	if data.has("story_phase"):

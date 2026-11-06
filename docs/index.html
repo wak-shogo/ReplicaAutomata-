@@ -2,12 +2,10 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
 		<meta name="apple-mobile-web-app-capable" content="yes">
-		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 		<meta name="mobile-web-app-capable" content="yes">
 		<title>STAR REPLICA: AUTOMA</title>
-		<script src="coi-serviceworker.js"></script>
 		<style>
 html, body, #canvas {
 	margin: 0;
@@ -115,7 +113,7 @@ body {
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":454776,"index.wasm":39509339},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":455096,"index.wasm":39509339},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 
@@ -220,27 +218,24 @@ const engine = new Engine(GODOT_CONFIG);
 }());
 		</script>
 		<script>
-			// Prevent browser pinch zoom & double-tap zoom
+			// Prevent accidental double-tap zoom & pinch-to-zoom on iOS/Android
 			document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
-			document.addEventListener('touchmove', function(e) { if (e.scale !== 1) e.preventDefault(); }, { passive: false });
-			
-			// Screen Wake Lock API to prevent display sleep during gameplay
+			document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
+			document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+			// Screen Wake Lock API to prevent mobile sleep while playing
 			if ('wakeLock' in navigator) {
 				let wakeLock = null;
 				const requestWakeLock = async () => {
 					try {
 						wakeLock = await navigator.wakeLock.request('screen');
-					} catch (err) {
-						console.log('Wake Lock request failed:', err);
-					}
+					} catch (err) {}
 				};
+				requestWakeLock();
 				document.addEventListener('visibilitychange', () => {
 					if (wakeLock !== null && document.visibilityState === 'visible') {
 						requestWakeLock();
 					}
 				});
-				window.addEventListener('click', () => { if (!wakeLock) requestWakeLock(); }, { once: true });
-				window.addEventListener('touchstart', () => { if (!wakeLock) requestWakeLock(); }, { once: true });
 			}
 		</script>
 	</body>
