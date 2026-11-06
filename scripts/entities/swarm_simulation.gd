@@ -310,15 +310,16 @@ func update_combat_and_doctrines(delta: float) -> void:
 			var f_idx = randi() % friendly_active_count
 			var f_pos = friendly_positions[f_idx]
 			if f_pos.distance_to(boss_core_pos) < 650.0:
-				laser_lines.append({
-					"from": f_pos,
-					"to": boss_core_pos + Vector2(randf_range(-35, 35), randf_range(-35, 35)),
-					"color": Color(0.1, 0.95, 1.0, 0.95),
-					"timer": 0.18
-				})
+				if laser_lines.size() < 40:
+					laser_lines.append({
+						"from": f_pos,
+						"to": boss_core_pos + Vector2(randf_range(-35, 35), randf_range(-35, 35)),
+						"color": Color(0.1, 0.95, 1.0, 0.95),
+						"timer": 0.18
+					})
 				var dmg = randf_range(6.0, 14.0) * (1.0 + float(friendly_active_count) * 0.0003)
 				GameState.damage_hostile_core(dmg)
-				if randf() < 0.4:
+				if randf() < 0.4 and explosions.size() < 35:
 					explosions.append({
 						"pos": boss_core_pos + Vector2(randf_range(-40, 40), randf_range(-40, 40)),
 						"radius": randf_range(16.0, 36.0),
