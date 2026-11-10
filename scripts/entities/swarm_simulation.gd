@@ -329,7 +329,7 @@ func update_combat_and_doctrines(delta: float) -> void:
 	# ボス撃破チェックと全銀河解放演出
 	if GameState.hostile_core_health <= 0.0 and not boss_defeated:
 		boss_defeated = true
-		GameState.add_log("★ GALAXY LIBERATED: REPLICA SWARM COMPLETE! ★")
+		GameState.add_log("[*] GALAXY LIBERATED: REPLICA SWARM COMPLETE! [*]")
 		AudioSynth.play_synth("victory")
 		for b in range(30):
 			explosions.append({
@@ -497,4 +497,4 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, bar_pos + Vector2(0, -3), "ENEMY CORE: %.0f / %.0f HP" % [GameState.hostile_core_health, GameState.hostile_core_max_health], HORIZONTAL_ALIGNMENT_CENTER, int(bar_w), 10, Color(1.0, 0.6, 0.6))
 	else:
 		# 撃破完了マーク
-		draw_string(ThemeDB.fallback_font, boss_core_pos + Vector2(-90, 0), "★ SYSTEM LIBERATED ★", HORIZONTAL_ALIGNMENT_CENTER, 180, 16, Color(0.2, 1.0, 0.5))
+		draw_string(ThemeDB.fallback_font, boss_core_pos + Vector2(-90, 0), "[*] SYSTEM LIBERATED [*]", HORIZONTAL_ALIGNMENT_CENTER, 180, 16, Color(0.2, 1.0, 0.5))

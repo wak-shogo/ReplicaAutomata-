@@ -90,7 +90,7 @@ var milestone_title_lbl: Label
 var milestone_sub_lbl: Label
 
 # 専用大型技術ツリー・設備建造カタログ画面 (Structure Architect Modal)
-var tech_tree_modal: PanelContainer = null
+var tech_tree_modal: Panel = null
 var tech_tree_cards: Array[Dictionary] = []
 var build_cancel_btn: Button = null
 
@@ -165,7 +165,7 @@ var boss_victory_announced: bool = false
 func _on_enemy_damaged(curr_hp: float, _max_hp: float) -> void:
 	if curr_hp <= 0.0 and not boss_victory_announced:
 		boss_victory_announced = true
-		_trigger_milestone_banner("★ GALAXY LIBERATED: REPLICA SWARM COMPLETE! ★")
+		_trigger_milestone_banner("[*] GALAXY LIBERATED: REPLICA SWARM COMPLETE! [*]")
 
 func _process(delta: float) -> void:
 	hud_anim_time += delta
@@ -256,19 +256,36 @@ func toggle_build_mode() -> void:
 	if not grid_manager: return
 	if tech_tree_modal and tech_tree_modal.visible:
 		tech_tree_modal.visible = false
+		if objective_label: objective_label.visible = true
 		AudioSynth.play_synth("click")
 		return
 	open_tech_tree_modal()
 
 func open_tech_tree_modal() -> void:
 	if not tech_tree_modal: return
-	# スマホ縦持ち・横持ちレスポンシブ列数調整
+	var vp = get_viewport()
+	var vp_size = vp.get_visible_rect().size if vp else Vector2(1280, 720)
+	var is_portrait = (vp_size.x < vp_size.y or vp_size.x < 720.0)
+	
+	if is_portrait:
+		tech_tree_modal.anchor_left = 0.02
+		tech_tree_modal.anchor_right = 0.98
+		tech_tree_modal.anchor_top = 0.02
+		tech_tree_modal.anchor_bottom = 0.96
+	else:
+		tech_tree_modal.anchor_left = 0.06
+		tech_tree_modal.anchor_right = 0.94
+		tech_tree_modal.anchor_top = 0.04
+		tech_tree_modal.anchor_bottom = 0.94
+	tech_tree_modal.offset_left = 0
+	tech_tree_modal.offset_top = 0
+	tech_tree_modal.offset_right = 0
+	tech_tree_modal.offset_bottom = 0
+	
 	var grid = tech_tree_modal.find_child("TechTreeGrid", true, false)
 	if grid:
-		var vp = get_viewport()
-		if vp:
-			var vp_size = vp.get_visible_rect().size
-			grid.columns = 1 if vp_size.x < 720.0 else 2
+		grid.columns = 1 if is_portrait else 2
+		
 	# 所持資源ラベルの更新
 	var res_box = tech_tree_modal.find_child("TechTreeResBar", true, false)
 	if res_box:
@@ -278,6 +295,7 @@ func open_tech_tree_modal() -> void:
 			if lbl:
 				lbl.text = "%s: %d" % [rk, GameState.resources.get(rk, 0)]
 	_update_tech_tree_cards_affordability()
+	if objective_label: objective_label.visible = false
 	tech_tree_modal.visible = true
 	AudioSynth.play_synth("click")
 
@@ -291,7 +309,7 @@ func _update_tech_tree_cards_affordability() -> void:
 		var sb_n: StyleBoxFlat = c_info["sb_n"]
 		
 		if tid == "demolish":
-			status_lbl.text = "✔ READY TO USE"
+			status_lbl.text = "[OK] READY TO USE"
 			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.2, 1.2))
 			sb_n.border_color = Color(0.0, 1.5, 2.0, 0.6)
 			continue
@@ -307,12 +325,12 @@ func _update_tech_tree_cards_affordability() -> void:
 				missing_list.append("%s (-%d)" % [r_k, need - have])
 				
 		if can_afford:
-			status_lbl.text = "✔ READY TO CONSTRUCT"
+			status_lbl.text = "[OK] READY TO CONSTRUCT"
 			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
 			sb_n.border_color = Color(0.0, 2.2, 2.8, 0.8)
 			sb_n.bg_color = Color(0.04, 0.10, 0.18, 0.92)
 		else:
-			status_lbl.text = "❌ NEED: " + " / ".join(missing_list)
+			status_lbl.text = "[!] NEED: " + " / ".join(missing_list)
 			status_lbl.add_theme_color_override("font_color", Color(2.5, 0.4, 0.4))
 			sb_n.border_color = Color(0.6, 0.2, 0.2, 0.5)
 			sb_n.bg_color = Color(0.06, 0.04, 0.05, 0.88)
@@ -321,8 +339,9 @@ func _on_tech_tree_item_selected(tool_id: String) -> void:
 	AudioSynth.play_synth("select")
 	if tech_tree_modal:
 		tech_tree_modal.visible = false
-	if grid_manager:
-		grid_manager.select_tool(tool_id)
+		if objective_label: objective_label.visible = true
+		if grid_manager:
+			grid_manager.select_tool(tool_id)
 		grid_manager._update_available_ghost_slots()
 		_update_build_mode_visuals()
 	GameState.add_log("BLUEPRINT PROJECTED: [%s] -> TAP ANY BLUE GHOST TO CONSTRUCT" % tool_id.to_upper())
@@ -338,7 +357,7 @@ func _update_build_mode_visuals() -> void:
 		build_guide_label.visible = is_bm
 		if is_bm:
 			var tname = grid_manager.selected_tool.to_upper()
-			build_guide_label.text = "[ 🛠 SELECTED: %s | TAP BLUE GHOST TO CONSTRUCT ]" % tname
+			build_guide_label.text = "[ [BUILD] SELECTED: %s | TAP BLUE GHOST TO CONSTRUCT ]" % tname
 	if build_cancel_btn:
 		build_cancel_btn.visible = is_bm
 
@@ -704,7 +723,7 @@ func build_minimal_ui() -> void:
 	sb_mine.set_corner_radius_all(44)
 
 	btn_touch_mine = Button.new()
-	btn_touch_mine.text = "⚡\nMINE"
+	btn_touch_mine.text = "MINE"
 	btn_touch_mine.position = Vector2(92, 100)
 	btn_touch_mine.custom_minimum_size = Vector2(88, 88)
 	btn_touch_mine.add_theme_stylebox_override("normal", sb_mine)
@@ -726,7 +745,7 @@ func build_minimal_ui() -> void:
 	sb_brake.set_corner_radius_all(32)
 
 	btn_touch_brake = Button.new()
-	btn_touch_brake.text = "🛑\nSTOP"
+	btn_touch_brake.text = "STOP"
 	btn_touch_brake.position = Vector2(104, 26)
 	btn_touch_brake.custom_minimum_size = Vector2(64, 64)
 	btn_touch_brake.add_theme_stylebox_override("normal", sb_brake)
@@ -748,7 +767,7 @@ func build_minimal_ui() -> void:
 	sb_bld.set_corner_radius_all(34)
 
 	btn_touch_build = Button.new()
-	btn_touch_build.text = "🛠\nBUILD"
+	btn_touch_build.text = "BUILD"
 	btn_touch_build.position = Vector2(12, 112)
 	btn_touch_build.custom_minimum_size = Vector2(68, 68)
 	btn_touch_build.add_theme_stylebox_override("normal", sb_bld)
@@ -769,7 +788,7 @@ func build_minimal_ui() -> void:
 	sb_drn.set_corner_radius_all(30)
 
 	btn_touch_drone = Button.new()
-	btn_touch_drone.text = "✦\nREPLICATE"
+	btn_touch_drone.text = "REPL\nDRONE"
 	btn_touch_drone.position = Vector2(22, 38)
 	btn_touch_drone.custom_minimum_size = Vector2(60, 60)
 	btn_touch_drone.add_theme_stylebox_override("normal", sb_drn)
@@ -889,7 +908,7 @@ func build_minimal_ui() -> void:
 
 	# 建築モード即時キャンセルボタン (Cancel Build Mode Button)
 	build_cancel_btn = Button.new()
-	build_cancel_btn.text = " ✕ CANCEL BUILD "
+	build_cancel_btn.text = " X CANCEL BUILD "
 	build_cancel_btn.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	build_cancel_btn.anchor_left = 1.0
 	build_cancel_btn.anchor_right = 1.0
@@ -935,7 +954,7 @@ func build_minimal_ui() -> void:
 	add_child(drone_repl_banner)
 
 	drone_repl_lbl = Label.new()
-	drone_repl_lbl.text = "✦ SUB-DRONE REPLICATED ✦"
+	drone_repl_lbl.text = "[+] SUB-DRONE REPLICATED [+]"
 	drone_repl_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	drone_repl_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	drone_repl_lbl.add_theme_font_size_override("font_size", 12)
@@ -992,7 +1011,7 @@ func build_minimal_ui() -> void:
 	boot_card.add_child(boot_vbox)
 
 	var b_tag = Label.new()
-	b_tag.text = "✦ STAR REPLICA: AUTOMA ✦"
+	b_tag.text = "[+] STAR REPLICA: AUTOMA [+]"
 	b_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b_tag.add_theme_font_size_override("font_size", 16)
 	b_tag.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
@@ -1020,7 +1039,7 @@ func build_minimal_ui() -> void:
 	boot_vbox.add_child(b_hint)
 
 	var b_pointer = Label.new()
-	b_pointer.text = "▼ DORMANT PROBE ON SURFACE BELOW ▼"
+	b_pointer.text = "[v] DORMANT PROBE ON SURFACE BELOW [v]"
 	b_pointer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b_pointer.add_theme_font_size_override("font_size", 10)
 	b_pointer.add_theme_color_override("font_color", Color(0.2, 2.2, 2.8, 0.9))
@@ -1055,7 +1074,7 @@ func build_minimal_ui() -> void:
 	milestone_panel.add_child(m_vbox)
 	
 	milestone_title_lbl = Label.new()
-	milestone_title_lbl.text = "★ MILESTONE ACHIEVED ★"
+	milestone_title_lbl.text = "[*] MILESTONE ACHIEVED [*]"
 	milestone_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	milestone_title_lbl.add_theme_font_size_override("font_size", 12)
 	milestone_title_lbl.add_theme_color_override("font_color", Color(1.5, 2.2, 0.4))
@@ -1072,52 +1091,69 @@ func build_minimal_ui() -> void:
 	_build_tech_tree_modal()
 
 func _build_tech_tree_modal() -> void:
-	tech_tree_modal = PanelContainer.new()
+	tech_tree_modal = Panel.new()
 	tech_tree_modal.name = "TechTreeModal"
 	tech_tree_modal.visible = false
-	tech_tree_modal.set_anchors_preset(Control.PRESET_FULL_RECT)
-	tech_tree_modal.anchor_left = 0.05
-	tech_tree_modal.anchor_top = 0.06
-	tech_tree_modal.anchor_right = 0.95
-	tech_tree_modal.anchor_bottom = 0.94
+	tech_tree_modal.clip_contents = true
+	tech_tree_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	tech_tree_modal.anchor_left = 0.03
+	tech_tree_modal.anchor_top = 0.03
+	tech_tree_modal.anchor_right = 0.97
+	tech_tree_modal.anchor_bottom = 0.95
+	tech_tree_modal.offset_left = 0
+	tech_tree_modal.offset_top = 0
+	tech_tree_modal.offset_right = 0
+	tech_tree_modal.offset_bottom = 0
 	
 	var sb_modal = StyleBoxFlat.new()
-	sb_modal.bg_color = Color(0.02, 0.04, 0.09, 0.96)
+	sb_modal.bg_color = Color(0.012, 0.025, 0.05, 1.0)
 	sb_modal.border_color = Color(0.0, 1.8, 2.5, 0.85)
 	sb_modal.set_border_width_all(2)
 	sb_modal.set_corner_radius_all(10)
-	sb_modal.shadow_color = Color(0.0, 1.2, 2.0, 0.4)
-	sb_modal.shadow_size = 18
+	sb_modal.shadow_color = Color(0.0, 1.2, 2.0, 0.5)
+	sb_modal.shadow_size = 16
 	tech_tree_modal.add_theme_stylebox_override("panel", sb_modal)
 	add_child(tech_tree_modal)
 	
 	var main_vbox = VBoxContainer.new()
-	main_vbox.add_theme_constant_override("separation", 10)
+	main_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	main_vbox.offset_left = 10
+	main_vbox.offset_top = 8
+	main_vbox.offset_right = -10
+	main_vbox.offset_bottom = -8
+	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	main_vbox.add_theme_constant_override("separation", 6)
 	tech_tree_modal.add_child(main_vbox)
 	
-	# ヘッダー
+	# ヘッダー (コンパクト＆見切れ防止)
 	var header_hbox = HBoxContainer.new()
+	header_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	main_vbox.add_child(header_hbox)
 	
 	var title_vbox = VBoxContainer.new()
 	title_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	title_vbox.add_theme_constant_override("separation", 1)
 	header_hbox.add_child(title_vbox)
 	
 	var title_lbl = Label.new()
-	title_lbl.text = "STRUCTURE ARCHITECT // BLUEPRINT CATALOG"
-	title_lbl.add_theme_font_size_override("font_size", 15)
+	title_lbl.text = "BLUEPRINT CATALOG"
+	title_lbl.add_theme_font_size_override("font_size", 13)
 	title_lbl.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
 	title_vbox.add_child(title_lbl)
 	
 	var sub_lbl = Label.new()
-	sub_lbl.text = "Select a facility to project holographic blueprints. Tap any blue ghost on the surface to construct."
-	sub_lbl.add_theme_font_size_override("font_size", 10)
+	sub_lbl.text = "Select a facility. Tap blue ghost on surface to construct."
+	sub_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub_lbl.add_theme_font_size_override("font_size", 9)
 	sub_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.95))
 	title_vbox.add_child(sub_lbl)
 	
 	var btn_close = Button.new()
-	btn_close.text = " ✕ CLOSE "
-	btn_close.custom_minimum_size = Vector2(84, 32)
+	btn_close.text = "CLOSE X"
+	btn_close.custom_minimum_size = Vector2(68, 28)
+	btn_close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var sb_cls = StyleBoxFlat.new()
 	sb_cls.bg_color = Color(0.2, 0.05, 0.08, 0.9)
 	sb_cls.border_color = Color(2.5, 0.3, 0.3, 0.8)
@@ -1127,6 +1163,7 @@ func _build_tech_tree_modal() -> void:
 	btn_close.add_theme_color_override("font_color", Color(2.5, 0.5, 0.5))
 	btn_close.pressed.connect(func():
 		tech_tree_modal.visible = false
+		if objective_label: objective_label.visible = true
 		AudioSynth.play_synth("click")
 	)
 	header_hbox.add_child(btn_close)
@@ -1137,7 +1174,7 @@ func _build_tech_tree_modal() -> void:
 	# 現在の所持資材バー (Current Inventory Status)
 	var res_hbox = HBoxContainer.new()
 	res_hbox.name = "TechTreeResBar"
-	res_hbox.add_theme_constant_override("separation", 16)
+	res_hbox.add_theme_constant_override("separation", 14)
 	main_vbox.add_child(res_hbox)
 	
 	var res_types = ["Fe", "Cu", "Ti", "Si"]
@@ -1145,7 +1182,7 @@ func _build_tech_tree_modal() -> void:
 		var r_lbl = Label.new()
 		r_lbl.name = "ResLbl_" + rk
 		r_lbl.text = "%s: %d" % [rk, GameState.resources.get(rk, 0)]
-		r_lbl.add_theme_font_size_override("font_size", 11)
+		r_lbl.add_theme_font_size_override("font_size", 10)
 		r_lbl.add_theme_color_override("font_color", Color(0.2, 2.2, 2.8))
 		res_hbox.add_child(r_lbl)
 	
@@ -1156,14 +1193,15 @@ func _build_tech_tree_modal() -> void:
 	var scroll = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	main_vbox.add_child(scroll)
 	
 	var grid = GridContainer.new()
 	grid.name = "TechTreeGrid"
-	grid.columns = 2
+	grid.columns = 1
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
 	scroll.add_child(grid)
 	
 	var catalog_data = [
@@ -1247,19 +1285,19 @@ func _build_tech_tree_modal() -> void:
 func _create_tech_tree_card(item: Dictionary) -> Button:
 	var btn = Button.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 88)
+	btn.custom_minimum_size = Vector2(0, 92)
 	
 	var sb_n = StyleBoxFlat.new()
 	sb_n.bg_color = Color(0.04, 0.08, 0.15, 0.9)
 	sb_n.border_color = Color(0.0, 1.2, 1.8, 0.5)
 	sb_n.set_border_width_all(1)
-	sb_n.set_corner_radius_all(8)
+	sb_n.set_corner_radius_all(6)
 	
 	var sb_h = StyleBoxFlat.new()
 	sb_h.bg_color = Color(0.06, 0.14, 0.25, 0.95)
 	sb_h.border_color = Color(0.0, 2.2, 3.0, 0.9)
 	sb_h.set_border_width_all(2)
-	sb_h.set_corner_radius_all(8)
+	sb_h.set_corner_radius_all(6)
 	
 	btn.add_theme_stylebox_override("normal", sb_n)
 	btn.add_theme_stylebox_override("hover", sb_h)
@@ -1268,54 +1306,52 @@ func _create_tech_tree_card(item: Dictionary) -> Button:
 	var h_box = HBoxContainer.new()
 	h_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	h_box.set_anchors_preset(Control.PRESET_FULL_RECT)
-	h_box.offset_left = 10
+	h_box.offset_left = 8
 	h_box.offset_top = 6
-	h_box.offset_right = -10
+	h_box.offset_right = -8
 	h_box.offset_bottom = -6
-	h_box.add_theme_constant_override("separation", 10)
+	h_box.add_theme_constant_override("separation", 8)
 	btn.add_child(h_box)
 	
 	var tex_icon = load(item["icon"])
 	if tex_icon:
 		var trect = TextureRect.new()
 		trect.texture = tex_icon
-		trect.custom_minimum_size = Vector2(38, 38)
+		trect.custom_minimum_size = Vector2(34, 34)
+		trect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		trect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		trect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		h_box.add_child(trect)
 		
 	var v_box = VBoxContainer.new()
 	v_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v_box.add_theme_constant_override("separation", 1)
+	v_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	v_box.add_theme_constant_override("separation", 2)
 	h_box.add_child(v_box)
 	
 	var lbl_name = Label.new()
 	var is_rec = (GameState.story_phase == GameState.StoryPhase.BUILD_MINER and item["id"] == "miner")
-	lbl_name.text = ("★ [RECOMMENDED] " if is_rec else "") + item["name"]
-	lbl_name.add_theme_font_size_override("font_size", 12)
+	lbl_name.text = ("[*] [REC] " if is_rec else "") + item["name"]
+	lbl_name.add_theme_font_size_override("font_size", 11)
 	lbl_name.add_theme_color_override("font_color", Color(2.5, 2.2, 0.4) if is_rec else Color(1.8, 2.4, 2.8))
 	v_box.add_child(lbl_name)
 	
-	var top_sub_hbox = HBoxContainer.new()
-	top_sub_hbox.add_theme_constant_override("separation", 12)
-	v_box.add_child(top_sub_hbox)
-
 	var lbl_cost = Label.new()
 	lbl_cost.text = "COST: %s" % item["cost"]
-	lbl_cost.add_theme_font_size_override("font_size", 10)
+	lbl_cost.add_theme_font_size_override("font_size", 9)
 	lbl_cost.add_theme_color_override("font_color", Color(0.0, 2.0, 2.8))
-	top_sub_hbox.add_child(lbl_cost)
+	v_box.add_child(lbl_cost)
 	
 	var lbl_status = Label.new()
-	lbl_status.text = "✔ READY"
-	lbl_status.add_theme_font_size_override("font_size", 10)
+	lbl_status.text = "[OK] READY"
+	lbl_status.add_theme_font_size_override("font_size", 9)
 	lbl_status.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
-	top_sub_hbox.add_child(lbl_status)
+	v_box.add_child(lbl_status)
 	
 	var lbl_desc = Label.new()
 	lbl_desc.text = item["desc"]
 	lbl_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lbl_desc.add_theme_font_size_override("font_size", 9)
+	lbl_desc.add_theme_font_size_override("font_size", 8.5)
 	lbl_desc.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
 	v_box.add_child(lbl_desc)
 	
@@ -1375,6 +1411,20 @@ func _adjust_responsive_layout() -> void:
 		var grid = tech_tree_modal.find_child("TechTreeGrid", true, false)
 		if grid:
 			grid.columns = 1 if is_portrait else 2
+		if is_portrait:
+			tech_tree_modal.anchor_left = 0.02
+			tech_tree_modal.anchor_right = 0.98
+			tech_tree_modal.anchor_top = 0.02
+			tech_tree_modal.anchor_bottom = 0.96
+		else:
+			tech_tree_modal.anchor_left = 0.06
+			tech_tree_modal.anchor_right = 0.94
+			tech_tree_modal.anchor_top = 0.04
+			tech_tree_modal.anchor_bottom = 0.94
+		tech_tree_modal.offset_left = 0
+		tech_tree_modal.offset_top = 0
+		tech_tree_modal.offset_right = 0
+		tech_tree_modal.offset_bottom = 0
 
 # ========================================================
 # バーチャルジョイスティック描画 ＆ タッチ入力ハンドラー
@@ -1666,7 +1716,7 @@ func _on_fleet_changed(current: int, _max_val: int) -> void:
 	if current > prev_fleet_count:
 		# 自己複製達成バナーのポップアップ演出
 		if drone_repl_banner and drone_repl_lbl:
-			drone_repl_lbl.text = "✦ SUB-DRONE REPLICATED! (TOTAL: %d) ✦" % current
+			drone_repl_lbl.text = "[+] SUB-DRONE REPLICATED! (TOTAL: %d) [+]" % current
 			drone_repl_banner.visible = true
 			drone_repl_timer = 2.4
 			AudioSynth.play_synth("victory")
@@ -1733,15 +1783,15 @@ func _update_objective_text() -> void:
 			return
 		GameState.StoryPhase.MINE:
 			var cur_fe = GameState.resources.get("Fe", 0)
-			objective_label.text = "[ STEP 2: HOLD [⚡MINE] TO HARVEST Fe ORE (%d / 40) ]" % mini(40, cur_fe)
+			objective_label.text = "[ STEP 2: HOLD [PWRMINE] TO HARVEST Fe ORE (%d / 40) ]" % mini(40, cur_fe)
 			objective_label.add_theme_color_override("font_color", Color(0.3, 2.2, 2.8))
 			return
 		GameState.StoryPhase.DRONE:
-			objective_label.text = "[ STEP 3: TAP GREEN [✦REPLICATE] TO FABRICATE SUB-DRONE (40 Fe) ]"
+			objective_label.text = "[ STEP 3: TAP GREEN [[+]REPLICATE] TO FABRICATE SUB-DRONE (40 Fe) ]"
 			objective_label.add_theme_color_override("font_color", Color(0.2, 2.5, 1.0))
 			return
 		GameState.StoryPhase.BUILD_MINER:
-			objective_label.text = "[ STEP 4: OPEN [🛠BUILD] -> CHOOSE MINING DRILL -> TAP BLUE GHOST ]"
+			objective_label.text = "[ STEP 4: OPEN [[BUILD]BUILD] -> CHOOSE MINING DRILL -> TAP BLUE GHOST ]"
 			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
 			return
 		GameState.StoryPhase.FACTORY:
@@ -1799,7 +1849,7 @@ func _on_nav_overlay_draw() -> void:
 			var h_pulse = (sin(hud_anim_time * 10.0) * 0.5 + 0.5)
 			var h_col = Color(1.0, 0.35, 0.05, (0.3 + 0.4 * h_pulse) * heat_ratio)
 			nav_overlay.draw_rect(Rect2(Vector2.ZERO, vp_size), h_col, false, 8.0)
-			nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 140, 150), "⚠ WARNING: EXTREME SOLAR RADIATION ⚠", HORIZONTAL_ALIGNMENT_CENTER, 280, 12, Color(1.0, 0.85, 0.2))
+			nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 140, 150), "[!] WARNING: EXTREME SOLAR RADIATION [!]", HORIZONTAL_ALIGNMENT_CENTER, 280, 12, Color(1.0, 0.85, 0.2))
 
 		for p in grid_manager.active_planets:
 			if p.get("id", "") == "GARGANTUA-ZERO":
@@ -1809,7 +1859,7 @@ func _on_nav_overlay_draw() -> void:
 					var bh_pulse = (sin(hud_anim_time * 12.0) * 0.5 + 0.5)
 					var bh_col = Color(0.7, 0.1, 1.0, (0.35 + 0.45 * bh_pulse) * bh_ratio)
 					nav_overlay.draw_rect(Rect2(Vector2.ZERO, vp_size), bh_col, false, 8.0)
-					nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 150, 150), "⚠ EVENT HORIZON: TIDAL DISRUPTION ⚠", HORIZONTAL_ALIGNMENT_CENTER, 300, 12, Color(0.9, 0.4, 1.0))
+					nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 150, 150), "[!] EVENT HORIZON: TIDAL DISRUPTION [!]", HORIZONTAL_ALIGNMENT_CENTER, 300, 12, Color(0.9, 0.4, 1.0))
 
 	# ナビ対象天体リスト (星系の主要天体 Key Solar Bodies のみに厳格選定)
 	var targets: Array[Dictionary] = []

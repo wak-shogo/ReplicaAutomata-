@@ -220,6 +220,9 @@ func _physics_process(delta: float) -> void:
 			var to_ship = global_position - prim_pos
 			var cur_r = to_ship.length()
 			var normal = to_ship / cur_r if cur_r > 0.001 else Vector2.UP
+			if prim_kind != "sun" and prim_kind != "blackhole" and cur_r < min_radius:
+				global_position = prim_pos + normal * min_radius
+				cur_r = min_radius
 			var v_in = velocity.dot(normal)
 
 			# 地表に接触し、かつ地面に向かう速度のとき
@@ -305,12 +308,12 @@ func _physics_process(delta: float) -> void:
 				is_warp_jumping = true
 				AudioSynth.play_synth("victory")
 				velocity = Vector2(1.0, 0.35).normalized() * 2500.0
-				GameState.add_log("★ HYPERDRIVE ENGAGED: INTERSTELLAR EXPEDITION INITIATED ★")
+				GameState.add_log("[*] HYPERDRIVE ENGAGED: INTERSTELLAR EXPEDITION INITIATED [*]")
 				var hud = get_parent().get_node_or_null("HUD")
 				if hud and hud.has_method("trigger_victory_ending"):
 					hud.trigger_victory_ending()
 				if hud and hud.has_method("_trigger_milestone_banner"):
-					hud._trigger_milestone_banner("★ VICTORY: STELLAR ACCELERATOR LAUNCH ★")
+					hud._trigger_milestone_banner("[*] VICTORY: STELLAR ACCELERATOR LAUNCH [*]")
 
 		# リアルタイム天体音響・スラスターアンビエント合成
 		var sun_proximity = clampf((sun_r * 2.5 - dist_sun) / (sun_r * 1.8), 0.0, 1.0)

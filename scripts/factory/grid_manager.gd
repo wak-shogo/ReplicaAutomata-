@@ -656,7 +656,7 @@ func _place_blueprint_at_mouse(mouse_pos: Vector2) -> void:
 			missing_items.append("%d %s (NEED %d)" % [have, r_type, need])
 			
 	if not can_afford:
-		var err_str = "❌ " + ", ".join(missing_items)
+		var err_str = "[!] " + ", ".join(missing_items)
 		show_building_cost_error_at(mouse_pos, err_str)
 		var hud = get_parent().get_node_or_null("HUD")
 		if hud and hud.has_method("show_missing_res_alert"):
@@ -836,7 +836,7 @@ func _try_build_at_ghost_slot(target_pos: Vector2) -> bool:
 			missing_items.append("%d %s (NEED %d)" % [have, r_type, need])
 			
 	if not can_afford:
-		var err_str = "❌ " + ", ".join(missing_items)
+		var err_str = "[!] " + ", ".join(missing_items)
 		show_building_cost_error_at(best_slot["pos"], err_str)
 		var hud = get_parent().get_node_or_null("HUD")
 		if hud and hud.has_method("show_missing_res_alert"):
@@ -1597,7 +1597,7 @@ func _draw() -> void:
 			var beacon_tip = HOME_CENTER + radial * (HOME_RADIUS + 8.0)
 			draw_line(beacon_surf, beacon_tip, Color(0.2, 2.5, 3.0, 0.95), 3.5)
 			draw_arc(beacon_surf, 16.0 + guide_pulse * 6.0, 0, TAU, 24, Color(0.0, 2.8, 3.5, 0.85), 2.0)
-			var guide_tag = "[ HOLD MINE ]" if GameState.story_phase == GameState.StoryPhase.MINE else "[ ▼ Fe ORE VEIN ]"
+			var guide_tag = "[ HOLD MINE ]" if GameState.story_phase == GameState.StoryPhase.MINE else "[ [v] Fe ORE VEIN ]"
 			draw_string(ThemeDB.fallback_font, beacon_surf + Vector2(-60, -18), guide_tag, HORIZONTAL_ALIGNMENT_CENTER, 120, 12, Color(0.2, 2.8, 3.5))
 
 	# 4. 配置済み実体施設
@@ -1622,7 +1622,7 @@ func _draw() -> void:
 				draw_circle(out_pos, 2.2, Color(0.2, 2.2, 2.8, 0.85))
 				draw_line(bpos, out_pos, Color(0.2, 2.0, 2.8, 0.4), 1.0)
 				if is_power_short:
-					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -38), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -38), "PWR LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
 			"smelter": 
 				draw_sheet_frame_rotated(tex_factory_sheet, fact_frame, 4, bpos, rot)
 				# 精錬炉の赤熱サーマルパルス (Furnace Thermal Glow)
@@ -1630,12 +1630,12 @@ func _draw() -> void:
 				draw_circle(bpos, 7.0 + heat_pulse * 3.0, Color(2.8, 1.2, 0.1, 0.45 + heat_pulse * 0.35))
 				draw_circle(bpos, 3.5, Color(3.5, 2.5, 1.0, 0.9))
 				if is_power_short:
-					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -32), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -32), "PWR LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
 			"assembler": 
 				draw_sheet_frame_rotated(tex_factory_sheet, (fact_frame + 2) % 4, 4, bpos, rot, Vector2(1.15, 1.15))
 				draw_circle(bpos + Vector2(0, -16), 2.5, Color(0.2, 1.0, 0.4, 0.95))
 				if is_power_short:
-					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -32), "⚡ LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
+					draw_string(ThemeDB.fallback_font, bpos + Vector2(-20, -32), "PWR LOW", HORIZONTAL_ALIGNMENT_CENTER, -1, 9, Color(1.0, 0.9, 0.2, 0.7 + 0.3 * sin(anim_time * 6.0)))
 			"mass_driver": 
 				draw_sheet_frame_rotated(tex_mass_driver_sheet, int(anim_time * 4.0) % 4, 4, bpos, rot)
 				draw_arc(bpos, 16.0, 0, TAU, 16, Color(0.2, 0.8, 1.0, 0.4 + 0.4 * sin(anim_time * 5.0)), 1.5)
