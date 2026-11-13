@@ -1,660 +1,504 @@
 extends Node
 
-# STAR REPLICA: AUTOMA - コアゲームステート＆プログレッション管理 (商用製品版)
-# クラフト、自動化、有向物流、電力網、1万体スウォーム、メガストラクチャー、空爆防衛戦、セーブ
+# ==============================================================================
+# STAR REPLICA: AUTOMA - CORE GAME STATE & CATALOG
+# ==============================================================================
 
-# 0. ユーザーストーリー・プログレッシブ進行フェーズ (休眠探査機から宇宙帝国へ)
-enum StoryPhase {
-	DORMANT,      # 0: 休眠中。何もない地表。画面タップで再起動。
-	MOVE,         # 1: 移動確認。数歩移動でセンサーパルスが地下Fe鉱脈を探知。
-	MINE,         # 2: 手動採掘。[MINE]ボタンで40 Fe採掘。
-	DRONE,        # 3: 子機造形。[DRONE]ボタンで初の子機を3Dプリント＆合体。
-	BUILD_MINER,  # 4: 施設建築。[BUILD]ボタンで自動化ドリルをFe鉱脈上に配置。
-	FACTORY,      # 5: 工場物流。コンベア・精錬炉の設置。
-	SPACE         # 6: 宇宙進出。全機能（星間ナビ、艦隊ドクトリン、メガストラクチャー等）完全開放。
-}
+signal inventory_changed
+signal state_updated
+signal blueprint_selected(building_id: String)
+signal drone_count_changed(new_count: int)
+signal probe_launched(world_pos: Vector2)
+signal log_event(message: String, level: String)
 
-var story_phase: StoryPhase = StoryPhase.DORMANT
+enum Doctrine { HARVEST, REPLICATE, DEFEND, ASSAULT }
 
-# 1. 資源データ（原材料 ＆ 宇宙天体固有資源）
-var resources = {
-	"Fe": 0,         # 鉄鉱石 (初期手動採掘チュートリアル用)
-	"Cu": 0,         # 銅鉱石
-	"Ti": 0,         # チタン鉱石
-	"Si": 0,         # 珪素鉱石
-	"Energy": 100.0, # 蓄電グリッド残量 (%)
-	"He3": 0,        # 月(Luna): ヘリウム3
-	"Plasma": 0,     # 恒星(Sun): 純粋太陽プラズマ
-	"Ice": 0,        # 彗星(Comet): 重水素氷・揮発ガス
-	"DarkMatter": 0, # ブラックホール(Singularity): 暗黒物質
-	"Neutronium": 0  # 中性子星(Pulsar): 中性子縮退物質
-}
+# Raw & Refined Resources
+var fe: int = 0
+var cu: int = 0
+var si: int = 0
+var ti: int = 0
+var he3: int = 0
 
-# 鉱脈の有限埋蔵量 (母星地下)
-var vein_reserves = {
-	"Fe": 15000,
-	"Cu": 9500,
-	"Ti": 6000,
-	"Si": 8000
-}
+var plate_fe: int = 0
+var wire_cu: int = 0
+var wafer_si: int = 0
+var circuit: int = 0
+var alloy: int = 0
+var probe_stock: int = 0
 
-# 宇宙天体の有限資源埋蔵量
-var celestial_reserves: Dictionary = {
-	"LUNA-PRIME": 6000,
-	"COMET-NEOWISE": 4500,
-	"GARGANTUA-ZERO": 5000,
-	"PULSAR-X": 3000,
-	"HELIOS-PRIME": 999999 # 恒星プラズマ
-}
-
-# 2. 中間素材＆アイテムインベントリ
-var items = {
-	"plate_fe": 0,         # 鉄板
-	"wire_cu": 0,          # 銅線
-	"silicon_wafer": 0,    # シリコンウェハー
-	"circuit": 0,          # 集積回路
-	"alloy": 0,            # 耐熱チタン合金
-	"drone_unit": 0,       # レプリカドローン機体
-	# 建設用ストック
-	"miner": 0,            # スタータードリル
-	"belt": 0,             # スターターベルト
-	"smelter": 0,          # スターター精錬炉
-	"assembler": 0,
-	"mass_driver": 0,
-	"depot": 0,
-	"turret": 0,           # スターター防衛タレット
-	"solar": 0,            # スターター太陽光パネル
-	"geothermal": 0
-}
-
-# 3. 電力網ステータス (Power Grid)
-var power_generated: float = 0.0   # 総発電量 (kW)
-var power_consumed: float = 0.0    # 総消費電力 (kW)
-var power_ratio: float = 1.0        # 充足率 (0.0 ~ 1.0)
-
-# 4. 自機サバイバル（耐久値＆シールド）
-var player_hp: float = 100.0
-var player_max_hp: float = 100.0
-var player_shield: float = 100.0
-var player_max_shield: float = 100.0
-var player_shield_cooldown: float = 0.0
-
-# 5. 艦隊＆スウォームデータ
+# Progression & Fleet
+var drones: int = 0
+var max_drones: int = 12
 var fleet_count: int = 0
-var fleet_max: int = 10000
-var hostile_fleet_count: int = 1500
-var hostile_core_health: float = 3000.0
-var hostile_core_max_health: float = 3000.0
-var liberation_progress: float = 0.0
+var max_fleet: int = 10000
+var total_launches: int = 0
+var hostiles_defeated: int = 0
+var hostiles_active: int = 0
+var boss_hp: float = 2500.0
+var boss_max_hp: float = 2500.0
+var boss_defeated: bool = false
 
-# ドクトリン: "HARVEST", "MULTIPLY", "ASSAULT"
-var fleet_doctrine: String = "HARVEST"
+# Energy Grid
+var power_gen: float = 15.0  # Base Seed Unit reactor
+var power_use: float = 0.0
+var power_ratio: float = 1.0
 
-# 6. プレイヤー強化（合体ドローン）
-var attached_drones: int = 0
-var max_attached_drones: int = 8
+# Macro Replicator & Doctrine
+var printer_progress: float = 0.0
+var printer_active: bool = false
+var current_doctrine: int = Doctrine.HARVEST
+var selected_tool: String = "pick"
+var build_rotation: int = 0 # 0: Right/Up, 1: Down, 2: Left, 3: Up
 
-# 7. 敵空爆襲来ウェーブ (Air Raid)
-var raid_timer: float = 0.0
-var raid_interval: float = 50.0
-var is_raid_active: bool = false
-var raid_wave_count: int = 0
+# Cumulative mining feedback near player
+var recent_ore_type: String = ""
+var recent_ore_amount: int = 0
+var recent_ore_timer: float = 0.0
 
-# 7.5 技術ツリー段階的自己開発システム (Progressive Tech Tree)
-signal tool_unlocked(tool_name: String)
-var unlocked_tools: Dictionary = {
-	"miner": false,
-	"belt": false,
-	"smelter": false,
-	"solar": false,
-	"assembler": false,
-	"depot": false,
-	"turret": false,
-	"mass_driver": false,
-	"geothermal": false,
-	"demolish": false
+# Megastructure unlock tracking
+var megastructures: Dictionary = {
+	"elevator": false,
+	"dyson": false,
+	"citadel": false,
+	"warpgate": false,
 }
 
-func unlock_tool(t_name: String) -> void:
-	if unlocked_tools.has(t_name) and not unlocked_tools[t_name]:
-		unlocked_tools[t_name] = true
-		tool_unlocked.emit(t_name)
-		add_log("TECH DISCOVERY: %s BLUEPRINT UNLOCKED!" % t_name.to_upper())
-		AudioSynth.play_synth("victory")
-
-func unlock_all_tools() -> void:
-	for k in unlocked_tools.keys():
-		unlocked_tools[k] = true
-		tool_unlocked.emit(k)
-
-# 8. メガストラクチャー建造進捗 (0.0 ~ 1.0)
-var megastructures = {
-	"elevator": {"name": "Orbital Space Elevator", "cost": {"Fe": 250, "Cu": 180, "Ti": 120, "alloy": 30}, "progress": 0.0, "built": false, "bonus": "Resource Transfer Rate +300%"},
-	"dyson": {"name": "Dyson Ring Segment", "cost": {"Fe": 400, "Cu": 300, "Si": 250, "alloy": 60}, "progress": 0.0, "built": false, "bonus": "Factory Speed x2 & Infinite Power"},
-	"citadel": {"name": "Orbital Citadel Fortress", "cost": {"Fe": 500, "Ti": 300, "alloy": 100, "circuit": 50}, "progress": 0.0, "built": false, "bonus": "Auto Defense Plasma Battery"},
-	"warpgate": {"name": "Stellar Accelerator Cannon", "cost": {"Fe": 800, "Ti": 600, "alloy": 200, "circuit": 120}, "progress": 0.0, "built": false, "bonus": "Final Star System Liberation Weapon"}
-}
-var active_megastructure_project: String = ""
-
-# 9. クエスト・マイルストーン目標システム (ノンバーバル・ピクトグラム導線対応)
-var quest_index: int = 0
-var quest_list: Array[Dictionary] = [
-	{
-		"title": "Awakening & Surface Mining",
-		"icon": "tool_pick",
-		"short": "MINE Fe",
-		"waypoint": "vein_Fe",
-		"req_type": "resource",
-		"target_res": "Fe",
-		"target_val": 40
+# Single source of truth for all tools & facilities
+const BUILDINGS: Dictionary = {
+	"drill": {
+		"name": "Mining Drill",
+		"category": "MINE",
+		"hotkey": "1",
+		"cost": {"fe": 12},
+		"power": -12.0,
+		"req_drones": 1,
+		"size": Vector2i(1, 2),
+		"place": "ORE_OR_ROCK",
+		"icon": "res://assets/ui/tool_drill.png",
+		"sheet": "res://assets/sprites/mining_drill_sheet.png",
+		"frames": 4,
+		"desc": "Extracts Fe/Cu/Si/Ti veins continuously onto nearby belts or lifts.",
+		"usage": "Place on underground ore veins or rock seams."
 	},
-	{
-		"title": "Expansion: Attach Sub-Drone",
-		"icon": "item_drone_unit",
-		"short": "ATTACH DRONE",
-		"waypoint": "player",
-		"req_type": "drone",
-		"target_val": 1
+	"belt": {
+		"name": "Conveyor Belt",
+		"category": "MINE",
+		"hotkey": "2",
+		"cost": {"fe": 2},
+		"power": 0.0,
+		"req_drones": 1,
+		"size": Vector2i(1, 1),
+		"place": "ANY_CLEAR",
+		"icon": "res://assets/ui/tool_belt.png",
+		"sheet": "res://assets/sprites/conveyor_sheet.png",
+		"frames": 4,
+		"desc": "Transports mined ores & plates horizontally across terrain or tunnels.",
+		"usage": "Connect Drills to Smelters, Assemblers & Replicators. Press [R] to flip."
 	},
-	{
-		"title": "Automation Dawn: Mining Drill",
-		"icon": "tool_drill",
-		"short": "BUILD DRILL",
-		"waypoint": "vein_Fe",
-		"req_type": "building",
-		"building_type": "miner",
-		"target_val": 1
+	"lift": {
+		"name": "Ore Lift Shaft",
+		"category": "MINE",
+		"hotkey": "3",
+		"cost": {"fe": 3},
+		"power": -1.0,
+		"req_drones": 1,
+		"size": Vector2i(1, 1),
+		"place": "ANY_CLEAR",
+		"icon": "res://assets/ui/tool_belt.png",
+		"sheet": "res://assets/sprites/lift_shaft_sheet.png",
+		"frames": 4,
+		"desc": "Vertical elevator tube hoisting underground ores to the surface.",
+		"usage": "Stack vertically inside dug shafts to lift items upward."
 	},
-	{
-		"title": "Logistics: Conveyor Pipeline",
-		"icon": "tool_belt",
-		"short": "BUILD BELT",
-		"waypoint": "surface",
-		"req_type": "building",
-		"building_type": "belt",
-		"target_val": 3
+	"inserter": {
+		"name": "Inserter Arm",
+		"category": "MINE",
+		"hotkey": "4",
+		"cost": {"fe": 4, "cu": 2},
+		"power": -2.0,
+		"req_drones": 1,
+		"size": Vector2i(1, 1),
+		"place": "ANY_CLEAR",
+		"icon": "res://assets/ui/tool_assembler.png",
+		"sheet": "res://assets/sprites/inserter_sheet.png",
+		"frames": 4,
+		"desc": "Robotic transfer arm boosting throughput between belts & machines.",
+		"usage": "Place beside Smelters/Assemblers/Drivers."
 	},
-	{
-		"title": "Refining: Electric Smelter",
-		"icon": "tool_smelter",
-		"short": "BUILD SMELTER",
-		"waypoint": "surface",
-		"req_type": "building",
-		"building_type": "smelter",
-		"target_val": 1
+	"depot": {
+		"name": "Container Depot",
+		"category": "MINE",
+		"hotkey": "5",
+		"cost": {"fe": 18, "cu": 5},
+		"power": -3.0,
+		"req_drones": 1,
+		"size": Vector2i(2, 2),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/tool_depot.png",
+		"sheet": "res://assets/sprites/container_depot.png",
+		"frames": 1,
+		"desc": "Logistics buffer hub. Connects surface storage & feeds machines automatically.",
+		"usage": "Place on surface horizon to share items across your colony."
 	},
-	{
-		"title": "Fabrication: Auto Assembler",
-		"icon": "tool_assembler",
-		"short": "BUILD ASSEMBLER",
-		"waypoint": "surface",
-		"req_type": "building",
-		"building_type": "assembler",
-		"target_val": 1
+	"smelter": {
+		"name": "Blast Smelter",
+		"category": "FACTORY",
+		"hotkey": "6",
+		"cost": {"fe": 20, "cu": 6},
+		"power": -18.0,
+		"req_drones": 2,
+		"size": Vector2i(2, 2),
+		"place": "SURFACE_OR_CAVERN",
+		"icon": "res://assets/ui/tool_smelter.png",
+		"sheet": "res://assets/sprites/smelter_sheet.png",
+		"frames": 4,
+		"desc": "Refines raw Fe->Plates, Cu->Wire, Si->Wafers for advanced parts.",
+		"usage": "Feed raw ores via belt/depot to smelt refined components."
 	},
-	{
-		"title": "Orbital Launch: Mass Driver",
-		"icon": "tool_mass_driver",
-		"short": "BUILD MASS DRIVER",
-		"waypoint": "surface",
-		"req_type": "building",
-		"building_type": "mass_driver",
-		"target_val": 1
+	"assembler": {
+		"name": "Auto Assembler",
+		"category": "FACTORY",
+		"hotkey": "7",
+		"cost": {"fe": 25, "cu": 14, "si": 8},
+		"power": -24.0,
+		"req_drones": 3,
+		"size": Vector2i(2, 2),
+		"place": "SURFACE_OR_CAVERN",
+		"icon": "res://assets/ui/tool_assembler.png",
+		"sheet": "res://assets/sprites/assembler_sheet.png",
+		"frames": 4,
+		"desc": "Fabricates Circuits (Cu Wire + Si Wafer) & Titanium Alloys.",
+		"usage": "Supplies high-tech Circuits & Alloys needed for Replica Probes."
 	},
-	{
-		"title": "Orbital Fleet: 100 Drone Swarm",
-		"icon": "item_drone_unit",
-		"short": "FLEET SWARM",
-		"waypoint": "space",
-		"req_type": "fleet",
-		"target_val": 100
+	"printer": {
+		"name": "Macro Replicator",
+		"category": "FACTORY",
+		"hotkey": "8",
+		"cost": {"fe": 45, "cu": 20, "si": 12},
+		"power": -40.0,
+		"req_drones": 4,
+		"size": Vector2i(3, 2),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/tool_printer.png",
+		"sheet": "res://assets/sprites/factory_hall_sheet.png",
+		"frames": 4,
+		"desc": "Heavy industrial printer assembling autonomous Replica Swarm Probes.",
+		"usage": "Converts Plates, Circuits & Alloys into Orbital Probes automatically."
 	},
-	{
-		"title": "Lunar Expedition: Harvest Helium-3",
-		"icon": "res_he3",
-		"short": "HARVEST LUNA He3",
-		"waypoint": "LUNA-PRIME",
-		"req_type": "resource",
-		"target_res": "He3",
-		"target_val": 3
+	"mass_driver": {
+		"name": "Mass Driver",
+		"category": "FACTORY",
+		"hotkey": "9",
+		"cost": {"fe": 60, "cu": 30, "si": 15, "ti": 8},
+		"power": -45.0,
+		"req_drones": 5,
+		"size": Vector2i(4, 3),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/tool_mass_driver.png",
+		"sheet": "res://assets/sprites/mass_driver_sheet.png",
+		"frames": 4,
+		"desc": "Electromagnetic railgun launching finished Replica Probes into orbit!",
+		"usage": "Place on clear surface skyline to fire Probes into your Swarm Fleet."
 	},
-	{
-		"title": "Deep Space: Solar Plasma & Ice",
-		"icon": "res_plasma",
-		"short": "HARVEST PLASMA / ICE",
-		"waypoint": "HELIOS-PRIME",
-		"req_type": "celestial_any",
-		"target_val": 5
+	"solar": {
+		"name": "Solar Array",
+		"category": "POWER",
+		"hotkey": "0",
+		"cost": {"fe": 10, "si": 6},
+		"power": 30.0,
+		"req_drones": 1,
+		"size": Vector2i(2, 1),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/tool_solar.png",
+		"sheet": "res://assets/sprites/solar_array.png",
+		"frames": 1,
+		"desc": "Clean photovoltaic surface array generating +30 kW power.",
+		"usage": "Build along surface horizon to power drills & smelters."
 	},
-	{
-		"title": "Singularity: Dark Matter Extraction",
-		"icon": "res_darkmatter",
-		"short": "HARVEST DARK MATTER",
-		"waypoint": "GARGANTUA-ZERO",
-		"req_type": "resource",
-		"target_res": "DarkMatter",
-		"target_val": 2
+	"geothermal": {
+		"name": "Geothermal Plant",
+		"category": "POWER",
+		"hotkey": "-",
+		"cost": {"fe": 35, "cu": 15, "ti": 8},
+		"power": 110.0,
+		"req_drones": 3,
+		"size": Vector2i(2, 2),
+		"place": "DEEP_ROCK",
+		"icon": "res://assets/ui/tool_geothermal.png",
+		"sheet": "res://assets/sprites/geothermal_plant.png",
+		"frames": 1,
+		"desc": "Taps planetary magma vents for massive +110 kW baseload energy.",
+		"usage": "Place deep underground near magma crust."
 	},
-	{
-		"title": "Megastructure Construction",
-		"icon": "icon_elevator",
-		"short": "BUILD MEGASTRUCTURE",
-		"waypoint": "megastructure",
-		"req_type": "megastructure"
+	"turret": {
+		"name": "Defense Turret",
+		"category": "POWER",
+		"hotkey": "=",
+		"cost": {"fe": 20, "cu": 12, "ti": 4},
+		"power": -10.0,
+		"req_drones": 2,
+		"size": Vector2i(1, 1),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/tool_turret.png",
+		"sheet": "res://assets/sprites/defense_turret.png",
+		"frames": 1,
+		"desc": "Automated pulse laser protecting surface factories from raiders.",
+		"usage": "Place on surface rooftops to intercept Corrupted ships."
 	},
-	{
-		"title": "Assault Hostile Core & Liberation",
-		"icon": "tool_turret",
-		"short": "ASSAULT HOSTILE CORE",
-		"waypoint": "boss",
-		"req_type": "liberation",
-		"target_val": 100
+	"elevator": {
+		"name": "Space Elevator",
+		"category": "SPACE",
+		"hotkey": "",
+		"cost": {"fe": 140, "cu": 80, "si": 50, "ti": 40},
+		"power": -60.0,
+		"req_drones": 6,
+		"size": Vector2i(3, 5),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/icon_elevator.png",
+		"sheet": "res://assets/sprites/megastructure_elevator.png",
+		"frames": 1,
+		"desc": "Orbital tether tripling probe replication output and linking orbit.",
+		"usage": "Megastructure anchored on surface horizon."
+	},
+	"dyson": {
+		"name": "Dyson Ring",
+		"category": "SPACE",
+		"hotkey": "",
+		"cost": {"fe": 220, "cu": 140, "si": 100, "ti": 70},
+		"power": 400.0,
+		"req_drones": 7,
+		"size": Vector2i(5, 3),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/icon_dyson.png",
+		"sheet": "res://assets/sprites/megastructure_dyson.png",
+		"frames": 1,
+		"desc": "Stellar collector beaming +400 kW and supercharging orbital swarm.",
+		"usage": "Megastructure boosting power & swarm speed."
+	},
+	"citadel": {
+		"name": "Plasma Citadel",
+		"category": "SPACE",
+		"hotkey": "",
+		"cost": {"fe": 200, "cu": 110, "si": 80, "ti": 90},
+		"power": -50.0,
+		"req_drones": 7,
+		"size": Vector2i(4, 4),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/icon_citadel.png",
+		"sheet": "res://assets/sprites/megastructure_citadel.png",
+		"frames": 1,
+		"desc": "Orbital fortress empowering Assault Doctrine firepower x2.",
+		"usage": "Megastructure built for final Corrupted Hub siege."
+	},
+	"warpgate": {
+		"name": "Warp Gate",
+		"category": "SPACE",
+		"hotkey": "",
+		"cost": {"fe": 320, "cu": 200, "si": 160, "ti": 140},
+		"power": -120.0,
+		"req_drones": 8,
+		"size": Vector2i(4, 4),
+		"place": "SURFACE",
+		"icon": "res://assets/ui/icon_warpgate.png",
+		"sheet": "res://assets/sprites/megastructure_warpgate.png",
+		"frames": 1,
+		"desc": "Interstellar Seed Gate amplifying full Swarm Self-Replication.",
+		"usage": "Final Phase 4 Megastructure achieving total swarm transcendence."
 	}
-]
+}
 
-# ログバッファ
-var event_logs: Array[String] = []
-
-# シグナル一覧
-signal story_phase_changed(new_phase: int)
-signal resource_changed(type: String, amount: int)
-signal item_changed(type: String, amount: int)
-signal fleet_changed(current: int, maximum: int)
-signal log_added(text: String)
-signal drone_attached(count: int)
-signal quest_updated(quest_idx: int, quest_info: Dictionary)
-signal quest_completed(quest_idx: int, quest_info: Dictionary)
-signal megastructure_updated(proj_id: String, progress: float, built: bool)
-signal doctrine_changed(new_doctrine: String)
-signal enemy_damaged(cur_hp: float, max_hp: float)
-signal galaxy_liberated()
-signal player_health_changed(hp: float, max_hp: float, shield: float, max_shield: float)
-signal raid_alert(is_active: bool, message: String)
-
-func _ready() -> void:
-	add_log("=== STAR REPLICA: AUTOMA ONLINE ===")
-	add_log("SEED UNIT LANDED. PRESS F5 TO QUICK-SAVE, F9 TO QUICK-LOAD.")
-	call_deferred("_notify_initial_quest")
-
-func set_story_phase(new_phase: StoryPhase) -> void:
-	if story_phase == new_phase:
-		return
-	story_phase = new_phase
-	story_phase_changed.emit(story_phase)
-	match story_phase:
-		StoryPhase.DORMANT:
-			add_log("SYSTEM STATUS: DORMANT PROBE STANDBY")
-		StoryPhase.MOVE:
-			add_log("CORE INITIALIZED. THRUST SYSTEMS ONLINE.")
-		StoryPhase.MINE:
-			add_log("SENSOR ALERT: UNDERGROUND Fe VEIN DETECTED!")
-		StoryPhase.DRONE:
-			add_log("BLUEPRINT UNLOCKED: SUB-DRONE FABRICATION READY.")
-		StoryPhase.BUILD_MINER:
-			unlock_tool("miner")
-			if items.get("miner", 0) <= 0:
-				items["miner"] = 1
-				item_changed.emit("miner", items["miner"])
-			add_log("SCHEMATIC GRANTED: AUTOMATED DRILL (MINER x1).")
-		StoryPhase.FACTORY:
-			unlock_tool("belt")
-			unlock_tool("smelter")
-			unlock_tool("solar")
-			if items.get("belt", 0) <= 0:
-				items["belt"] = 10
-				item_changed.emit("belt", items["belt"])
-			if items.get("smelter", 0) <= 0:
-				items["smelter"] = 1
-				item_changed.emit("smelter", items["smelter"])
-			add_log("LOGISTICS PROTOCOL: CONVEYORS & SMELTERS UNLOCKED.")
-		StoryPhase.SPACE:
-			unlock_all_tools()
-			add_log("STELLAR ASCENSION: ALL SYSTEMS FULLY OPERATIONAL.")
+func reset_state() -> void:
+	fe = 0
+	cu = 0
+	si = 0
+	ti = 0
+	he3 = 0
+	plate_fe = 0
+	wire_cu = 0
+	wafer_si = 0
+	circuit = 0
+	alloy = 0
+	probe_stock = 0
+	drones = 0
+	fleet_count = 0
+	total_launches = 0
+	hostiles_defeated = 0
+	hostiles_active = 0
+	boss_hp = boss_max_hp
+	boss_defeated = false
+	power_gen = 15.0
+	power_use = 0.0
+	power_ratio = 1.0
+	printer_progress = 0.0
+	printer_active = false
+	current_doctrine = Doctrine.HARVEST
+	selected_tool = "pick"
+	build_rotation = 0
+	recent_ore_type = ""
+	recent_ore_amount = 0
+	recent_ore_timer = 0.0
+	for k in megastructures.keys():
+		megastructures[k] = false
+	emit_signal("inventory_changed")
+	emit_signal("state_updated")
 
 func _process(delta: float) -> void:
-	# シールド自動リチャージ
-	if player_shield_cooldown > 0.0:
-		player_shield_cooldown -= delta
-	elif player_shield < player_max_shield:
-		player_shield = minf(player_max_shield, player_shield + delta * 20.0)
-		player_health_changed.emit(player_hp, player_max_hp, player_shield, player_max_shield)
+	if recent_ore_timer > 0.0:
+		recent_ore_timer -= delta
+		if recent_ore_timer <= 0.0:
+			recent_ore_amount = 0
+			recent_ore_type = ""
 
-	# 敵空爆ウェーブタイマー（工場フェーズ以降に開始）
-	if story_phase >= StoryPhase.FACTORY:
-		raid_timer += delta
-		if raid_timer >= raid_interval:
-			raid_timer = 0.0
-			_trigger_hostile_air_raid()
-
-func _trigger_hostile_air_raid() -> void:
-	raid_wave_count += 1
-	is_raid_active = true
-	unlock_tool("turret")
-	if items.get("turret", 0) <= 0:
-		items["turret"] = 1 # 初回防衛用タレット1基支給
-		item_changed.emit("turret", items["turret"])
-	var alert_msg = "WARNING: HOSTILE AIR RAID INCOMING (WAVE %d) - DEPLOY TURRET TO DEFEND!" % raid_wave_count
-	add_log(alert_msg)
-	AudioSynth.play_synth("laser")
-	raid_alert.emit(true, alert_msg)
-	
-	# 敵爆撃機スポーンシグナル
-	var root_node = get_tree().current_scene
-	if root_node and root_node.has_method("spawn_air_raid"):
-		root_node.spawn_air_raid(raid_wave_count)
-
-func _notify_initial_quest() -> void:
-	if quest_index < quest_list.size():
-		quest_updated.emit(quest_index, quest_list[quest_index])
-
-func add_resource(type: String, amount: int) -> void:
-	if resources.has(type):
-		resources[type] += amount
-		resource_changed.emit(type, resources[type])
-		_check_quest_progress()
-		
-		# ストーリーフェーズ自動進行: 40 Fe 到達でドローン造形開放
-		if story_phase == StoryPhase.MINE and resources.get("Fe", 0) >= 40:
-			set_story_phase(StoryPhase.DRONE)
-
-func mine_celestial_resource(body_id: String, res_type: String, amount: int) -> int:
-	var cur = celestial_reserves.get(body_id, 2500)
-	if cur <= 0:
-		add_log("CELESTIAL VEIN DEPLETED: %s HAS NO REMAINING %s" % [body_id, res_type])
-		return 0
-	var mined = mini(cur, amount)
-	celestial_reserves[body_id] = cur - mined
-	add_resource(res_type, mined)
-	return mined
-
-func consume_resource(type: String, amount: int) -> bool:
-	if resources.has(type) and resources[type] >= amount:
-		resources[type] -= amount
-		resource_changed.emit(type, resources[type])
-		return true
-	return false
-
-func add_item(type: String, amount: int) -> void:
-	if not items.has(type):
-		items[type] = 0
-	items[type] += amount
-	item_changed.emit(type, items[type])
-
-func consume_item(type: String, amount: int) -> bool:
-	if items.has(type) and items[type] >= amount:
-		items[type] -= amount
-		item_changed.emit(type, items[type])
-		return true
-	return false
-
-func add_fleet(amount: int) -> void:
-	fleet_count = mini(fleet_max, fleet_count + amount)
-	fleet_changed.emit(fleet_count, fleet_max)
-	_check_quest_progress()
-
-func destroy_fleet(amount: int) -> void:
-	if fleet_count > 0:
-		var lost = mini(fleet_count, amount)
-		fleet_count -= lost
-		fleet_changed.emit(fleet_count, fleet_max)
-		if randf() < 0.3:
-			add_log("SWARM ATTRITION: %d UNITS DESTROYED IN COMBAT" % lost)
-
-func set_fleet_doctrine(doc: String) -> void:
-	fleet_doctrine = doc
-	doctrine_changed.emit(doc)
-	add_log("FLEET DOCTRINE UPDATED: -> [%s]" % doc)
-
-func add_log(text: String) -> void:
-	event_logs.append(text)
-	if event_logs.size() > 100:
-		event_logs.pop_front()
-	log_added.emit(text)
-
-func attach_drone() -> bool:
-	if attached_drones < max_attached_drones:
-		# 初回のドローンは Fe: 40 のみで造形可能！2回目以降は Fe: 30 + Si: 15
-		var can_craft = false
-		if attached_drones == 0:
-			if consume_resource("Fe", 40):
-				can_craft = true
-			else:
-				add_log("CRAFT FAILED: REQUIRES 40 Fe TO FABRICATE SUB-DRONE")
-		else:
-			if consume_resource("Fe", 30) and consume_resource("Si", 15):
-				can_craft = true
-			else:
-				add_log("CRAFT FAILED: REQUIRES 30 Fe + 15 Si")
-
-		if can_craft:
-			attached_drones += 1
-			# 自己複製ボーナス：シールド・最大HPの強化
-			player_max_shield = 100.0 + float(attached_drones) * 25.0
-			player_shield = player_max_shield
-			player_max_hp = 100.0 + float(attached_drones) * 20.0
-			player_health_changed.emit(player_hp, player_max_hp, player_shield, player_max_shield)
-			
-			drone_attached.emit(attached_drones)
-			add_log("DRONE DOCKED: CHASSIS EXPANDED (%d/%d) - SHIELD & THRUST BOOSTED!" % [attached_drones, max_attached_drones])
-			_check_quest_progress()
-			if story_phase == StoryPhase.DRONE:
-				set_story_phase(StoryPhase.BUILD_MINER)
-			return true
-	return false
-
-# 自機被弾処理
-func damage_player(amount: float) -> bool:
-	player_shield_cooldown = 4.5
-	if player_shield > 0.0:
-		if player_shield >= amount:
-			player_shield -= amount
-			amount = 0.0
-		else:
-			amount -= player_shield
-			player_shield = 0.0
-			
-	if amount > 0.0:
-		player_hp = maxf(0.0, player_hp - amount)
-		
-	player_health_changed.emit(player_hp, player_max_hp, player_shield, player_max_shield)
-	
-	if player_hp <= 0.0:
-		add_log("SEED UNIT INTEGRITY CRITICAL: EMERGENCY RECONSTRUCTION!")
-		# リスポーン処理
-		call_deferred("_respawn_player")
-		return true
-	return false
-
-func _respawn_player() -> void:
-	player_hp = player_max_hp
-	player_shield = player_max_shield
-	player_health_changed.emit(player_hp, player_max_hp, player_shield, player_max_shield)
-	var root_node = get_tree().current_scene
-	if root_node:
-		var p = root_node.get_node_or_null("Player")
-		if p:
-			p.global_position = Vector2(780.0, 520.0)
-			p.velocity = Vector2.ZERO
-			add_log("SEED UNIT RE-FABRICATED AT SEED BAY")
-
-# 手動クラフト処理
-func craft_item(recipe_name: String) -> bool:
-	match recipe_name:
-		"drone":
-			return attach_drone()
-		"miner":
-			if consume_resource("Fe", 20) and consume_resource("Cu", 10):
-				add_item("miner", 1)
-				add_log("CRAFTED: AUTOMATED MINER x1")
-				return true
-		"belt":
-			if consume_resource("Fe", 6):
-				add_item("belt", 5)
-				add_log("CRAFTED: CONVEYOR BELT x5")
-				return true
-		"smelter":
-			if consume_resource("Fe", 30) and consume_resource("Cu", 15) and consume_resource("Si", 10):
-				add_item("smelter", 1)
-				add_log("CRAFTED: ELECTRIC SMELTER x1")
-				return true
-		"assembler":
-			if consume_resource("Fe", 40) and consume_resource("Cu", 25) and consume_resource("Si", 20):
-				add_item("assembler", 1)
-				add_log("CRAFTED: AUTO ASSEMBLER x1")
-				return true
-		"mass_driver":
-			if consume_resource("Fe", 70) and consume_resource("Cu", 40) and consume_resource("Si", 30):
-				add_item("mass_driver", 1)
-				add_log("CRAFTED: ORBITAL MASS DRIVER x1")
-				return true
-		"depot":
-			if consume_resource("Fe", 35) and consume_resource("Cu", 20):
-				add_item("depot", 1)
-				add_log("CRAFTED: LOGISTICS DEPOT x1")
-				return true
-		"turret":
-			if consume_resource("Fe", 35) and consume_resource("Cu", 25) and consume_resource("Si", 15):
-				add_item("turret", 1)
-				add_log("CRAFTED: DEFENSE TURRET x1")
-				return true
-		"solar":
-			if consume_resource("Fe", 15) and consume_resource("Si", 20):
-				add_item("solar", 1)
-				add_log("CRAFTED: SOLAR PANEL x1")
-				return true
-		"geothermal":
-			if consume_resource("Fe", 40) and consume_resource("Cu", 25) and consume_resource("Ti", 15):
-				add_item("geothermal", 1)
-				add_log("CRAFTED: GEOTHERMAL PLANT x1")
-				return true
-		"plate_fe":
-			if consume_resource("Fe", 2):
-				add_item("plate_fe", 1)
-				return true
-		"wire_cu":
-			if consume_resource("Cu", 2):
-				add_item("wire_cu", 2)
-				return true
-		"silicon_wafer":
-			if consume_resource("Si", 2):
-				add_item("silicon_wafer", 1)
-				return true
-		"circuit":
-			if consume_item("wire_cu", 2) and consume_item("silicon_wafer", 1):
-				add_item("circuit", 1)
-				return true
-		"alloy":
-			if consume_resource("Fe", 2) and consume_resource("Ti", 2):
-				add_item("alloy", 1)
-				return true
-		"drone_unit":
-			if consume_item("plate_fe", 2) and consume_item("circuit", 1):
-				add_item("drone_unit", 1)
-				return true
-	add_log("INSUFFICIENT RESOURCES FOR [%s]" % recipe_name.to_upper())
-	return false
-
-# 建造通知
-func notify_building_constructed(btype: String) -> void:
-	if quest_index < quest_list.size():
-		var q = quest_list[quest_index]
-		if q.get("req_type") == "building" and q.get("building_type") == btype:
-			_advance_quest()
-
-	if btype == "miner":
-		unlock_tool("belt")
-		unlock_tool("smelter")
-		unlock_tool("solar")
-		if story_phase == StoryPhase.BUILD_MINER:
-			set_story_phase(StoryPhase.FACTORY)
-	elif btype == "smelter":
-		unlock_tool("assembler")
-		unlock_tool("depot")
-		if story_phase == StoryPhase.FACTORY:
-			set_story_phase(StoryPhase.SPACE)
-	elif btype == "assembler":
-		unlock_tool("mass_driver")
-	elif (btype == "belt") and story_phase == StoryPhase.FACTORY:
-		set_story_phase(StoryPhase.SPACE)
-
-# メガストラクチャー建造開始
-func start_megastructure(proj_id: String) -> bool:
-	if not megastructures.has(proj_id):
-		return false
-	var proj = megastructures[proj_id]
-	if proj["built"]:
-		add_log("MEGASTRUCTURE ALREADY OPERATIONAL!")
-		return false
-	
-	var can_afford = true
-	for res_k in proj["cost"].keys():
-		var need = proj["cost"][res_k]
-		if resources.has(res_k) and resources[res_k] < need:
-			can_afford = false
-			break
-		if items.has(res_k) and items[res_k] < need:
-			can_afford = false
-			break
-			
-	if can_afford:
-		for res_k in proj["cost"].keys():
-			var need = proj["cost"][res_k]
-			if resources.has(res_k):
-				consume_resource(res_k, need)
-			elif items.has(res_k):
-				consume_item(res_k, need)
-		active_megastructure_project = proj_id
-		add_log("MEGASTRUCTURE PROJECT LAUNCHED: [%s]" % proj["name"])
-		_check_quest_progress()
-		return true
+func get_drone_craft_cost() -> Dictionary:
+	# Progressive affordable scaling: first drone = 10 Fe!
+	if drones == 0:
+		return {"fe": 10}
+	elif drones == 1:
+		return {"fe": 18, "cu": 6}
+	elif drones == 2:
+		return {"fe": 26, "cu": 12, "si": 6}
 	else:
-		add_log("INSUFFICIENT RESOURCES FOR MEGASTRUCTURE!")
+		var scale = drones
+		return {
+			"fe": 16 + scale * 10,
+			"cu": 8 + scale * 6,
+			"si": 4 + scale * 4,
+		}
+
+func can_afford(cost: Dictionary) -> bool:
+	for k in cost.keys():
+		if get_res(k) < int(cost[k]):
+			return false
+	return true
+
+func get_missing_text(cost: Dictionary) -> String:
+	var parts: PackedStringArray = []
+	for k in cost.keys():
+		var req = int(cost[k])
+		var have = get_res(k)
+		if have < req:
+			parts.append("%s -%d" % [k.to_upper(), req - have])
+	return "NEED " + ", ".join(parts)
+
+func spend_cost(cost: Dictionary) -> bool:
+	if not can_afford(cost):
 		return false
+	for k in cost.keys():
+		add_res(k, -int(cost[k]))
+	emit_signal("inventory_changed")
+	return true
 
-# 敵コアへのダメージ
-func damage_hostile_core(amount: float) -> void:
-	hostile_core_health = maxf(0.0, hostile_core_health - amount)
-	enemy_damaged.emit(hostile_core_health, hostile_core_max_health)
-	liberation_progress = (1.0 - (hostile_core_health / hostile_core_max_health)) * 100.0
-	
-	if hostile_core_health <= 0.0 and liberation_progress >= 99.9:
-		galaxy_liberated.emit()
-		add_log("************************************************")
-		add_log("VICTORY! CORRUPTED CORE ANNIHILATED!")
-		add_log("STAR SYSTEM LIBERATED: 10,000 SWARM TRIUMPHANT!")
-		add_log("************************************************")
-		_check_quest_progress()
+func get_res(key: String) -> int:
+	match key:
+		"fe": return fe
+		"cu": return cu
+		"si": return si
+		"ti": return ti
+		"he3": return he3
+		"plate_fe": return plate_fe
+		"wire_cu": return wire_cu
+		"wafer_si": return wafer_si
+		"circuit": return circuit
+		"alloy": return alloy
+		"probe_stock": return probe_stock
+	return 0
 
-func _check_quest_progress() -> void:
-	if quest_index >= quest_list.size():
-		return
-	var q = quest_list[quest_index]
-	match q.get("req_type"):
-		"resource":
-			var r_key = q.get("target_res", "Fe")
-			if resources.get(r_key, 0) >= q.get("target_val", 0):
-				_advance_quest()
-		"drone":
-			if attached_drones >= q.get("target_val", 0):
-				_advance_quest()
-		"fleet":
-			if fleet_count >= q.get("target_val", 0):
-				_advance_quest()
-		"celestial_any":
-			if resources.get("Plasma", 0) >= q.get("target_val", 0) or resources.get("Ice", 0) >= q.get("target_val", 0):
-				_advance_quest()
-		"megastructure":
-			if active_megastructure_project != "" or megastructures["elevator"]["progress"] > 0.0:
-				_advance_quest()
-		"liberation":
-			if liberation_progress >= 99.9:
-				_advance_quest()
+func add_res(key: String, amount: int, track_mining_popup: bool = false) -> void:
+	match key:
+		"fe": fe = maxi(0, fe + amount)
+		"cu": cu = maxi(0, cu + amount)
+		"si": si = maxi(0, si + amount)
+		"ti": ti = maxi(0, ti + amount)
+		"he3": he3 = maxi(0, he3 + amount)
+		"plate_fe": plate_fe = maxi(0, plate_fe + amount)
+		"wire_cu": wire_cu = maxi(0, wire_cu + amount)
+		"wafer_si": wafer_si = maxi(0, wafer_si + amount)
+		"circuit": circuit = maxi(0, circuit + amount)
+		"alloy": alloy = maxi(0, alloy + amount)
+		"probe_stock": probe_stock = maxi(0, probe_stock + amount)
+	if track_mining_popup and amount > 0:
+		if recent_ore_type == key or recent_ore_timer <= 0.0:
+			recent_ore_type = key
+			recent_ore_amount += amount
+		else:
+			recent_ore_type = key
+			recent_ore_amount = amount
+		recent_ore_timer = 1.8
+	emit_signal("inventory_changed")
 
-func _advance_quest() -> void:
-	var q = quest_list[quest_index]
-	quest_completed.emit(quest_index, q)
-	var r_text = q.get("reward_text", q.get("short", "NEXT"))
-	add_log(">>> MISSION COMPLETE: [%s]! REWARD: %s <<<" % [q["title"], r_text])
-	quest_index += 1
-	if quest_index < quest_list.size():
-		quest_updated.emit(quest_index, quest_list[quest_index])
+func try_craft_drone() -> bool:
+	if drones >= max_drones:
+		emit_signal("log_event", "Max fabricator drones docked (%d)" % max_drones, "warn")
+		return false
+	var cost = get_drone_craft_cost()
+	if not spend_cost(cost):
+		emit_signal("log_event", get_missing_text(cost), "error")
+		return false
+	drones += 1
+	emit_signal("drone_count_changed", drones)
+	emit_signal("state_updated")
+	emit_signal("log_event", "Docked Fabricator Drone #%d! Beams & Tier unlocked." % drones, "good")
+	return true
+
+func get_current_phase() -> int:
+	if fleet_count >= 500 or megastructures["warpgate"]:
+		return 4
+	if fleet_count >= 1 or total_launches >= 1:
+		return 3
+	if drones >= 1:
+		return 2
+	return 1
+
+func set_tool(tool_id: String) -> void:
+	selected_tool = tool_id
+	emit_signal("blueprint_selected", tool_id)
+	emit_signal("state_updated")
+
+func set_doctrine(doc: int) -> void:
+	current_doctrine = doc
+	var names = ["HARVEST", "REPLICATE", "DEFEND", "ASSAULT"]
+	emit_signal("log_event", "Swarm Doctrine -> %s" % names[clampi(doc, 0, 3)], "info")
+	emit_signal("state_updated")
+
+func add_fleet_units(count: int) -> void:
+	fleet_count = mini(max_fleet, fleet_count + count)
+	emit_signal("state_updated")
+
+func to_dict() -> Dictionary:
+	return {
+		"fe": fe, "cu": cu, "si": si, "ti": ti, "he3": he3,
+		"plate_fe": plate_fe, "wire_cu": wire_cu, "wafer_si": wafer_si,
+		"circuit": circuit, "alloy": alloy, "probe_stock": probe_stock,
+		"drones": drones, "fleet_count": fleet_count,
+		"total_launches": total_launches, "hostiles_defeated": hostiles_defeated,
+		"boss_hp": boss_hp, "boss_defeated": boss_defeated,
+		"current_doctrine": current_doctrine,
+		"megastructures": megastructures.duplicate(),
+	}
+
+func from_dict(d: Dictionary) -> void:
+	fe = int(d.get("fe", 0))
+	cu = int(d.get("cu", 0))
+	si = int(d.get("si", 0))
+	ti = int(d.get("ti", 0))
+	he3 = int(d.get("he3", 0))
+	plate_fe = int(d.get("plate_fe", 0))
+	wire_cu = int(d.get("wire_cu", 0))
+	wafer_si = int(d.get("wafer_si", 0))
+	circuit = int(d.get("circuit", 0))
+	alloy = int(d.get("alloy", 0))
+	probe_stock = int(d.get("probe_stock", 0))
+	drones = int(d.get("drones", 0))
+	fleet_count = int(d.get("fleet_count", 0))
+	total_launches = int(d.get("total_launches", 0))
+	hostiles_defeated = int(d.get("hostiles_defeated", 0))
+	boss_hp = float(d.get("boss_hp", boss_max_hp))
+	boss_defeated = bool(d.get("boss_defeated", false))
+	current_doctrine = int(d.get("current_doctrine", Doctrine.HARVEST))
+	var ms = d.get("megastructures", {})
+	if ms is Dictionary:
+		for k in megastructures.keys():
+			megastructures[k] = bool(ms.get(k, false))
+	emit_signal("inventory_changed")
+	emit_signal("state_updated")

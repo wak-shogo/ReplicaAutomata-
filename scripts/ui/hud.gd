@@ -1,2065 +1,740 @@
 extends CanvasLayer
+class_name GameHUD
 
-# STAR REPLICA: AUTOMA - ミニマリスト＆ノンバーバル (文字を使わない) 洗練Sci-Fi UI
-# コントローラー/1タップ操作対応 ＆ アイコンピクトグラム駆動 ＆ プログレッシブ・ディスクロージャー
+# ==============================================================================
+# STAR REPLICA: AUTOMA - PIXEL-CYBER TACTICAL HUD
+# Modeled cleanly on target_gameplay_concept.jpeg with responsive desktop/mobile
+# layout, opaque scrollable Tech Tree Catalog, and zero missing font glyphs.
+# ==============================================================================
 
-# 上部レスポンシブバー＆資源バッジコンテナ
-var top_bar_node: MarginContainer
-var res_badge_containers: Dictionary = {}
+signal orbit_cam_toggled
+signal save_requested
+signal reset_requested
+signal brake_requested
 
-# 左上ミニマルステータス
-var fe_label: Label
-var cu_label: Label
-var ti_label: Label
-var si_label: Label
-var he3_label: Label
-var plasma_label: Label
-var ice_label: Label
-var dm_label: Label
-var nt_label: Label
-var hp_bar: ProgressBar
-var shield_bar: ProgressBar
-var power_bar: ProgressBar
-var fleet_bar: ProgressBar
-var fleet_lbl: Label
-var stat_row_node: HBoxContainer
-var right_top_buttons: HBoxContainer
+var top_left_panel: PanelContainer
+var top_right_flow: HFlowContainer
+var bottom_bar: PanelContainer
+var telemetry_panel: PanelContainer
+var tech_modal: PanelContainer
+var touch_overlay: Control
 
-# 画面左側ズームクラスタ
-var zoom_cluster_node: VBoxContainer
+# Live Label / Control references
+var res_labels: Dictionary = {}
+var lbl_fleet: Label
+var lbl_drones: Label
+var btn_craft_drone: Button
+var lbl_power: Label
+var printer_bar: ProgressBar
+var lbl_printer: Label
+var doctrine_btns: Dictionary = {}
 
-# 下部ツールセレクター
-var tool_bar: HBoxContainer
-var tool_buttons: Dictionary = {}
-var build_mode_indicator: Control
-var build_guide_label: Label
-var last_synced_tool: String = "none"
-var mega_btn_node: Button
+var active_category: String = "MINE"
+var cat_btns: Dictionary = {}
+var hotbar_container: HBoxContainer
+var tech_list_vbox: VBoxContainer
+var tech_summary_lbl: Label
 
-# 警報アイコン
-var alert_rect: TextureRect
-var alert_timer: float = 0.0
+var lbl_zone: Label
+var lbl_speed: Label
+var log_vbox: VBoxContainer
+var log_entries: Array[Dictionary] = []
 
-# 目標・導線 (Mission Objective Flow)
-var objective_panel: PanelContainer
-var objective_label: Label
-var objective_anim_timer: float = 0.0
+var btn_orbit_cam: Button
+var btn_mute: Button
+var btn_pad: Button
+var orbit_cam_active: bool = false
+var force_touch_pad: bool = false
 
-# 素材不足アラート
-var missing_panel: PanelContainer
-var missing_label: Label
-var missing_timer: float = 0.0
+var player_ref: Node2D
+var touch_move_vec: Vector2 = Vector2.ZERO
+var touch_mining: bool = false
+var icons: Dictionary = {}
 
-# 画面外天体ナビ・ロックオン描画オーバーレイ
-var nav_overlay: Control
-var hud_anim_time: float = 0.0
-
-# メガストラクチャー・ミニマルパレット
-var mega_panel: Panel
-var is_mega_open: bool = false
-
-var grid_manager: Node2D = null
-var main_node: Node2D = null
-var player_node: CharacterBody2D = null
-
-# スマホ・タッチ操作盤 (Virtual Controls)
-var vstick_base: Control
-var vstick_active: bool = false
-var vstick_touch_id: int = -1
-var vstick_knob_pos: Vector2 = Vector2.ZERO
-
-var action_cluster_node: Control
-var btn_touch_mine: Button
-var btn_touch_brake: Button
-var btn_touch_build: Button
-var btn_touch_drone: Button
-
-var btn_doctrine_cluster: Array[Button] = []
-var btn_cam_cluster: Array[Button] = []
-var btn_sys_cluster: Array[Button] = []
-var btn_touch_map: Button
-var build_bar_panel: PanelContainer
-
-# 休眠探査機・起動ガイダンスオーバーレイ (DORMANT STATE)
-var boot_guide_overlay: Control
-var boot_prompt_lbl: Label
-
-# 歴史的マイルストーン達成バナー (Era Progression Banner)
-var milestone_panel: PanelContainer
-var milestone_title_lbl: Label
-var milestone_sub_lbl: Label
-
-# 専用大型技術ツリー・設備建造カタログ画面 (Structure Architect Modal)
-var tech_tree_modal: Panel = null
-var tech_tree_cards: Array[Dictionary] = []
-var build_cancel_btn: Button = null
-
-# ドローン自己複製アチーブメントバナー
-var drone_repl_banner: PanelContainer = null
-var drone_repl_lbl: Label = null
-var drone_repl_timer: float = 0.0
-var prev_fleet_count: int = 0
+const COL_BG = Color(0.045, 0.068, 0.115, 0.92)
+const COL_BORDER = Color(0.18, 0.42, 0.65, 0.95)
+const COL_ACTIVE = Color(0.22, 0.88, 1.0, 1.0)
 
 func _ready() -> void:
-	main_node = get_parent()
-	grid_manager = get_parent().get_node_or_null("GridManager")
-	player_node = get_parent().get_node_or_null("Player")
-	
-	build_minimal_ui()
-	
-	GameState.story_phase_changed.connect(_on_story_phase_changed)
-	GameState.resource_changed.connect(_on_resource_changed)
-	GameState.fleet_changed.connect(_on_fleet_changed)
-	GameState.player_health_changed.connect(_on_player_health_changed)
-	GameState.raid_alert.connect(_on_raid_alert)
-	GameState.quest_updated.connect(_on_quest_updated)
-	GameState.quest_completed.connect(_on_quest_completed)
-	GameState.tool_unlocked.connect(_on_tool_unlocked)
-	GameState.enemy_damaged.connect(_on_enemy_damaged)
-	
-	get_tree().root.size_changed.connect(_adjust_responsive_layout)
-	_adjust_responsive_layout()
-	
-	_update_progressive_ui(GameState.story_phase)
-	_update_objective_text()
+	_load_icons()
+	_build_ui()
+	_connect_signals()
+	get_viewport().size_changed.connect(_on_viewport_resized)
+	_on_viewport_resized()
+	refresh_all()
 
-func _on_story_phase_changed(new_phase: int) -> void:
-	_update_progressive_ui(new_phase)
-	_update_objective_text()
-	
-	var era_names = {
-		GameState.StoryPhase.MOVE: "[ ERA 01: AWAKENING - PROBE REBOOTED ]",
-		GameState.StoryPhase.MINE: "[ ERA 02: PROSPECTOR - ORE VEIN LOCATED ]",
-		GameState.StoryPhase.DRONE: "[ ERA 03: SELF-REPLICATION - FIRST SUB-UNIT ]",
-		GameState.StoryPhase.BUILD_MINER: "[ ERA 04: AUTOMATION - EXTRACTION DRILL ]",
-		GameState.StoryPhase.FACTORY: "[ ERA 05: INDUSTRIAL DAWN - LOGISTICS PIPELINE ]",
-		GameState.StoryPhase.SPACE: "[ ERA 06: STELLAR VOYAGE - REACH FOR THE STARS ]"
+func setup(p_player: Node2D) -> void:
+	player_ref = p_player
+
+func _load_icons() -> void:
+	var paths = {
+		"fe": "res://assets/ui/fe.png",
+		"cu": "res://assets/ui/cu.png",
+		"si": "res://assets/ui/si.png",
+		"ti": "res://assets/ui/ti.png",
+		"plate_fe": "res://assets/ui/item_plate_fe.png",
+		"circuit": "res://assets/ui/item_circuit.png",
+		"probe_stock": "res://assets/ui/item_drone_unit.png",
+		"energy": "res://assets/ui/energy.png",
+		"pick": "res://assets/ui/tool_pick.png",
+		"demolish": "res://assets/ui/tool_demolish.png",
 	}
-	if era_names.has(new_phase):
-		_trigger_milestone_banner(era_names[new_phase])
+	for k in paths.keys():
+		if ResourceLoader.exists(paths[k]):
+			icons[k] = load(paths[k])
+	for bid in GameState.BUILDINGS.keys():
+		var ip = GameState.BUILDINGS[bid].get("icon", "")
+		if ip != "" and ResourceLoader.exists(ip):
+			icons[bid] = load(ip)
 
-func _trigger_milestone_banner(era_text: String) -> void:
-	if not milestone_panel or not milestone_sub_lbl: return
-	milestone_sub_lbl.text = era_text
-	milestone_panel.visible = true
-	milestone_panel.modulate.a = 0.0
-	milestone_panel.scale = Vector2(0.85, 0.85)
-	milestone_panel.pivot_offset = milestone_panel.size * 0.5
-	
-	AudioSynth.play_synth("victory")
-	
-	var tw = create_tween().set_parallel(true)
-	tw.tween_property(milestone_panel, "modulate:a", 1.0, 0.3)
-	tw.tween_property(milestone_panel, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	
-	get_tree().create_timer(2.6).timeout.connect(func():
-		if milestone_panel and is_inside_tree():
-			var tw_out = create_tween()
-			tw_out.tween_property(milestone_panel, "modulate:a", 0.0, 0.4)
-			tw_out.finished.connect(func():
-				if milestone_panel: milestone_panel.visible = false
-			)
+func _make_panel_style(bg: Color = COL_BG, border: Color = COL_BORDER, bwidth: int = 1, radius: int = 4) -> StyleBoxFlat:
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(bwidth)
+	sb.set_corner_radius_all(radius)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	return sb
+
+func _make_btn_style(bg: Color, border: Color) -> StyleBoxFlat:
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 7
+	sb.content_margin_right = 7
+	sb.content_margin_top = 4
+	sb.content_margin_bottom = 4
+	return sb
+
+func _style_button(btn: Button, accent: Color = COL_BORDER) -> void:
+	btn.add_theme_stylebox_override("normal", _make_btn_style(Color(0.08, 0.12, 0.20, 0.94), accent))
+	btn.add_theme_stylebox_override("hover", _make_btn_style(Color(0.13, 0.22, 0.34, 0.98), COL_ACTIVE))
+	btn.add_theme_stylebox_override("pressed", _make_btn_style(Color(0.18, 0.36, 0.52, 1.0), COL_ACTIVE))
+	btn.add_theme_font_size_override("font_size", 11)
+	btn.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+
+func _build_ui() -> void:
+	# 1. TOP-LEFT TACTICAL STATUS PANEL
+	top_left_panel = PanelContainer.new()
+	top_left_panel.position = Vector2(10, 10)
+	top_left_panel.add_theme_stylebox_override("panel", _make_panel_style())
+	add_child(top_left_panel)
+
+	var tl_vbox = VBoxContainer.new()
+	tl_vbox.add_theme_constant_override("separation", 4)
+	top_left_panel.add_child(tl_vbox)
+
+	# Row 1: Pixel-Icon Resource Strip
+	var res_flow = HFlowContainer.new()
+	res_flow.add_theme_constant_override("h_separation", 8)
+	res_flow.add_theme_constant_override("v_separation", 2)
+	tl_vbox.add_child(res_flow)
+
+	for rk in ["fe", "cu", "si", "ti", "plate_fe", "circuit", "probe_stock"]:
+		var item_box = HBoxContainer.new()
+		item_box.add_theme_constant_override("separation", 3)
+		var tex = TextureRect.new()
+		tex.custom_minimum_size = Vector2(16, 16)
+		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		tex.texture = icons.get(rk, null)
+		var lbl = Label.new()
+		lbl.add_theme_font_size_override("font_size", 12)
+		lbl.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+		lbl.text = "0"
+		item_box.add_child(tex)
+		item_box.add_child(lbl)
+		res_flow.add_child(item_box)
+		res_labels[rk] = lbl
+
+	# Row 2: Drones, Craft Drone Button, Fleet & Power
+	var mid_hbox = HFlowContainer.new()
+	mid_hbox.add_theme_constant_override("h_separation", 8)
+	mid_hbox.add_theme_constant_override("v_separation", 3)
+	tl_vbox.add_child(mid_hbox)
+
+	lbl_drones = Label.new()
+	lbl_drones.add_theme_font_size_override("font_size", 12)
+	lbl_drones.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	mid_hbox.add_child(lbl_drones)
+
+	btn_craft_drone = Button.new()
+	_style_button(btn_craft_drone, Color(0.25, 0.85, 0.65))
+	btn_craft_drone.pressed.connect(func():
+		if GameState.try_craft_drone():
+			AudioSynth.play_synth("craft")
+		else:
+			AudioSynth.play_synth("error")
+		refresh_all()
 	)
+	mid_hbox.add_child(btn_craft_drone)
 
-var boss_victory_announced: bool = false
-func _on_enemy_damaged(curr_hp: float, _max_hp: float) -> void:
-	if curr_hp <= 0.0 and not boss_victory_announced:
-		boss_victory_announced = true
-		_trigger_milestone_banner("[*] GALAXY LIBERATED: REPLICA SWARM COMPLETE! [*]")
+	lbl_fleet = Label.new()
+	lbl_fleet.add_theme_font_size_override("font_size", 12)
+	lbl_fleet.add_theme_color_override("font_color", Color(0.35, 0.95, 1.0))
+	mid_hbox.add_child(lbl_fleet)
 
-func _process(delta: float) -> void:
-	hud_anim_time += delta
-	_update_tool_badges()
-	_update_objective_text()
-	
-	if nav_overlay and nav_overlay.visible:
-		nav_overlay.queue_redraw()
-		
-	if missing_timer > 0.0:
-		missing_timer -= delta
-		if missing_panel:
-			missing_panel.visible = (missing_timer > 0.0)
+	lbl_power = Label.new()
+	lbl_power.add_theme_font_size_override("font_size", 12)
+	lbl_power.add_theme_color_override("font_color", Color(0.55, 1.0, 0.65))
+	mid_hbox.add_child(lbl_power)
 
-	if drone_repl_timer > 0.0:
-		drone_repl_timer -= delta
-		if drone_repl_banner:
-			drone_repl_banner.visible = (drone_repl_timer > 0.0)
+	# Row 3: Macro Replicator Progress + Doctrine Switcher
+	var bot_row = HFlowContainer.new()
+	bot_row.add_theme_constant_override("h_separation", 6)
+	bot_row.add_theme_constant_override("v_separation", 3)
+	tl_vbox.add_child(bot_row)
 
-	if grid_manager:
-		var cur_tool = grid_manager.selected_tool
-		if cur_tool != last_synced_tool:
-			last_synced_tool = cur_tool
-			_sync_tool_highlights()
-			_update_build_mode_visuals()
+	lbl_printer = Label.new()
+	lbl_printer.add_theme_font_size_override("font_size", 11)
+	lbl_printer.add_theme_color_override("font_color", Color(0.75, 0.86, 0.96))
+	lbl_printer.text = "PRINTER: IDLE"
+	bot_row.add_child(lbl_printer)
 
-	if power_bar and power_bar.is_visible_in_tree():
-		power_bar.value = GameState.power_ratio * 100.0
-		
-	if alert_timer > 0.0:
-		alert_timer -= delta
-		if alert_rect:
-			alert_rect.visible = (int(alert_timer * 6.0) % 2 == 0)
-			if alert_timer <= 0.0: alert_rect.visible = false
+	printer_bar = ProgressBar.new()
+	printer_bar.custom_minimum_size = Vector2(96, 14)
+	printer_bar.max_value = 100.0
+	printer_bar.show_percentage = false
+	var pb_bg = StyleBoxFlat.new()
+	pb_bg.bg_color = Color(0.08, 0.11, 0.18, 1.0)
+	pb_bg.set_corner_radius_all(3)
+	var pb_fill = StyleBoxFlat.new()
+	pb_fill.bg_color = Color(0.18, 0.85, 1.0, 1.0)
+	pb_fill.set_corner_radius_all(3)
+	printer_bar.add_theme_stylebox_override("background", pb_bg)
+	printer_bar.add_theme_stylebox_override("fill", pb_fill)
+	bot_row.add_child(printer_bar)
 
-	# ドローン合体可能時のパルス発光 (DRONEボタン)
-	if btn_touch_drone and btn_touch_drone.visible:
-		var can_attach = false
-		if GameState.attached_drones == 0:
-			can_attach = GameState.resources.get("Fe", 0) >= 40
-		else:
-			can_attach = GameState.resources.get("Fe", 0) >= 30 and GameState.resources.get("Si", 0) >= 15
-			
-		if can_attach and GameState.attached_drones < GameState.max_attached_drones:
-			var pulse = (sin(hud_anim_time * 8.0) * 0.5 + 0.5)
-			btn_touch_drone.modulate = Color(1.0 + pulse * 1.5, 2.0 + pulse * 1.5, 1.5 + pulse * 1.5)
-		else:
-			btn_touch_drone.modulate = Color.WHITE
+	var docs = [
+		[GameState.Doctrine.HARVEST, "HARVEST"],
+		[GameState.Doctrine.REPLICATE, "REPLICATE"],
+		[GameState.Doctrine.DEFEND, "DEFEND"],
+		[GameState.Doctrine.ASSAULT, "ASSAULT"],
+	]
+	for d in docs:
+		var db = Button.new()
+		db.text = d[1]
+		_style_button(db)
+		var d_id: int = d[0]
+		db.pressed.connect(func():
+			GameState.set_doctrine(d_id)
+			AudioSynth.play_synth("select")
+			refresh_all()
+		)
+		bot_row.add_child(db)
+		doctrine_btns[d_id] = db
 
-	# 採掘機建造フェーズでのBUILDボタンパルス発光
-	if btn_touch_build and btn_touch_build.visible:
-		if GameState.story_phase == GameState.StoryPhase.BUILD_MINER and not (grid_manager and grid_manager.is_build_mode):
-			var bld_pulse = (sin(hud_anim_time * 8.0) * 0.5 + 0.5)
-			btn_touch_build.modulate = Color(1.0 + bld_pulse * 1.5, 2.0 + bld_pulse * 1.5, 2.5 + bld_pulse * 1.5)
-		else:
-			btn_touch_build.modulate = Color.WHITE
+	# 2. TOP-RIGHT COMPACT UTILITY BUTTONS
+	top_right_flow = HFlowContainer.new()
+	top_right_flow.alignment = FlowContainer.ALIGNMENT_END
+	top_right_flow.add_theme_constant_override("h_separation", 5)
+	top_right_flow.add_theme_constant_override("v_separation", 4)
+	add_child(top_right_flow)
 
-	# 休眠探査機ガイダンスのパルス点滅
-	if boot_guide_overlay and boot_guide_overlay.visible and boot_prompt_lbl:
-		var b_pulse = (sin(hud_anim_time * 5.0) * 0.5 + 0.5)
-		boot_prompt_lbl.modulate = Color(1.0, 1.0, 1.0, 0.4 + b_pulse * 0.6)
+	var btn_tech = Button.new()
+	btn_tech.text = "TECH / BUILD [B]"
+	_style_button(btn_tech, COL_ACTIVE)
+	btn_tech.pressed.connect(toggle_tech_modal)
+	top_right_flow.add_child(btn_tech)
 
-func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed:
-		# Tab / B: 設備カタログ画面切替 (全画面技術ツリー)
-		if event.keycode == KEY_TAB or event.keycode == KEY_B:
-			toggle_build_mode()
-		elif event.keycode == KEY_ESCAPE:
-			if tech_tree_modal and tech_tree_modal.visible:
-				tech_tree_modal.visible = false
-				AudioSynth.play_synth("click")
-			elif grid_manager and grid_manager.selected_tool != "none":
-				grid_manager.select_tool("none")
-				_update_build_mode_visuals()
-				AudioSynth.play_synth("click")
-		elif event.keycode == KEY_1: _select_tool_by_id("miner")
-		elif event.keycode == KEY_2: _select_tool_by_id("belt")
-		elif event.keycode == KEY_3: _select_tool_by_id("smelter")
-		elif event.keycode == KEY_4: _select_tool_by_id("assembler")
-		elif event.keycode == KEY_5: _select_tool_by_id("mass_driver")
-		elif event.keycode == KEY_6: _select_tool_by_id("depot")
-		elif event.keycode == KEY_7: _select_tool_by_id("turret")
-		elif event.keycode == KEY_8: _select_tool_by_id("solar")
-		elif event.keycode == KEY_9: _select_tool_by_id("geothermal")
-		elif event.keycode == KEY_0: _select_tool_by_id("demolish")
+	btn_orbit_cam = Button.new()
+	btn_orbit_cam.text = "ORBIT VIEW [M]"
+	_style_button(btn_orbit_cam)
+	btn_orbit_cam.pressed.connect(func():
+		orbit_cam_active = not orbit_cam_active
+		emit_signal("orbit_cam_toggled")
+		AudioSynth.play_synth("select")
+		refresh_all()
+	)
+	top_right_flow.add_child(btn_orbit_cam)
 
-func toggle_build_mode() -> void:
-	if not grid_manager: return
-	if tech_tree_modal and tech_tree_modal.visible:
-		tech_tree_modal.visible = false
-		if objective_label: objective_label.visible = true
+	var btn_rot = Button.new()
+	btn_rot.text = "FLIP [R]"
+	_style_button(btn_rot)
+	btn_rot.pressed.connect(func():
+		GameState.build_rotation = (GameState.build_rotation + 2) % 4
 		AudioSynth.play_synth("click")
-		return
-	open_tech_tree_modal()
+		add_log("Belt Direction Flipped", "info")
+	)
+	top_right_flow.add_child(btn_rot)
 
-func open_tech_tree_modal() -> void:
-	if not tech_tree_modal: return
-	var vp = get_viewport()
-	var vp_size = vp.get_visible_rect().size if vp else Vector2(1280, 720)
-	var is_portrait = (vp_size.x < vp_size.y or vp_size.x < 720.0)
-	
-	if is_portrait:
-		tech_tree_modal.anchor_left = 0.02
-		tech_tree_modal.anchor_right = 0.98
-		tech_tree_modal.anchor_top = 0.02
-		tech_tree_modal.anchor_bottom = 0.96
-	else:
-		tech_tree_modal.anchor_left = 0.06
-		tech_tree_modal.anchor_right = 0.94
-		tech_tree_modal.anchor_top = 0.04
-		tech_tree_modal.anchor_bottom = 0.94
-	tech_tree_modal.offset_left = 0
-	tech_tree_modal.offset_top = 0
-	tech_tree_modal.offset_right = 0
-	tech_tree_modal.offset_bottom = 0
-	
-	var grid = tech_tree_modal.find_child("TechTreeGrid", true, false)
-	if grid:
-		grid.columns = 1 if is_portrait else 2
-		
-	# 所持資源ラベルの更新
-	var res_box = tech_tree_modal.find_child("TechTreeResBar", true, false)
-	if res_box:
-		var res_types = ["Fe", "Cu", "Ti", "Si"]
-		for rk in res_types:
-			var lbl = res_box.find_child("ResLbl_" + rk, true, false)
-			if lbl:
-				lbl.text = "%s: %d" % [rk, GameState.resources.get(rk, 0)]
-	_update_tech_tree_cards_affordability()
-	if objective_label: objective_label.visible = false
-	tech_tree_modal.visible = true
-	AudioSynth.play_synth("click")
-
-func _update_tech_tree_cards_affordability() -> void:
-	if not grid_manager: return
-	var costs_dict = grid_manager.BUILD_COSTS
-	for c_info in tech_tree_cards:
-		var tid = c_info["id"]
-		var btn: Button = c_info["btn"]
-		var status_lbl: Label = c_info["status_lbl"]
-		var sb_n: StyleBoxFlat = c_info["sb_n"]
-		
-		if tid == "demolish":
-			status_lbl.text = "[OK] READY TO USE"
-			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.2, 1.2))
-			sb_n.border_color = Color(0.0, 1.5, 2.0, 0.6)
-			continue
-			
-		var reqs: Dictionary = costs_dict.get(tid, {})
-		var can_afford = true
-		var missing_list: Array[String] = []
-		for r_k in reqs:
-			var need = reqs[r_k]
-			var have = GameState.resources.get(r_k, 0)
-			if have < need:
-				can_afford = false
-				missing_list.append("%s (-%d)" % [r_k, need - have])
-				
-		if can_afford:
-			status_lbl.text = "[OK] READY TO CONSTRUCT"
-			status_lbl.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
-			sb_n.border_color = Color(0.0, 2.2, 2.8, 0.8)
-			sb_n.bg_color = Color(0.04, 0.10, 0.18, 0.92)
-		else:
-			status_lbl.text = "[!] NEED: " + " / ".join(missing_list)
-			status_lbl.add_theme_color_override("font_color", Color(2.5, 0.4, 0.4))
-			sb_n.border_color = Color(0.6, 0.2, 0.2, 0.5)
-			sb_n.bg_color = Color(0.06, 0.04, 0.05, 0.88)
-
-func _on_tech_tree_item_selected(tool_id: String) -> void:
-	AudioSynth.play_synth("select")
-	if tech_tree_modal:
-		tech_tree_modal.visible = false
-		if objective_label: objective_label.visible = true
-		if grid_manager:
-			grid_manager.select_tool(tool_id)
-		grid_manager._update_available_ghost_slots()
-		_update_build_mode_visuals()
-	GameState.add_log("BLUEPRINT PROJECTED: [%s] -> TAP ANY BLUE GHOST TO CONSTRUCT" % tool_id.to_upper())
-
-func _update_build_mode_visuals() -> void:
-	if not grid_manager: return
-	var is_bm = grid_manager.is_build_mode and grid_manager.selected_tool != "none"
-	if build_bar_panel:
-		build_bar_panel.visible = is_bm
-	if build_mode_indicator:
-		build_mode_indicator.modulate = Color(0.0, 2.5, 3.0) if is_bm else Color(0.4, 0.4, 0.4, 0.5)
-	if build_guide_label:
-		build_guide_label.visible = is_bm
-		if is_bm:
-			var tname = grid_manager.selected_tool.to_upper()
-			build_guide_label.text = "[ [BUILD] SELECTED: %s | TAP BLUE GHOST TO CONSTRUCT ]" % tname
-	if build_cancel_btn:
-		build_cancel_btn.visible = is_bm
-
-func build_minimal_ui() -> void:
-	# 共通透明Sci-Fiスタイル
-	var sb_slot = StyleBoxFlat.new()
-	sb_slot.bg_color = Color(0.05, 0.08, 0.14, 0.85)
-	sb_slot.border_color = Color(0.0, 0.85, 1.0, 0.5)
-	sb_slot.set_border_width_all(1)
-	sb_slot.set_corner_radius_all(4)
-
-	# ========================================================
-	# 0. 全画面ナビゲーション・ロックオン描画オーバーレイ
-	# ========================================================
-	nav_overlay = Control.new()
-	nav_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	nav_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	nav_overlay.draw.connect(_on_nav_overlay_draw)
-	add_child(nav_overlay)
-
-	# ========================================================
-	# 1. 上部レスポンシブバー (PRESET_TOP_WIDE)
-	# ========================================================
-	var top_bar = MarginContainer.new()
-	top_bar_node = top_bar
-	top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	top_bar.anchor_left = 0.0
-	top_bar.anchor_right = 1.0
-	top_bar.anchor_top = 0.0
-	top_bar.anchor_bottom = 0.0
-	top_bar.offset_left = 12.0
-	top_bar.offset_top = 10.0
-	top_bar.offset_right = -12.0
-	top_bar.offset_bottom = 110.0
-	add_child(top_bar)
-
-	var top_vbox = VBoxContainer.new()
-	top_vbox.add_theme_constant_override("separation", 4)
-	top_bar.add_child(top_vbox)
-
-	# 1行目: 資源バッジ一覧 (9種を中央揃え)
-	var res_hbox = HBoxContainer.new()
-	res_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	res_hbox.add_theme_constant_override("separation", 6)
-	top_vbox.add_child(res_hbox)
-
-	fe_label = create_res_badge(res_hbox, "res://assets/ui/fe.png", str(GameState.resources["Fe"]), Color(0.3, 0.85, 1.0), "Fe")
-	cu_label = create_res_badge(res_hbox, "res://assets/ui/cu.png", str(GameState.resources["Cu"]), Color(1.0, 0.65, 0.2), "Cu")
-	ti_label = create_res_badge(res_hbox, "res://assets/ui/ti.png", str(GameState.resources["Ti"]), Color(0.85, 0.45, 1.0), "Ti")
-	si_label = create_res_badge(res_hbox, "res://assets/ui/si.png", str(GameState.resources["Si"]), Color(0.2, 1.0, 0.7), "Si")
-	he3_label = create_res_badge(res_hbox, "res://assets/ui/res_he3.png", str(GameState.resources.get("He3", 0)), Color(0.2, 0.9, 1.0), "He3")
-	plasma_label = create_res_badge(res_hbox, "res://assets/ui/res_plasma.png", str(GameState.resources.get("Plasma", 0)), Color(1.0, 0.75, 0.2), "Plasma")
-	ice_label = create_res_badge(res_hbox, "res://assets/ui/res_ice.png", str(GameState.resources.get("Ice", 0)), Color(0.4, 0.9, 1.0), "Ice")
-	dm_label = create_res_badge(res_hbox, "res://assets/ui/res_darkmatter.png", str(GameState.resources.get("DarkMatter", 0)), Color(0.8, 0.4, 1.0), "DarkMatter")
-	nt_label = create_res_badge(res_hbox, "res://assets/ui/res_neutronium.png", str(GameState.resources.get("Neutronium", 0)), Color(0.2, 1.0, 0.8), "Neutronium")
-
-	# 2行目: ステータスバー (左) ＋ 伸縮スペーサー ＋ 操作ボタン (右)
-	var stat_row = HBoxContainer.new()
-	stat_row_node = stat_row
-	stat_row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	stat_row.add_theme_constant_override("separation", 8)
-	top_vbox.add_child(stat_row)
-
-	var stat_hbox = HBoxContainer.new()
-	stat_hbox.add_theme_constant_override("separation", 6)
-	stat_row.add_child(stat_hbox)
-
-	var hp_vbox = VBoxContainer.new()
-	hp_vbox.add_theme_constant_override("separation", 2)
-	stat_hbox.add_child(hp_vbox)
-
-	shield_bar = ProgressBar.new()
-	shield_bar.custom_minimum_size = Vector2(90, 4)
-	shield_bar.value = 100.0
-	shield_bar.show_percentage = false
-	shield_bar.modulate = Color(0.0, 1.8, 2.8)
-	hp_vbox.add_child(shield_bar)
-
-	hp_bar = ProgressBar.new()
-	hp_bar.custom_minimum_size = Vector2(90, 5)
-	hp_bar.value = 100.0
-	hp_bar.show_percentage = false
-	hp_bar.modulate = Color(0.2, 2.0, 0.6)
-	hp_vbox.add_child(hp_bar)
-
-	var p_hbox = HBoxContainer.new()
-	var p_ico = TextureRect.new()
-	p_ico.texture = load("res://assets/ui/energy.png")
-	p_ico.custom_minimum_size = Vector2(14, 14)
-	p_ico.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	p_hbox.add_child(p_ico)
-	power_bar = ProgressBar.new()
-	power_bar.custom_minimum_size = Vector2(40, 5)
-	power_bar.value = 100.0
-	power_bar.show_percentage = false
-	power_bar.modulate = Color(1.0, 0.85, 0.2)
-	p_hbox.add_child(power_bar)
-	stat_hbox.add_child(p_hbox)
-
-	var f_hbox = HBoxContainer.new()
-	var f_ico = TextureRect.new()
-	f_ico.texture = load("res://assets/sprites/fleet_fighter.png")
-	f_ico.custom_minimum_size = Vector2(14, 14)
-	f_ico.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	f_hbox.add_child(f_ico)
-	fleet_lbl = Label.new()
-	fleet_lbl.text = "0"
-	fleet_lbl.add_theme_font_size_override("font_size", 10)
-	fleet_lbl.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3))
-	f_hbox.add_child(fleet_lbl)
-	stat_hbox.add_child(f_hbox)
-
-	# 伸縮スペーサー (左側のステータスと右側の操作ボタンを両端に均等配置)
-	var spacer = Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stat_row.add_child(spacer)
-
-	# 右側: ドクトリン・カメラ・セーブ操作ボタン (文字バッジ式で巨大テクスチャ誤爆防止)
-	var right_hbox = HBoxContainer.new()
-	right_top_buttons = right_hbox
-	right_hbox.alignment = BoxContainer.ALIGNMENT_END
-	right_hbox.add_theme_constant_override("separation", 5)
-	stat_row.add_child(right_hbox)
-
-	var sb_top_btn = StyleBoxFlat.new()
-	sb_top_btn.bg_color = Color(0.04, 0.08, 0.16, 0.85)
-	sb_top_btn.border_color = Color(0.0, 1.8, 2.5, 0.6)
-	sb_top_btn.set_border_width_all(1)
-	sb_top_btn.set_corner_radius_all(4)
-
-	var btn_h = Button.new()
-	btn_h.text = "H"
-	btn_h.custom_minimum_size = Vector2(26, 24)
-	btn_h.add_theme_stylebox_override("normal", sb_top_btn)
-	btn_h.add_theme_font_size_override("font_size", 10)
-	btn_h.pressed.connect(func(): GameState.set_fleet_doctrine("HARVEST"))
-	right_hbox.add_child(btn_h)
-	btn_doctrine_cluster.append(btn_h)
-
-	var btn_m = Button.new()
-	btn_m.text = "M"
-	btn_m.custom_minimum_size = Vector2(26, 24)
-	btn_m.add_theme_stylebox_override("normal", sb_top_btn)
-	btn_m.add_theme_font_size_override("font_size", 10)
-	btn_m.pressed.connect(func(): GameState.set_fleet_doctrine("MULTIPLY"))
-	right_hbox.add_child(btn_m)
-	btn_doctrine_cluster.append(btn_m)
-
-	var btn_a = Button.new()
-	btn_a.text = "A"
-	btn_a.custom_minimum_size = Vector2(26, 24)
-	var sb_a = sb_top_btn.duplicate()
-	sb_a.border_color = Color(2.5, 0.4, 0.4, 0.8)
-	btn_a.add_theme_stylebox_override("normal", sb_a)
-	btn_a.add_theme_font_size_override("font_size", 10)
-	btn_a.add_theme_color_override("font_color", Color(2.5, 0.6, 0.6))
-	btn_a.pressed.connect(func(): GameState.set_fleet_doctrine("ASSAULT"))
-	right_hbox.add_child(btn_a)
-	btn_doctrine_cluster.append(btn_a)
-
-	var btn_snap = Button.new()
-	btn_snap.text = "CORE"
-	btn_snap.custom_minimum_size = Vector2(36, 24)
-	btn_snap.add_theme_stylebox_override("normal", sb_top_btn)
-	btn_snap.add_theme_font_size_override("font_size", 9)
-	btn_snap.pressed.connect(func(): if main_node and main_node.has_method("snap_camera_to_player"): main_node.snap_camera_to_player())
-	right_hbox.add_child(btn_snap)
-	btn_cam_cluster.append(btn_snap)
-
-	var btn_map = Button.new()
-	btn_map.text = "MAP"
-	btn_map.custom_minimum_size = Vector2(32, 24)
-	btn_map.add_theme_stylebox_override("normal", sb_top_btn)
-	btn_map.add_theme_font_size_override("font_size", 9)
-	btn_map.pressed.connect(func(): if main_node and main_node.has_method("toggle_map_view"): main_node.toggle_map_view())
-	right_hbox.add_child(btn_map)
-	btn_cam_cluster.append(btn_map)
+	var btn_brake = Button.new()
+	btn_brake.text = "BRAKE"
+	_style_button(btn_brake)
+	btn_brake.pressed.connect(func(): emit_signal("brake_requested"))
+	top_right_flow.add_child(btn_brake)
 
 	var btn_save = Button.new()
 	btn_save.text = "SAVE"
-	btn_save.custom_minimum_size = Vector2(34, 24)
-	btn_save.add_theme_stylebox_override("normal", sb_top_btn)
-	btn_save.add_theme_font_size_override("font_size", 9)
-	btn_save.pressed.connect(func(): SaveManager.save_game(false))
-	right_hbox.add_child(btn_save)
-	btn_sys_cluster.append(btn_save)
+	_style_button(btn_save)
+	btn_save.pressed.connect(func(): emit_signal("save_requested"))
+	top_right_flow.add_child(btn_save)
 
-	var btn_mute = Button.new()
-	btn_mute.text = "SND"
-	btn_mute.custom_minimum_size = Vector2(30, 24)
-	btn_mute.add_theme_stylebox_override("normal", sb_top_btn)
-	btn_mute.add_theme_font_size_override("font_size", 9)
+	btn_mute = Button.new()
+	btn_mute.text = "AUDIO: ON"
+	_style_button(btn_mute)
 	btn_mute.pressed.connect(func():
-		var muted = AudioSynth.toggle_mute()
-		btn_mute.text = "MUT" if muted else "SND"
-		btn_mute.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4) if muted else Color(0.2, 0.9, 1.0))
+		var m = AudioSynth.toggle_mute()
+		btn_mute.text = "AUDIO: OFF" if m else "AUDIO: ON"
 	)
-	right_hbox.add_child(btn_mute)
-	btn_sys_cluster.append(btn_mute)
+	top_right_flow.add_child(btn_mute)
+
+	btn_pad = Button.new()
+	btn_pad.text = "PAD"
+	_style_button(btn_pad)
+	btn_pad.pressed.connect(func():
+		force_touch_pad = not force_touch_pad
+		_update_touch_pad_visibility()
+	)
+	top_right_flow.add_child(btn_pad)
 
 	var btn_rst = Button.new()
 	btn_rst.text = "RST"
-	btn_rst.custom_minimum_size = Vector2(28, 24)
-	var sb_rst = sb_top_btn.duplicate()
-	sb_rst.border_color = Color(1.0, 0.4, 0.4, 0.6)
-	btn_rst.add_theme_stylebox_override("normal", sb_rst)
-	btn_rst.add_theme_font_size_override("font_size", 9)
-	btn_rst.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
-	btn_rst.pressed.connect(func(): SaveManager.reset_save())
-	right_hbox.add_child(btn_rst)
-	btn_sys_cluster.append(btn_rst)
+	_style_button(btn_rst, Color(0.85, 0.35, 0.35))
+	btn_rst.pressed.connect(func(): emit_signal("reset_requested"))
+	top_right_flow.add_child(btn_rst)
 
-	# 3行目: 目標導線バッジ (中央配置)
-	var top_row3 = HBoxContainer.new()
-	top_row3.alignment = BoxContainer.ALIGNMENT_CENTER
-	top_vbox.add_child(top_row3)
+	# 3. BOTTOM-CENTER TABBED BUILD HOTBAR
+	bottom_bar = PanelContainer.new()
+	bottom_bar.add_theme_stylebox_override("panel", _make_panel_style())
+	add_child(bottom_bar)
 
-	objective_panel = PanelContainer.new()
-	objective_panel.custom_minimum_size = Vector2(320, 32)
-	var sb_obj = StyleBoxFlat.new()
-	sb_obj.bg_color = Color(0.04, 0.08, 0.16, 0.85)
-	sb_obj.border_color = Color(0.0, 1.8, 2.5, 0.7)
-	sb_obj.set_border_width_all(1)
-	sb_obj.set_corner_radius_all(4)
-	objective_panel.add_theme_stylebox_override("panel", sb_obj)
+	var bot_vbox = VBoxContainer.new()
+	bot_vbox.add_theme_constant_override("separation", 4)
+	bottom_bar.add_child(bot_vbox)
 
-	objective_label = Label.new()
-	objective_label.text = "[ MISSION: MINE Fe (0 / 40) ]"
-	objective_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	objective_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	objective_label.add_theme_font_size_override("font_size", 13)
-	objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
-	objective_panel.add_child(objective_label)
-	top_row3.add_child(objective_panel)
+	var tab_hbox = HBoxContainer.new()
+	tab_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	tab_hbox.add_theme_constant_override("separation", 4)
+	bot_vbox.add_child(tab_hbox)
 
-	# 素材不足警告バッジ (画面中央)
-	missing_panel = PanelContainer.new()
-	missing_panel.set_anchors_preset(Control.PRESET_CENTER)
-	missing_panel.anchor_left = 0.5
-	missing_panel.anchor_right = 0.5
-	missing_panel.anchor_top = 0.5
-	missing_panel.anchor_bottom = 0.5
-	missing_panel.offset_left = -90.0
-	missing_panel.offset_top = -20.0
-	missing_panel.offset_right = 90.0
-	missing_panel.offset_bottom = 20.0
-	var sb_miss = StyleBoxFlat.new()
-	sb_miss.bg_color = Color(0.18, 0.04, 0.04, 0.9)
-	sb_miss.border_color = Color(2.5, 0.3, 0.3, 0.8)
-	sb_miss.set_border_width_all(1)
-	sb_miss.set_corner_radius_all(3)
-	missing_panel.add_theme_stylebox_override("panel", sb_miss)
-
-	missing_label = Label.new()
-	missing_label.text = "INSUFFICIENT MATERIAL"
-	missing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	missing_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	missing_label.add_theme_font_size_override("font_size", 10)
-	missing_label.add_theme_color_override("font_color", Color(2.5, 0.6, 0.6))
-	missing_panel.add_child(missing_label)
-	missing_panel.visible = false
-	add_child(missing_panel)
-
-	# 空爆警告
-	# 空爆襲来警告アラートアイコン (中央上部のナビ・ミッション干渉を完全排除し、右上ステータス下に配置)
-	alert_rect = TextureRect.new()
-	alert_rect.texture = load("res://assets/sprites/corrupted_bomber.png")
-	alert_rect.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	alert_rect.anchor_left = 1.0
-	alert_rect.anchor_right = 1.0
-	alert_rect.anchor_top = 0.0
-	alert_rect.anchor_bottom = 0.0
-	alert_rect.offset_left = -160.0
-	alert_rect.offset_top = 64.0
-	alert_rect.offset_right = -124.0
-	alert_rect.offset_bottom = 100.0
-	alert_rect.custom_minimum_size = Vector2(36, 36)
-	alert_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	alert_rect.modulate = Color(3.0, 0.3, 0.3)
-	alert_rect.visible = false
-	add_child(alert_rect)
-
-	# ========================================================
-	# 2. 画面左側: ズームボタンクラスタ (Zoom Buttons)
-	# ========================================================
-	var zoom_cluster = VBoxContainer.new()
-	zoom_cluster_node = zoom_cluster
-	zoom_cluster.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	zoom_cluster.anchor_left = 0.0
-	zoom_cluster.anchor_top = 0.45
-	zoom_cluster.anchor_bottom = 0.45
-	zoom_cluster.offset_left = 16.0
-	zoom_cluster.offset_top = -60.0
-	zoom_cluster.offset_right = 68.0
-	zoom_cluster.offset_bottom = 60.0
-	zoom_cluster.add_theme_constant_override("separation", 10)
-	add_child(zoom_cluster)
-
-	var sb_circle_btn = StyleBoxFlat.new()
-	sb_circle_btn.bg_color = Color(0.04, 0.08, 0.15, 0.75)
-	sb_circle_btn.border_color = Color(0.0, 1.8, 2.5, 0.6)
-	sb_circle_btn.set_border_width_all(1)
-	sb_circle_btn.set_corner_radius_all(24)
-
-	var btn_zin = Button.new()
-	btn_zin.text = "+"
-	btn_zin.custom_minimum_size = Vector2(46, 46)
-	btn_zin.add_theme_font_size_override("font_size", 28)
-	btn_zin.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
-	btn_zin.add_theme_stylebox_override("normal", sb_circle_btn)
-	btn_zin.pressed.connect(func(): if main_node and main_node.has_method("zoom_in"): main_node.zoom_in())
-	zoom_cluster.add_child(btn_zin)
-
-	var btn_zout = Button.new()
-	btn_zout.text = "-"
-	btn_zout.custom_minimum_size = Vector2(46, 46)
-	btn_zout.add_theme_font_size_override("font_size", 28)
-	btn_zout.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
-	btn_zout.add_theme_stylebox_override("normal", sb_circle_btn)
-	btn_zout.pressed.connect(func(): if main_node and main_node.has_method("zoom_out"): main_node.zoom_out())
-	zoom_cluster.add_child(btn_zout)
-
-	# ========================================================
-	# 3. 画面左下: スマホ用バーチャルジョイスティック (Virtual Joystick)
-	# ========================================================
-	vstick_base = Control.new()
-	vstick_base.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	vstick_base.anchor_left = 0.0
-	vstick_base.anchor_right = 0.0
-	vstick_base.anchor_top = 1.0
-	vstick_base.anchor_bottom = 1.0
-	vstick_base.offset_left = 12.0
-	vstick_base.offset_top = -180.0
-	vstick_base.offset_right = 172.0
-	vstick_base.offset_bottom = -20.0
-	vstick_base.mouse_filter = Control.MOUSE_FILTER_PASS
-	vstick_base.draw.connect(_on_vstick_draw)
-	vstick_base.gui_input.connect(_on_vstick_gui_input)
-	add_child(vstick_base)
-
-	# ========================================================
-	# 4. 画面右下: スマホ用アクションボタンクラスタ (Action Button Cluster)
-	# ========================================================
-	var action_cluster = Control.new()
-	action_cluster_node = action_cluster
-	action_cluster.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	action_cluster.anchor_left = 1.0
-	action_cluster.anchor_right = 1.0
-	action_cluster.anchor_top = 1.0
-	action_cluster.anchor_bottom = 1.0
-	action_cluster.offset_left = -190.0
-	action_cluster.offset_top = -210.0
-	action_cluster.offset_right = -10.0
-	action_cluster.offset_bottom = -10.0
-	action_cluster.mouse_filter = Control.MOUSE_FILTER_PASS
-	add_child(action_cluster)
-
-	# [MINE] 採掘ボタン (大・右下最前面)
-	var sb_mine = StyleBoxFlat.new()
-	sb_mine.bg_color = Color(0.02, 0.12, 0.22, 0.9)
-	sb_mine.border_color = Color(0.0, 2.5, 3.0, 0.95)
-	sb_mine.set_border_width_all(2)
-	sb_mine.set_corner_radius_all(44)
-
-	btn_touch_mine = Button.new()
-	btn_touch_mine.text = "MINE"
-	btn_touch_mine.position = Vector2(92, 100)
-	btn_touch_mine.custom_minimum_size = Vector2(88, 88)
-	btn_touch_mine.add_theme_stylebox_override("normal", sb_mine)
-	btn_touch_mine.add_theme_stylebox_override("pressed", sb_mine)
-	btn_touch_mine.add_theme_stylebox_override("hover", sb_mine)
-	btn_touch_mine.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn_touch_mine.add_theme_font_size_override("font_size", 14)
-	btn_touch_mine.add_theme_color_override("font_color", Color(0.0, 2.5, 3.0))
-	btn_touch_mine.button_down.connect(func(): if player_node: player_node.touch_mining_active = true)
-	btn_touch_mine.button_up.connect(func(): if player_node: player_node.touch_mining_active = false)
-	_apply_touch_button_anim(btn_touch_mine)
-	action_cluster.add_child(btn_touch_mine)
-
-	# [BRAKE] 緊急ブレーキボタン (中・MINEの上)
-	var sb_brake = StyleBoxFlat.new()
-	sb_brake.bg_color = Color(0.2, 0.04, 0.04, 0.9)
-	sb_brake.border_color = Color(2.5, 0.3, 0.3, 0.9)
-	sb_brake.set_border_width_all(2)
-	sb_brake.set_corner_radius_all(32)
-
-	btn_touch_brake = Button.new()
-	btn_touch_brake.text = "STOP"
-	btn_touch_brake.position = Vector2(104, 26)
-	btn_touch_brake.custom_minimum_size = Vector2(64, 64)
-	btn_touch_brake.add_theme_stylebox_override("normal", sb_brake)
-	btn_touch_brake.add_theme_stylebox_override("pressed", sb_brake)
-	btn_touch_brake.add_theme_stylebox_override("hover", sb_brake)
-	btn_touch_brake.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn_touch_brake.add_theme_font_size_override("font_size", 11)
-	btn_touch_brake.add_theme_color_override("font_color", Color(2.5, 0.7, 0.7))
-	btn_touch_brake.button_down.connect(func(): if player_node: player_node.touch_braking_active = true)
-	btn_touch_brake.button_up.connect(func(): if player_node: player_node.touch_braking_active = false)
-	_apply_touch_button_anim(btn_touch_brake)
-	action_cluster.add_child(btn_touch_brake)
-
-	# [BUILD] ビルドモード切替ボタン (中・MINEの左)
-	var sb_bld = StyleBoxFlat.new()
-	sb_bld.bg_color = Color(0.04, 0.09, 0.16, 0.9)
-	sb_bld.border_color = Color(0.0, 1.8, 2.5, 0.8)
-	sb_bld.set_border_width_all(2)
-	sb_bld.set_corner_radius_all(34)
-
-	btn_touch_build = Button.new()
-	btn_touch_build.text = "BUILD"
-	btn_touch_build.position = Vector2(12, 112)
-	btn_touch_build.custom_minimum_size = Vector2(68, 68)
-	btn_touch_build.add_theme_stylebox_override("normal", sb_bld)
-	btn_touch_build.add_theme_stylebox_override("pressed", sb_bld)
-	btn_touch_build.add_theme_stylebox_override("hover", sb_bld)
-	btn_touch_build.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn_touch_build.add_theme_font_size_override("font_size", 12)
-	btn_touch_build.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
-	btn_touch_build.pressed.connect(toggle_build_mode)
-	_apply_touch_button_anim(btn_touch_build)
-	action_cluster.add_child(btn_touch_build)
-
-	# [DRONE] ドローン自己複製ボタン (小・BUILDの上)
-	var sb_drn = StyleBoxFlat.new()
-	sb_drn.bg_color = Color(0.03, 0.14, 0.1, 0.9)
-	sb_drn.border_color = Color(0.2, 2.0, 0.7, 0.8)
-	sb_drn.set_border_width_all(2)
-	sb_drn.set_corner_radius_all(30)
-
-	btn_touch_drone = Button.new()
-	btn_touch_drone.text = "REPL\nDRONE"
-	btn_touch_drone.position = Vector2(22, 38)
-	btn_touch_drone.custom_minimum_size = Vector2(60, 60)
-	btn_touch_drone.add_theme_stylebox_override("normal", sb_drn)
-	btn_touch_drone.add_theme_stylebox_override("pressed", sb_drn)
-	btn_touch_drone.add_theme_stylebox_override("hover", sb_drn)
-	btn_touch_drone.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn_touch_drone.add_theme_font_size_override("font_size", 10)
-	btn_touch_drone.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
-	btn_touch_drone.pressed.connect(func():
-		if GameState.attach_drone():
-			AudioSynth.play_synth("replicate")
-		else:
-			AudioSynth.play_synth("error")
-			var need_str = "40 Fe" if GameState.attached_drones == 0 else "30 Fe + 15 Si"
-			show_missing_res_alert(need_str)
-	)
-	_apply_touch_button_anim(btn_touch_drone)
-	action_cluster.add_child(btn_touch_drone)
-
-	# ========================================================
-	# 5. 下部中央: レスポンシブ建築ツールバー (Scrollable for Mobile)
-	# ========================================================
-	build_bar_panel = PanelContainer.new()
-	build_bar_panel.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	build_bar_panel.anchor_left = 0.0
-	build_bar_panel.anchor_right = 1.0
-	build_bar_panel.anchor_top = 1.0
-	build_bar_panel.anchor_bottom = 1.0
-	build_bar_panel.offset_left = 12.0
-	build_bar_panel.offset_right = -12.0
-	build_bar_panel.offset_top = -262.0
-	build_bar_panel.offset_bottom = -204.0
-	var sb_bar = StyleBoxFlat.new()
-	sb_bar.bg_color = Color(0.03, 0.05, 0.09, 0.85)
-	sb_bar.border_color = Color(0.0, 1.5, 2.2, 0.6)
-	sb_bar.set_border_width_all(1)
-	sb_bar.set_corner_radius_all(4)
-	build_bar_panel.add_theme_stylebox_override("panel", sb_bar)
-	add_child(build_bar_panel)
-
-	var scroll = ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	build_bar_panel.add_child(scroll)
-
-	var bc_container = HBoxContainer.new()
-	bc_container.add_theme_constant_override("separation", 6)
-	scroll.add_child(bc_container)
-
-	# ビルドモードON/OFF表示インジケータ
-	build_mode_indicator = Panel.new()
-	build_mode_indicator.custom_minimum_size = Vector2(5, 46)
-	build_mode_indicator.modulate = Color(0.4, 0.4, 0.4, 0.5)
-	bc_container.add_child(build_mode_indicator)
-
-	var tools = [
-		{"id": "miner", "icon": "tool_drill"},
-		{"id": "belt", "icon": "tool_belt"},
-		{"id": "smelter", "icon": "tool_smelter"},
-		{"id": "assembler", "icon": "tool_assembler"},
-		{"id": "mass_driver", "icon": "tool_mass_driver"},
-		{"id": "depot", "icon": "tool_depot"},
-		{"id": "turret", "icon": "tool_turret"},
-		{"id": "solar", "icon": "tool_solar"},
-		{"id": "geothermal", "icon": "tool_geothermal"},
-		{"id": "demolish", "icon": "tool_demolish"}
-	]
-
-	for t in tools:
-		var slot_p = PanelContainer.new()
-		slot_p.custom_minimum_size = Vector2(48, 50)
-		slot_p.add_theme_stylebox_override("panel", sb_slot)
-
-		var b = Button.new()
-		b.icon = load("res://assets/ui/%s.png" % t["icon"])
-		b.flat = true
-		b.expand_icon = true
-		b.custom_minimum_size = Vector2(46, 48)
-		b.pressed.connect(func(): _select_tool_by_id(t["id"]))
-		slot_p.add_child(b)
-
-		# 所持数バッジ（数字のみ）
-		var count_lbl = Label.new()
-		count_lbl.text = "0"
-		count_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		count_lbl.position = Vector2(10, 28)
-		count_lbl.size = Vector2(34, 16)
-		count_lbl.add_theme_font_size_override("font_size", 10)
-		count_lbl.add_theme_color_override("font_color", Color(0.2, 1.0, 0.6))
-		slot_p.add_child(count_lbl)
-
-		bc_container.add_child(slot_p)
-		tool_buttons[t["id"]] = {"btn": b, "lbl": count_lbl, "panel": slot_p}
-
-	# メガストラクチャー展開ボタン (右端)
-	var mega_btn = Button.new()
-	mega_btn_node = mega_btn
-	mega_btn.icon = load("res://assets/ui/icon_elevator.png")
-	mega_btn.expand_icon = true
-	mega_btn.custom_minimum_size = Vector2(48, 50)
-	mega_btn.pressed.connect(toggle_mega_palette)
-	bc_container.add_child(mega_btn)
-
-	# ビルド操作ガイド（ノンバーバル極小ピクトグラム）
-	build_guide_label = Label.new()
-	build_guide_label.text = "TAP GROUND TO PLACE BLUEPRINT"
-	build_guide_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	build_guide_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	build_guide_label.anchor_top = 1.0
-	build_guide_label.anchor_bottom = 1.0
-	build_guide_label.offset_top = -288.0
-	build_guide_label.offset_bottom = -268.0
-	build_guide_label.add_theme_font_size_override("font_size", 11)
-	build_guide_label.add_theme_color_override("font_color", Color(0.0, 2.0, 2.8, 0.85))
-	build_guide_label.visible = false
-	add_child(build_guide_label)
-
-	# 建築モード即時キャンセルボタン (Cancel Build Mode Button)
-	build_cancel_btn = Button.new()
-	build_cancel_btn.text = " X CANCEL BUILD "
-	build_cancel_btn.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	build_cancel_btn.anchor_left = 1.0
-	build_cancel_btn.anchor_right = 1.0
-	build_cancel_btn.anchor_top = 1.0
-	build_cancel_btn.anchor_bottom = 1.0
-	build_cancel_btn.offset_left = -160.0
-	build_cancel_btn.offset_right = -16.0
-	build_cancel_btn.offset_top = -272.0
-	build_cancel_btn.offset_bottom = -232.0
-	var sb_cncl = StyleBoxFlat.new()
-	sb_cncl.bg_color = Color(0.2, 0.04, 0.06, 0.92)
-	sb_cncl.border_color = Color(2.5, 0.3, 0.3, 0.85)
-	sb_cncl.set_border_width_all(2)
-	sb_cncl.set_corner_radius_all(6)
-	build_cancel_btn.add_theme_stylebox_override("normal", sb_cncl)
-	build_cancel_btn.add_theme_color_override("font_color", Color(2.5, 0.8, 0.8))
-	build_cancel_btn.add_theme_font_size_override("font_size", 12)
-	build_cancel_btn.visible = false
-	build_cancel_btn.pressed.connect(func():
-		if grid_manager:
-			grid_manager.select_tool("none")
-			_update_build_mode_visuals()
+	for cat in [["MINE", "MINE & LOGI"], ["FACTORY", "FACTORY"], ["POWER", "POWER & DEF"], ["SPACE", "SPACE & MEGA"]]:
+		var cb = Button.new()
+		cb.text = cat[1]
+		_style_button(cb)
+		var cid: String = cat[0]
+		cb.pressed.connect(func():
+			active_category = cid
 			AudioSynth.play_synth("click")
-	)
-	add_child(build_cancel_btn)
+			_rebuild_hotbar()
+			refresh_all()
+		)
+		tab_hbox.add_child(cb)
+		cat_btns[cid] = cb
 
-	# ドローン自己複製アチーブメントバナー (Drone Replication Banner)
-	drone_repl_banner = PanelContainer.new()
-	drone_repl_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	drone_repl_banner.anchor_left = 0.5
-	drone_repl_banner.anchor_right = 0.5
-	drone_repl_banner.offset_left = -180.0
-	drone_repl_banner.offset_right = 180.0
-	drone_repl_banner.offset_top = 145.0
-	drone_repl_banner.offset_bottom = 185.0
-	var sb_d_repl = StyleBoxFlat.new()
-	sb_d_repl.bg_color = Color(0.04, 0.12, 0.22, 0.94)
-	sb_d_repl.border_color = Color(0.0, 2.2, 3.0, 0.9)
-	sb_d_repl.set_border_width_all(2)
-	sb_d_repl.set_corner_radius_all(6)
-	drone_repl_banner.add_theme_stylebox_override("panel", sb_d_repl)
-	drone_repl_banner.visible = false
-	add_child(drone_repl_banner)
+	var scroll_bar = ScrollContainer.new()
+	scroll_bar.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll_bar.custom_minimum_size = Vector2(200, 48)
+	bot_vbox.add_child(scroll_bar)
 
-	drone_repl_lbl = Label.new()
-	drone_repl_lbl.text = "[+] SUB-DRONE REPLICATED [+]"
-	drone_repl_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	drone_repl_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	drone_repl_lbl.add_theme_font_size_override("font_size", 12)
-	drone_repl_lbl.add_theme_color_override("font_color", Color(0.2, 2.5, 3.0))
-	drone_repl_banner.add_child(drone_repl_lbl)
+	hotbar_container = HBoxContainer.new()
+	hotbar_container.alignment = BoxContainer.ALIGNMENT_CENTER
+	hotbar_container.add_theme_constant_override("separation", 4)
+	scroll_bar.add_child(hotbar_container)
 
-	# 6. メガストラクチャー・ミニマルパレット構築
-	_build_minimal_mega_palette(sb_slot)
+	# 4. BOTTOM-RIGHT TELEMETRY & LOG PANEL
+	telemetry_panel = PanelContainer.new()
+	telemetry_panel.clip_contents = true
+	telemetry_panel.add_theme_stylebox_override("panel", _make_panel_style())
+	add_child(telemetry_panel)
 
-	# ========================================================
-	# 7. 休眠探査機・再起動ガイダンス (DORMANT STATE OVERLAY)
-	# ========================================================
-	boot_guide_overlay = Control.new()
-	boot_guide_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	boot_guide_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	boot_guide_overlay.gui_input.connect(func(ev):
-		if (ev is InputEventMouseButton and ev.pressed) or (ev is InputEventScreenTouch and ev.pressed):
-			if player_node and player_node.has_method("wake_up_probe"):
-				player_node.wake_up_probe()
-	)
-	add_child(boot_guide_overlay)
+	var tel_vbox = VBoxContainer.new()
+	tel_vbox.custom_minimum_size = Vector2(264, 0)
+	tel_vbox.add_theme_constant_override("separation", 2)
+	telemetry_panel.add_child(tel_vbox)
 
-	var boot_card = PanelContainer.new()
-	boot_card.set_anchors_preset(Control.PRESET_CENTER)
-	boot_card.anchor_left = 0.5
-	boot_card.anchor_right = 0.5
-	boot_card.anchor_top = 0.5
-	boot_card.anchor_bottom = 0.5
-	boot_card.offset_left = -220.0
-	boot_card.offset_top = -210.0
-	boot_card.offset_right = 220.0
-	boot_card.offset_bottom = -50.0
-	boot_card.mouse_filter = Control.MOUSE_FILTER_PASS
+	lbl_zone = Label.new()
+	lbl_zone.add_theme_font_size_override("font_size", 11)
+	lbl_zone.add_theme_color_override("font_color", Color(0.45, 0.92, 1.0))
+	tel_vbox.add_child(lbl_zone)
 
-	var sb_boot = StyleBoxFlat.new()
-	sb_boot.bg_color = Color(0.02, 0.06, 0.12, 0.90)
-	sb_boot.border_color = Color(0.0, 1.8, 2.5, 0.85)
-	sb_boot.set_border_width_all(2)
-	sb_boot.corner_radius_top_left = 10
-	sb_boot.corner_radius_top_right = 10
-	sb_boot.corner_radius_bottom_left = 10
-	sb_boot.corner_radius_bottom_right = 10
-	sb_boot.content_margin_left = 16
-	sb_boot.content_margin_right = 16
-	sb_boot.content_margin_top = 14
-	sb_boot.content_margin_bottom = 14
-	boot_card.add_theme_stylebox_override("panel", sb_boot)
-	boot_guide_overlay.add_child(boot_card)
+	lbl_speed = Label.new()
+	lbl_speed.add_theme_font_size_override("font_size", 11)
+	lbl_speed.add_theme_color_override("font_color", Color(0.85, 0.92, 0.98))
+	tel_vbox.add_child(lbl_speed)
 
-	var boot_vbox = VBoxContainer.new()
-	boot_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	boot_vbox.add_theme_constant_override("separation", 6)
-	boot_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
-	boot_card.add_child(boot_vbox)
+	log_vbox = VBoxContainer.new()
+	log_vbox.add_theme_constant_override("separation", 1)
+	tel_vbox.add_child(log_vbox)
 
-	var b_tag = Label.new()
-	b_tag.text = "[+] STAR REPLICA: AUTOMA [+]"
-	b_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b_tag.add_theme_font_size_override("font_size", 16)
-	b_tag.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
-	boot_vbox.add_child(b_tag)
+	# 5. OPAQUE RESPONSIVE BLUEPRINT & TECH CATALOG MODAL
+	tech_modal = PanelContainer.new()
+	tech_modal.visible = false
+	tech_modal.clip_contents = true
+	tech_modal.add_theme_stylebox_override("panel", _make_panel_style(Color(0.035, 0.05, 0.09, 1.0), COL_ACTIVE, 2, 6))
+	add_child(tech_modal)
 
-	var b_sub = Label.new()
-	b_sub.text = "COLONY SEED-01 RESTING ON PLANET SURFACE"
-	b_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b_sub.add_theme_font_size_override("font_size", 11)
-	b_sub.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0, 0.8))
-	boot_vbox.add_child(b_sub)
+	var modal_vbox = VBoxContainer.new()
+	modal_vbox.add_theme_constant_override("separation", 8)
+	tech_modal.add_child(modal_vbox)
 
-	boot_prompt_lbl = Label.new()
-	boot_prompt_lbl.text = ">>> [ TAP ANYWHERE TO INITIALIZE CORE ] <<<"
-	boot_prompt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	boot_prompt_lbl.add_theme_font_size_override("font_size", 14)
-	boot_prompt_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.8))
-	boot_vbox.add_child(boot_prompt_lbl)
-
-	var b_hint = Label.new()
-	b_hint.text = "Controls: WASD / Joystick to Move | Pure Newton Inertia"
-	b_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b_hint.add_theme_font_size_override("font_size", 10)
-	b_hint.add_theme_color_override("font_color", Color(0.8, 0.95, 1.0, 0.95))
-	boot_vbox.add_child(b_hint)
-
-	var b_pointer = Label.new()
-	b_pointer.text = "[v] DORMANT PROBE ON SURFACE BELOW [v]"
-	b_pointer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b_pointer.add_theme_font_size_override("font_size", 10)
-	b_pointer.add_theme_color_override("font_color", Color(0.2, 2.2, 2.8, 0.9))
-	boot_vbox.add_child(b_pointer)
-
-	# ========================================================
-	# 8. マイルストーン達成バナー (MILESTONE BANNER)
-	# ========================================================
-	milestone_panel = PanelContainer.new()
-	milestone_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	milestone_panel.anchor_left = 0.5
-	milestone_panel.anchor_right = 0.5
-	milestone_panel.offset_left = -220.0
-	milestone_panel.offset_right = 220.0
-	milestone_panel.offset_top = 88.0
-	milestone_panel.offset_bottom = 148.0
-	var sb_mile = StyleBoxFlat.new()
-	sb_mile.bg_color = Color(0.04, 0.08, 0.16, 0.92)
-	sb_mile.border_color = Color(1.2, 0.8, 0.2, 0.85)
-	sb_mile.set_border_width_all(2)
-	sb_mile.corner_radius_top_left = 6
-	sb_mile.corner_radius_top_right = 6
-	sb_mile.corner_radius_bottom_left = 6
-	sb_mile.corner_radius_bottom_right = 6
-	milestone_panel.add_theme_stylebox_override("panel", sb_mile)
-	milestone_panel.visible = false
-	add_child(milestone_panel)
-	
-	var m_vbox = VBoxContainer.new()
-	m_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	m_vbox.add_theme_constant_override("separation", 2)
-	milestone_panel.add_child(m_vbox)
-	
-	milestone_title_lbl = Label.new()
-	milestone_title_lbl.text = "[*] MILESTONE ACHIEVED [*]"
-	milestone_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	milestone_title_lbl.add_theme_font_size_override("font_size", 12)
-	milestone_title_lbl.add_theme_color_override("font_color", Color(1.5, 2.2, 0.4))
-	m_vbox.add_child(milestone_title_lbl)
-	
-	milestone_sub_lbl = Label.new()
-	milestone_sub_lbl.text = "[ ERA 01: AWAKENING ]"
-	milestone_sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	milestone_sub_lbl.add_theme_font_size_override("font_size", 14)
-	milestone_sub_lbl.add_theme_color_override("font_color", Color(2.5, 2.5, 2.8))
-	m_vbox.add_child(milestone_sub_lbl)
-
-	# 9. 専用大型技術ツリー・設備建造カタログ画面の構築
-	_build_tech_tree_modal()
-
-func _build_tech_tree_modal() -> void:
-	tech_tree_modal = Panel.new()
-	tech_tree_modal.name = "TechTreeModal"
-	tech_tree_modal.visible = false
-	tech_tree_modal.clip_contents = true
-	tech_tree_modal.mouse_filter = Control.MOUSE_FILTER_STOP
-	tech_tree_modal.anchor_left = 0.03
-	tech_tree_modal.anchor_top = 0.03
-	tech_tree_modal.anchor_right = 0.97
-	tech_tree_modal.anchor_bottom = 0.95
-	tech_tree_modal.offset_left = 0
-	tech_tree_modal.offset_top = 0
-	tech_tree_modal.offset_right = 0
-	tech_tree_modal.offset_bottom = 0
-	
-	var sb_modal = StyleBoxFlat.new()
-	sb_modal.bg_color = Color(0.012, 0.025, 0.05, 1.0)
-	sb_modal.border_color = Color(0.0, 1.8, 2.5, 0.85)
-	sb_modal.set_border_width_all(2)
-	sb_modal.set_corner_radius_all(10)
-	sb_modal.shadow_color = Color(0.0, 1.2, 2.0, 0.5)
-	sb_modal.shadow_size = 16
-	tech_tree_modal.add_theme_stylebox_override("panel", sb_modal)
-	add_child(tech_tree_modal)
-	
-	var main_vbox = VBoxContainer.new()
-	main_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	main_vbox.offset_left = 10
-	main_vbox.offset_top = 8
-	main_vbox.offset_right = -10
-	main_vbox.offset_bottom = -8
-	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	main_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	main_vbox.add_theme_constant_override("separation", 6)
-	tech_tree_modal.add_child(main_vbox)
-	
-	# ヘッダー (コンパクト＆見切れ防止)
 	var header_hbox = HBoxContainer.new()
-	header_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	main_vbox.add_child(header_hbox)
-	
-	var title_vbox = VBoxContainer.new()
-	title_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	title_vbox.add_theme_constant_override("separation", 1)
-	header_hbox.add_child(title_vbox)
-	
+	modal_vbox.add_child(header_hbox)
+
 	var title_lbl = Label.new()
-	title_lbl.text = "BLUEPRINT CATALOG"
-	title_lbl.add_theme_font_size_override("font_size", 13)
-	title_lbl.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
-	title_vbox.add_child(title_lbl)
-	
-	var sub_lbl = Label.new()
-	sub_lbl.text = "Select a facility. Tap blue ghost on surface to construct."
-	sub_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	sub_lbl.add_theme_font_size_override("font_size", 9)
-	sub_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.95))
-	title_vbox.add_child(sub_lbl)
-	
-	var btn_close = Button.new()
-	btn_close.text = "CLOSE X"
-	btn_close.custom_minimum_size = Vector2(68, 28)
-	btn_close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var sb_cls = StyleBoxFlat.new()
-	sb_cls.bg_color = Color(0.2, 0.05, 0.08, 0.9)
-	sb_cls.border_color = Color(2.5, 0.3, 0.3, 0.8)
-	sb_cls.set_border_width_all(1)
-	sb_cls.set_corner_radius_all(6)
-	btn_close.add_theme_stylebox_override("normal", sb_cls)
-	btn_close.add_theme_color_override("font_color", Color(2.5, 0.5, 0.5))
-	btn_close.pressed.connect(func():
-		tech_tree_modal.visible = false
-		if objective_label: objective_label.visible = true
-		AudioSynth.play_synth("click")
+	title_lbl.text = "TECH TREE & BLUEPRINTS"
+	title_lbl.clip_text = true
+	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_lbl.add_theme_font_size_override("font_size", 14)
+	title_lbl.add_theme_color_override("font_color", COL_ACTIVE)
+	header_hbox.add_child(title_lbl)
+
+	var btn_close_modal = Button.new()
+	btn_close_modal.text = "CLOSE [ESC]"
+	_style_button(btn_close_modal, Color(0.95, 0.35, 0.35))
+	btn_close_modal.pressed.connect(func():
+		tech_modal.visible = false
+		_update_touch_pad_visibility()
 	)
-	header_hbox.add_child(btn_close)
-	
-	var sep = HSeparator.new()
-	main_vbox.add_child(sep)
-	
-	# 現在の所持資材バー (Current Inventory Status)
-	var res_hbox = HBoxContainer.new()
-	res_hbox.name = "TechTreeResBar"
-	res_hbox.add_theme_constant_override("separation", 14)
-	main_vbox.add_child(res_hbox)
-	
-	var res_types = ["Fe", "Cu", "Ti", "Si"]
-	for rk in res_types:
-		var r_lbl = Label.new()
-		r_lbl.name = "ResLbl_" + rk
-		r_lbl.text = "%s: %d" % [rk, GameState.resources.get(rk, 0)]
-		r_lbl.add_theme_font_size_override("font_size", 10)
-		r_lbl.add_theme_color_override("font_color", Color(0.2, 2.2, 2.8))
-		res_hbox.add_child(r_lbl)
-	
-	var sep2 = HSeparator.new()
-	main_vbox.add_child(sep2)
-	
-	# スクロール
-	var scroll = ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	main_vbox.add_child(scroll)
-	
-	var grid = GridContainer.new()
-	grid.name = "TechTreeGrid"
-	grid.columns = 1
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 8)
-	scroll.add_child(grid)
-	
-	var catalog_data = [
-		{
-			"id": "miner",
-			"name": "MINING DRILL",
-			"icon": "res://assets/ui/tool_drill.png",
-			"cost": "Fe: 20, Cu: 10 | Power: -15 kW",
-			"desc": "Place on ore veins. Automatically extracts raw ore and outputs to rear conveyor belt."
-		},
-		{
-			"id": "smelter",
-			"name": "ELECTRIC SMELTER",
-			"icon": "res://assets/ui/tool_smelter.png",
-			"cost": "Fe: 30, Cu: 15 | Power: -22 kW",
-			"desc": "Smelts incoming Fe/Cu ores into refined industrial metal plates."
-		},
-		{
-			"id": "belt",
-			"name": "CONVEYOR BELT",
-			"icon": "res://assets/ui/tool_belt.png",
-			"cost": "Fe: 6 (Pack of 5)",
-			"desc": "Connects facilities. High-speed smooth logistics line to transport items without jamming."
-		},
-		{
-			"id": "assembler",
-			"name": "AUTO ASSEMBLER",
-			"icon": "res://assets/ui/tool_assembler.png",
-			"cost": "Fe: 40, Cu: 20, Si: 10 | Power: -28 kW",
-			"desc": "Combines plates and microchips to automatically mass-produce autonomous drones and advanced parts."
-		},
-		{
-			"id": "solar",
-			"name": "SOLAR ARRAY",
-			"icon": "res://assets/ui/tool_solar.png",
-			"cost": "Si: 15, Cu: 10 | Power: +35 kW",
-			"desc": "Absorbs sunlight to provide clean power. Ineffective during planetary night."
-		},
-		{
-			"id": "geothermal",
-			"name": "GEOTHERMAL PLANT",
-			"icon": "res://assets/ui/tool_geothermal.png",
-			"cost": "Fe: 60, Ti: 20 | Power: +130 kW",
-			"desc": "Taps planetary core magma energy. Supplies massive constant baseload power day and night."
-		},
-		{
-			"id": "turret",
-			"name": "DEFENSE TURRET",
-			"icon": "res://assets/ui/tool_turret.png",
-			"cost": "Fe: 30, Ti: 15 | Power: -10 kW",
-			"desc": "Automatically locks onto incoming hostile bombers and raiders within 650px with pulse lasers."
-		},
-		{
-			"id": "depot",
-			"name": "LOGISTICS DEPOT",
-			"icon": "res://assets/ui/tool_depot.png",
-			"cost": "Fe: 25 | Capacity: 10,000",
-			"desc": "Stores mass minerals and products to buffer factory production surges."
-		},
-		{
-			"id": "mass_driver",
-			"name": "ORBITAL MASS DRIVER",
-			"icon": "res://assets/ui/tool_mass_driver.png",
-			"cost": "Fe: 80, Ti: 40, Si: 30 | Power: -35 kW",
-			"desc": "Launches manufactured drones into space orbit at hypervelocity to expand the 10,000-unit Swarm."
-		},
-		{
-			"id": "demolish",
-			"name": "DEMOLISH TOOL",
-			"icon": "res://assets/ui/tool_demolish.png",
-			"cost": "FREE (100% Refund)",
-			"desc": "Dismantle existing buildings or blueprints to reclaim construction space and materials."
-		}
+	header_hbox.add_child(btn_close_modal)
+
+	tech_summary_lbl = Label.new()
+	tech_summary_lbl.add_theme_font_size_override("font_size", 12)
+	tech_summary_lbl.add_theme_color_override("font_color", Color(0.82, 0.9, 0.98))
+	tech_summary_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	modal_vbox.add_child(tech_summary_lbl)
+
+	var modal_scroll = ScrollContainer.new()
+	modal_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	modal_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	modal_vbox.add_child(modal_scroll)
+
+	tech_list_vbox = VBoxContainer.new()
+	tech_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tech_list_vbox.add_theme_constant_override("separation", 6)
+	modal_scroll.add_child(tech_list_vbox)
+
+	# 6. MOBILE VIRTUAL TOUCH D-PAD + MINE BUTTON
+	_build_touch_controls()
+	_rebuild_hotbar()
+
+func _build_touch_controls() -> void:
+	touch_overlay = Control.new()
+	touch_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(touch_overlay)
+
+	var dpad_data = [
+		["U", Vector2(46, 0), Vector2(0, -1)],
+		["D", Vector2(46, 86), Vector2(0, 1)],
+		["L", Vector2(2, 43), Vector2(-1, 0)],
+		["R", Vector2(90, 43), Vector2(1, 0)],
 	]
-	
-	tech_tree_cards.clear()
-	for item in catalog_data:
-		var card = _create_tech_tree_card(item)
-		grid.add_child(card)
-
-func _create_tech_tree_card(item: Dictionary) -> Button:
-	var btn = Button.new()
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 92)
-	
-	var sb_n = StyleBoxFlat.new()
-	sb_n.bg_color = Color(0.04, 0.08, 0.15, 0.9)
-	sb_n.border_color = Color(0.0, 1.2, 1.8, 0.5)
-	sb_n.set_border_width_all(1)
-	sb_n.set_corner_radius_all(6)
-	
-	var sb_h = StyleBoxFlat.new()
-	sb_h.bg_color = Color(0.06, 0.14, 0.25, 0.95)
-	sb_h.border_color = Color(0.0, 2.2, 3.0, 0.9)
-	sb_h.set_border_width_all(2)
-	sb_h.set_corner_radius_all(6)
-	
-	btn.add_theme_stylebox_override("normal", sb_n)
-	btn.add_theme_stylebox_override("hover", sb_h)
-	btn.add_theme_stylebox_override("pressed", sb_h)
-	
-	var h_box = HBoxContainer.new()
-	h_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h_box.set_anchors_preset(Control.PRESET_FULL_RECT)
-	h_box.offset_left = 8
-	h_box.offset_top = 6
-	h_box.offset_right = -8
-	h_box.offset_bottom = -6
-	h_box.add_theme_constant_override("separation", 8)
-	btn.add_child(h_box)
-	
-	var tex_icon = load(item["icon"])
-	if tex_icon:
-		var trect = TextureRect.new()
-		trect.texture = tex_icon
-		trect.custom_minimum_size = Vector2(34, 34)
-		trect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		trect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-		trect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		h_box.add_child(trect)
-		
-	var v_box = VBoxContainer.new()
-	v_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	v_box.add_theme_constant_override("separation", 2)
-	h_box.add_child(v_box)
-	
-	var lbl_name = Label.new()
-	var is_rec = (GameState.story_phase == GameState.StoryPhase.BUILD_MINER and item["id"] == "miner")
-	lbl_name.text = ("[*] [REC] " if is_rec else "") + item["name"]
-	lbl_name.add_theme_font_size_override("font_size", 11)
-	lbl_name.add_theme_color_override("font_color", Color(2.5, 2.2, 0.4) if is_rec else Color(1.8, 2.4, 2.8))
-	v_box.add_child(lbl_name)
-	
-	var lbl_cost = Label.new()
-	lbl_cost.text = "COST: %s" % item["cost"]
-	lbl_cost.add_theme_font_size_override("font_size", 9)
-	lbl_cost.add_theme_color_override("font_color", Color(0.0, 2.0, 2.8))
-	v_box.add_child(lbl_cost)
-	
-	var lbl_status = Label.new()
-	lbl_status.text = "[OK] READY"
-	lbl_status.add_theme_font_size_override("font_size", 9)
-	lbl_status.add_theme_color_override("font_color", Color(0.2, 2.5, 1.2))
-	v_box.add_child(lbl_status)
-	
-	var lbl_desc = Label.new()
-	lbl_desc.text = item["desc"]
-	lbl_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lbl_desc.add_theme_font_size_override("font_size", 8.5)
-	lbl_desc.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
-	v_box.add_child(lbl_desc)
-	
-	btn.pressed.connect(func():
-		_on_tech_tree_item_selected(item["id"])
-	)
-
-	tech_tree_cards.append({
-		"btn": btn,
-		"id": item["id"],
-		"status_lbl": lbl_status,
-		"sb_n": sb_n
-	})
-	return btn
-
-func _adjust_responsive_layout() -> void:
-	var vp_rect = get_viewport().get_visible_rect()
-	var is_portrait = (vp_rect.size.x < vp_rect.size.y)
-	var ui_scale = clampf(vp_rect.size.x / 440.0, 0.72, 1.0) if is_portrait else 1.0
-	
-	if vstick_base:
-		vstick_base.scale = Vector2(ui_scale, ui_scale)
-	if action_cluster_node:
-		action_cluster_node.scale = Vector2(ui_scale, ui_scale)
-		action_cluster_node.pivot_offset = Vector2(180.0, 200.0)
-		
-	if is_portrait:
-		if build_bar_panel:
-			build_bar_panel.offset_left = 12.0
-			build_bar_panel.offset_right = -12.0
-			build_bar_panel.offset_top = -262.0 * ui_scale
-			build_bar_panel.offset_bottom = -204.0 * ui_scale
-		if build_guide_label:
-			build_guide_label.offset_top = -288.0 * ui_scale
-			build_guide_label.offset_bottom = -268.0 * ui_scale
-		if build_cancel_btn:
-			build_cancel_btn.offset_left = -160.0
-			build_cancel_btn.offset_right = -16.0
-			build_cancel_btn.offset_top = -330.0 * ui_scale
-			build_cancel_btn.offset_bottom = -290.0 * ui_scale
-	else:
-		if build_bar_panel:
-			build_bar_panel.offset_left = 180.0
-			build_bar_panel.offset_right = -190.0
-			build_bar_panel.offset_top = -68.0
-			build_bar_panel.offset_bottom = -12.0
-		if build_guide_label:
-			build_guide_label.offset_top = -94.0
-			build_guide_label.offset_bottom = -74.0
-		if build_cancel_btn:
-			build_cancel_btn.offset_left = -160.0
-			build_cancel_btn.offset_right = -16.0
-			build_cancel_btn.offset_top = -68.0
-			build_cancel_btn.offset_bottom = -24.0
-
-	if tech_tree_modal:
-		var grid = tech_tree_modal.find_child("TechTreeGrid", true, false)
-		if grid:
-			grid.columns = 1 if is_portrait else 2
-		if is_portrait:
-			tech_tree_modal.anchor_left = 0.02
-			tech_tree_modal.anchor_right = 0.98
-			tech_tree_modal.anchor_top = 0.02
-			tech_tree_modal.anchor_bottom = 0.96
-		else:
-			tech_tree_modal.anchor_left = 0.06
-			tech_tree_modal.anchor_right = 0.94
-			tech_tree_modal.anchor_top = 0.04
-			tech_tree_modal.anchor_bottom = 0.94
-		tech_tree_modal.offset_left = 0
-		tech_tree_modal.offset_top = 0
-		tech_tree_modal.offset_right = 0
-		tech_tree_modal.offset_bottom = 0
-
-# ========================================================
-# バーチャルジョイスティック描画 ＆ タッチ入力ハンドラー
-# ========================================================
-func _on_vstick_draw() -> void:
-	if not vstick_base: return
-	var center = vstick_base.size * 0.5
-	# 外枠リング (HDR Glow)
-	vstick_base.draw_arc(center, 54.0, 0, TAU, 36, Color(0.0, 2.0, 2.8, 0.5), 2.5)
-	vstick_base.draw_circle(center, 54.0, Color(0.02, 0.05, 0.12, 0.5))
-	
-	# スティックノブ
-	var knob_p = center + vstick_knob_pos
-	vstick_base.draw_circle(knob_p, 24.0, Color(0.0, 2.4, 3.0, 0.85))
-	vstick_base.draw_arc(knob_p, 24.0, 0, TAU, 28, Color(2.5, 2.5, 2.5, 0.95), 2.0)
-	
-	# 中央方向ガイド十字線
-	vstick_base.draw_line(center - Vector2(12, 0), center + Vector2(12, 0), Color(0.0, 1.8, 2.5, 0.4), 1.5)
-	vstick_base.draw_line(center - Vector2(0, 12), center + Vector2(0, 12), Color(0.0, 1.8, 2.5, 0.4), 1.5)
-
-func _on_vstick_gui_input(event: InputEvent) -> void:
-	if not vstick_base: return
-	var center = vstick_base.size * 0.5
-	var max_r = 50.0
-	
-	if event is InputEventScreenTouch:
-		if event.pressed:
-			vstick_active = true
-			vstick_touch_id = event.index
-			_update_vstick_pos(event.position, center, max_r)
-		elif event.index == vstick_touch_id:
-			_reset_vstick()
-			
-	elif event is InputEventScreenDrag:
-		if event.index == vstick_touch_id:
-			_update_vstick_pos(event.position, center, max_r)
-			
-	elif event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				vstick_active = true
-				_update_vstick_pos(event.position, center, max_r)
-			else:
-				_reset_vstick()
-				
-	elif event is InputEventMouseMotion and vstick_active:
-		_update_vstick_pos(event.position, center, max_r)
-
-func _update_vstick_pos(pos: Vector2, center: Vector2, max_radius: float) -> void:
-	var diff = pos - center
-	if diff.length() > max_radius:
-		diff = diff.normalized() * max_radius
-	vstick_knob_pos = diff
-	var vec = diff / max_radius
-	if player_node:
-		player_node.touch_thrust_vec = vec
-	vstick_base.queue_redraw()
-
-func _reset_vstick() -> void:
-	vstick_active = false
-	vstick_touch_id = -1
-	vstick_knob_pos = Vector2.ZERO
-	if player_node:
-		player_node.touch_thrust_vec = Vector2.ZERO
-	vstick_base.queue_redraw()
-
-func _apply_touch_button_anim(btn: Button) -> void:
-	btn.pivot_offset = btn.custom_minimum_size * 0.5
-	btn.button_down.connect(func():
-		var tw = btn.create_tween()
-		tw.tween_property(btn, "scale", Vector2(0.92, 0.92), 0.08)
-		AudioSynth.play_synth("click")
-	)
-	btn.button_up.connect(func():
-		var tw = btn.create_tween()
-		tw.tween_property(btn, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	)
-
-func create_res_badge(parent: Node, icon_p: String, init_v: String, col: Color, res_key: String = "") -> Label:
-	var h = HBoxContainer.new()
-	h.add_theme_constant_override("separation", 4)
-	
-	var ico = TextureRect.new()
-	ico.texture = load(icon_p)
-	ico.custom_minimum_size = Vector2(20, 20)
-	ico.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	h.add_child(ico)
-
-	var lbl = Label.new()
-	lbl.text = init_v
-	lbl.add_theme_font_size_override("font_size", 12)
-	lbl.add_theme_color_override("font_color", col)
-	h.add_child(lbl)
-
-	parent.add_child(h)
-	if res_key != "":
-		res_badge_containers[res_key] = h
-	return lbl
-
-func _update_progressive_ui(phase: int) -> void:
-	if boot_guide_overlay:
-		boot_guide_overlay.visible = (phase == GameState.StoryPhase.DORMANT)
-
-	# 0. DORMANT: 全UI非表示
-	if phase == GameState.StoryPhase.DORMANT:
-		if top_bar_node: top_bar_node.visible = false
-		if zoom_cluster_node: zoom_cluster_node.visible = false
-		if vstick_base: vstick_base.visible = false
-		if action_cluster_node: action_cluster_node.visible = false
-		if build_bar_panel: build_bar_panel.visible = false
-		if nav_overlay: nav_overlay.visible = false
-		return
-
-	# 1. MOVE 以降: 上部バーとジョイスティック開放
-	if top_bar_node: top_bar_node.visible = true
-	if vstick_base: vstick_base.visible = true
-	if zoom_cluster_node: zoom_cluster_node.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
-	if nav_overlay: nav_overlay.visible = (phase >= GameState.StoryPhase.SPACE)
-	if action_cluster_node: action_cluster_node.visible = (phase >= GameState.StoryPhase.MINE)
-	if build_bar_panel: build_bar_panel.visible = (grid_manager and grid_manager.is_build_mode and grid_manager.selected_tool != "none")
-
-	# ステータス行 (HP, Shield, Energy) と 右上ボタンの細分化表示
-	if stat_row_node: stat_row_node.visible = (phase >= GameState.StoryPhase.MOVE)
-	if right_top_buttons: right_top_buttons.visible = true
-	for b in btn_doctrine_cluster: b.visible = (phase >= GameState.StoryPhase.SPACE)
-	for b in btn_cam_cluster: b.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
-	for b in btn_sys_cluster: b.visible = (phase >= GameState.StoryPhase.MOVE)
-
-	# 資源バッジの段階的表示
-	for r_id in res_badge_containers.keys():
-		var b_node = res_badge_containers[r_id]
-		if r_id == "Fe":
-			b_node.visible = (phase >= GameState.StoryPhase.MINE)
-		elif r_id in ["Cu", "Si"]:
-			b_node.visible = (phase >= GameState.StoryPhase.FACTORY)
-		else:
-			b_node.visible = (phase >= GameState.StoryPhase.SPACE)
-
-	# アクションボタンの段階的表示
-	if btn_touch_mine:
-		btn_touch_mine.visible = (phase >= GameState.StoryPhase.MINE)
-	if btn_touch_drone:
-		btn_touch_drone.visible = (phase >= GameState.StoryPhase.DRONE)
-	if btn_touch_build:
-		btn_touch_build.visible = (phase >= GameState.StoryPhase.BUILD_MINER)
-	if btn_touch_brake:
-		btn_touch_brake.visible = (phase >= GameState.StoryPhase.FACTORY)
-
-	# 建築ツールの段階的表示 (GameState.unlocked_tools に完全同期)
-	for t_id in tool_buttons.keys():
-		var slot_panel = tool_buttons[t_id]["panel"]
-		var is_unlocked = GameState.unlocked_tools.get(t_id, false)
-		slot_panel.visible = is_unlocked
-
-	if mega_btn_node:
-		mega_btn_node.visible = (phase >= GameState.StoryPhase.SPACE)
-
-func _on_tool_unlocked(tool_name: String) -> void:
-	if tool_buttons.has(tool_name):
-		var slot_panel = tool_buttons[tool_name]["panel"]
-		slot_panel.visible = true
-		if is_inside_tree():
-			var tw = create_tween().set_parallel(true)
-			slot_panel.pivot_offset = slot_panel.size * 0.5
-			slot_panel.scale = Vector2(1.3, 1.3)
-			tw.tween_property(slot_panel, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		if grid_manager and grid_manager.selected_tool == "none":
-			grid_manager.select_tool(tool_name)
-
-func create_icon_btn(icon_p: String, _tip: String, on_click: Callable) -> Button:
-	var b = Button.new()
-	if ResourceLoader.exists(icon_p):
-		b.icon = load(icon_p)
-		b.expand_icon = true
-	b.custom_minimum_size = Vector2(32, 32)
-	b.pressed.connect(on_click)
-	return b
-
-func _build_minimal_mega_palette(sb_slot: StyleBoxFlat) -> void:
-	mega_panel = Panel.new()
-	mega_panel.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	mega_panel.anchor_left = 0.5
-	mega_panel.anchor_right = 0.5
-	mega_panel.anchor_top = 1.0
-	mega_panel.anchor_bottom = 1.0
-	mega_panel.offset_left = -150.0
-	mega_panel.offset_right = 150.0
-	mega_panel.offset_top = -155.0
-	mega_panel.offset_bottom = -85.0
-	mega_panel.visible = false
-	add_child(mega_panel)
-
-	var mh = HBoxContainer.new()
-	mh.position = Vector2(10, 10)
-	mh.add_theme_constant_override("separation", 10)
-	mega_panel.add_child(mh)
-
-	var mega_list = [
-		{"id": "elevator", "icon": "icon_elevator"},
-		{"id": "dyson", "icon": "icon_dyson"},
-		{"id": "citadel", "icon": "icon_citadel"},
-		{"id": "warpgate", "icon": "icon_warpgate"}
-	]
-	for m in mega_list:
-		var slot = PanelContainer.new()
-		slot.custom_minimum_size = Vector2(50, 50)
-		slot.add_theme_stylebox_override("panel", sb_slot)
-
+	for dd in dpad_data:
 		var b = Button.new()
-		b.icon = load("res://assets/ui/%s.png" % m["icon"])
-		b.custom_minimum_size = Vector2(48, 48)
-		b.pressed.connect(func():
-			GameState.start_megastructure(m["id"])
-			toggle_mega_palette()
-		)
-		slot.add_child(b)
-		mh.add_child(slot)
+		b.text = dd[0]
+		b.position = dd[1]
+		b.custom_minimum_size = Vector2(40, 40)
+		_style_button(b, Color(0.25, 0.72, 0.95, 0.8))
+		var dir: Vector2 = dd[2]
+		b.button_down.connect(func(): touch_move_vec += dir)
+		b.button_up.connect(func(): touch_move_vec = Vector2.ZERO)
+		touch_overlay.add_child(b)
 
-func toggle_mega_palette() -> void:
-	is_mega_open = not is_mega_open
-	if mega_panel: mega_panel.visible = is_mega_open
-	AudioSynth.play_synth("click")
+	var mine_btn = Button.new()
+	mine_btn.text = "MINE"
+	mine_btn.position = Vector2(142, 34)
+	mine_btn.custom_minimum_size = Vector2(58, 52)
+	_style_button(mine_btn, Color(0.35, 0.95, 0.72, 0.9))
+	mine_btn.button_down.connect(func(): touch_mining = true)
+	mine_btn.button_up.connect(func(): touch_mining = false)
+	touch_overlay.add_child(mine_btn)
 
-func _sync_tool_highlights() -> void:
-	if not grid_manager: return
-	for tid in tool_buttons.keys():
-		var item = tool_buttons[tid]
-		if tid == grid_manager.selected_tool:
-			item["panel"].modulate = Color(0.0, 2.5, 3.0)
-		else:
-			item["panel"].modulate = Color.WHITE
+func _connect_signals() -> void:
+	GameState.inventory_changed.connect(refresh_all)
+	GameState.state_updated.connect(refresh_all)
+	GameState.blueprint_selected.connect(func(_id): _rebuild_hotbar(); refresh_all())
+	GameState.log_event.connect(add_log)
 
-func _select_tool_by_id(tool_id: String) -> void:
-	if grid_manager:
-		grid_manager.select_tool(tool_id)
-		_sync_tool_highlights()
-		_update_build_mode_visuals()
+func _rebuild_hotbar() -> void:
+	for c in hotbar_container.get_children():
+		c.queue_free()
 
-func _update_tool_badges() -> void:
-	for tid in tool_buttons.keys():
-		var item = tool_buttons[tid]
-		if tid == "demolish":
-			item["lbl"].text = ""
+	# Always first: PICK / LASER MINE tool
+	_add_hotbar_btn("pick", "Mine[Q]", icons.get("pick", null), true)
+
+	for bid in GameState.BUILDINGS.keys():
+		var info = GameState.BUILDINGS[bid]
+		if info["category"] != active_category:
 			continue
-		var count = GameState.items.get(tid, 0)
-		item["lbl"].text = str(count)
-		if count > 0:
-			item["lbl"].add_theme_color_override("font_color", Color(0.2, 1.0, 0.6))
-		else:
-			item["lbl"].add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		var hk = info["hotkey"]
+		var short_name = info["name"].replace("Mining ", "").replace("Conveyor ", "").replace("Ore Lift ", "Lift ").replace("Inserter ", "").replace("Container ", "").replace("Blast ", "").replace("Auto ", "").replace("Macro ", "").replace("Defense ", "").replace("Geothermal ", "Geo ")
+		var label = "%s" % short_name
+		if hk != "":
+			label = "[%s] %s" % [hk, short_name]
+		var unlocked = GameState.drones >= int(info.get("req_drones", 0))
+		_add_hotbar_btn(bid, label, icons.get(bid, null), unlocked)
 
-func _on_resource_changed(type: String, amount: int) -> void:
-	var target_lbl: Label = null
-	var flash_col = Color(1.5, 2.5, 1.2)
-	match type:
-		"Fe": 
-			if fe_label: target_lbl = fe_label
-		"Cu": 
-			if cu_label: target_lbl = cu_label
-		"Ti": 
-			if ti_label: target_lbl = ti_label
-		"Si": 
-			if si_label: target_lbl = si_label
-		"He3": 
-			if he3_label: target_lbl = he3_label
-		"Plasma": 
-			if plasma_label: target_lbl = plasma_label
-		"Ice": 
-			if ice_label: target_lbl = ice_label
-		"DarkMatter": 
-			if dm_label: target_lbl = dm_label
-		"Neutronium": 
-			if nt_label: target_lbl = nt_label
+	# Always last: DEMOLISH tool
+	_add_hotbar_btn("demolish", "Salvage[X]", icons.get("demolish", null), true)
 
-	if target_lbl:
-		target_lbl.text = str(amount)
-		# 採掘・生産フィードバック (ポップアップバンプ ＆ フラッシュ)
-		var p_badge = target_lbl.get_parent()
-		if p_badge and is_inside_tree():
-			var tw = create_tween().set_parallel(true)
-			p_badge.pivot_offset = p_badge.size * 0.5
-			p_badge.scale = Vector2(1.22, 1.22)
-			target_lbl.add_theme_color_override("font_color", flash_col)
-			tw.tween_property(p_badge, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-			tw.tween_property(target_lbl, "theme_override_colors/font_color", Color(1.0, 1.0, 1.0), 0.3)
+func _add_hotbar_btn(tool_id: String, text_lbl: String, icon_tex: Texture2D, unlocked: bool) -> void:
+	var b = Button.new()
+	b.text = text_lbl
+	if icon_tex:
+		b.icon = icon_tex
+		b.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var is_sel = (GameState.selected_tool == tool_id)
+	var border = COL_ACTIVE if is_sel else (COL_BORDER if unlocked else Color(0.45, 0.32, 0.25))
+	var bg = Color(0.14, 0.30, 0.46, 0.98) if is_sel else Color(0.06, 0.09, 0.16, 0.94)
+	b.add_theme_stylebox_override("normal", _make_btn_style(bg, border))
+	b.add_theme_stylebox_override("hover", _make_btn_style(Color(0.14, 0.24, 0.36, 0.98), COL_ACTIVE))
+	b.add_theme_font_size_override("font_size", 11)
+	b.add_theme_color_override("font_color", Color(1, 1, 1) if unlocked else Color(0.7, 0.6, 0.5))
+	b.pressed.connect(func():
+		GameState.set_tool(tool_id)
+		AudioSynth.play_synth("click")
+	)
+	hotbar_container.add_child(b)
 
-func _on_fleet_changed(current: int, _max_val: int) -> void:
-	if fleet_lbl: fleet_lbl.text = str(current)
-	if current > prev_fleet_count:
-		# 自己複製達成バナーのポップアップ演出
-		if drone_repl_banner and drone_repl_lbl:
-			drone_repl_lbl.text = "[+] SUB-DRONE REPLICATED! (TOTAL: %d) [+]" % current
-			drone_repl_banner.visible = true
-			drone_repl_timer = 2.4
-			AudioSynth.play_synth("victory")
-			if is_inside_tree():
-				drone_repl_banner.pivot_offset = drone_repl_banner.size * 0.5
-				var tw = create_tween().set_parallel(true)
-				drone_repl_banner.scale = Vector2(1.15, 1.15)
-				tw.tween_property(drone_repl_banner, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	prev_fleet_count = current
+func _rebuild_tech_catalog() -> void:
+	for c in tech_list_vbox.get_children():
+		c.queue_free()
 
-func _on_player_health_changed(hp: float, max_hp: float, shield: float, max_shield: float) -> void:
-	if hp_bar:
-		hp_bar.max_value = max_hp
-		hp_bar.value = hp
-	if shield_bar:
-		shield_bar.max_value = max_shield
-		shield_bar.value = shield
+	tech_summary_lbl.text = "DOCKED DRONES: %d/%d  |  Fe:%d  Cu:%d  Si:%d  Ti:%d  Plate:%d  Circ:%d  |  Click a facility to project blue Blueprint Ghosts on valid slots." % [
+		GameState.drones, GameState.max_drones,
+		GameState.fe, GameState.cu, GameState.si, GameState.ti,
+		GameState.plate_fe, GameState.circuit
+	]
 
-func _on_raid_alert(_is_active: bool, _msg: String) -> void:
-	if alert_rect:
-		alert_rect.visible = true
-		alert_timer = 4.0
+	for bid in GameState.BUILDINGS.keys():
+		var info = GameState.BUILDINGS[bid]
+		var req_d = int(info.get("req_drones", 0))
+		var unlocked = GameState.drones >= req_d
+		var can_pay = GameState.can_afford(info["cost"])
 
-# ========================================================
-# 目標・導線 (Mission Flow) ＆ 画面外天体ナビゲーション
-# ========================================================
-func _on_quest_updated(_idx: int, _info: Dictionary) -> void:
-	_update_objective_text()
-	AudioSynth.play_synth("build")
+		var card = PanelContainer.new()
+		var c_border = Color(0.24, 0.82, 0.98) if (unlocked and can_pay) else (Color(0.85, 0.45, 0.28) if unlocked else Color(0.38, 0.38, 0.44))
+		card.add_theme_stylebox_override("panel", _make_panel_style(Color(0.06, 0.088, 0.145, 0.98), c_border, 1, 4))
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tech_list_vbox.add_child(card)
 
-func _on_quest_completed(_idx: int, _info: Dictionary) -> void:
-	AudioSynth.play_synth("victory")
-	if objective_panel and is_inside_tree():
-		objective_panel.pivot_offset = objective_panel.size * 0.5
-		var tw = create_tween().set_parallel(true)
-		tw.tween_property(objective_panel, "scale", Vector2(1.12, 1.12), 0.15).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(objective_panel, "modulate", Color(0.2, 2.8, 1.2), 0.15)
-		
-		get_tree().create_timer(0.45).timeout.connect(func():
-			if objective_panel and is_inside_tree():
-				var tw_back = create_tween().set_parallel(true)
-				tw_back.tween_property(objective_panel, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_SINE)
-				tw_back.tween_property(objective_panel, "modulate", Color.WHITE, 0.25)
+		var card_vbox = VBoxContainer.new()
+		card_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card_vbox.add_theme_constant_override("separation", 4)
+		card.add_child(card_vbox)
+
+		var top_row = HBoxContainer.new()
+		top_row.add_theme_constant_override("separation", 8)
+		card_vbox.add_child(top_row)
+
+		var icon_rect = TextureRect.new()
+		icon_rect.custom_minimum_size = Vector2(28, 28)
+		icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		icon_rect.texture = icons.get(bid, null)
+		top_row.add_child(icon_rect)
+
+		var nl = Label.new()
+		nl.text = "%s [%s]" % [info["name"], info["category"]]
+		nl.clip_text = true
+		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nl.add_theme_font_size_override("font_size", 13)
+		nl.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
+		top_row.add_child(nl)
+
+		var sel_btn = Button.new()
+		sel_btn.text = "SELECT"
+		_style_button(sel_btn, COL_ACTIVE if unlocked else Color(0.45, 0.35, 0.35))
+		sel_btn.pressed.connect(func():
+			active_category = info["category"]
+			GameState.set_tool(bid)
+			tech_modal.visible = false
+			_update_touch_pad_visibility()
+			AudioSynth.play_synth("select")
 		)
+		top_row.add_child(sel_btn)
 
-func show_missing_res_alert(res_name: String) -> void:
-	if missing_panel and missing_label:
-		missing_label.text = "NEED: %s" % res_name
-		missing_panel.visible = true
-		missing_timer = 1.2
-		AudioSynth.play_synth("alert")
+		var meta_r = HFlowContainer.new()
+		meta_r.add_theme_constant_override("h_separation", 8)
+		card_vbox.add_child(meta_r)
 
-func _update_objective_text() -> void:
-	if not objective_label: return
-	
-	match GameState.story_phase:
-		GameState.StoryPhase.DORMANT:
-			objective_label.text = "[ >>> TAP ANYWHERE TO INITIALIZE PROBE <<< ]"
-			objective_label.add_theme_color_override("font_color", Color(0.2, 2.0, 2.8))
-			return
-		GameState.StoryPhase.MOVE:
-			objective_label.text = "[ STEP 1: MOVE TO EXPLORE SURFACE FOR Fe ORE VEIN (WASD / V-STICK) ]"
-			objective_label.add_theme_color_override("font_color", Color(0.0, 2.4, 3.0))
-			return
-		GameState.StoryPhase.MINE:
-			var cur_fe = GameState.resources.get("Fe", 0)
-			objective_label.text = "[ STEP 2: HOLD [PWRMINE] TO HARVEST Fe ORE (%d / 40) ]" % mini(40, cur_fe)
-			objective_label.add_theme_color_override("font_color", Color(0.3, 2.2, 2.8))
-			return
-		GameState.StoryPhase.DRONE:
-			objective_label.text = "[ STEP 3: TAP GREEN [[+]REPLICATE] TO FABRICATE SUB-DRONE (40 Fe) ]"
-			objective_label.add_theme_color_override("font_color", Color(0.2, 2.5, 1.0))
-			return
-		GameState.StoryPhase.BUILD_MINER:
-			objective_label.text = "[ STEP 4: OPEN [[BUILD]BUILD] -> CHOOSE MINING DRILL -> TAP BLUE GHOST ]"
-			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
-			return
-		GameState.StoryPhase.FACTORY:
-			objective_label.text = "[ STEP 5: BUILD BELT & SMELTER TO AUTOMATE ORE REFINING ]"
-			objective_label.add_theme_color_override("font_color", Color(1.0, 2.0, 0.4))
-			return
-		GameState.StoryPhase.SPACE:
-			if GameState.quest_index >= GameState.quest_list.size():
-				objective_label.text = "[ SYSTEM LIBERATED: CONQUER THE STARS ]"
-				objective_label.add_theme_color_override("font_color", Color(0.2, 2.2, 0.8))
-				return
-				
-			var q = GameState.quest_list[GameState.quest_index]
-			var txt = ""
-			match q.get("req_type"):
-				"resource":
-					var cur = GameState.resources.get(q.get("target_res", "Fe"), 0)
-					txt = "%s: %d / %d" % [q.get("short", ""), cur, q.get("target_val", 0)]
-				"drone":
-					txt = "%s (%d/%d)" % [q.get("short", ""), GameState.attached_drones, q.get("target_val", 1)]
-				"building":
-					txt = "%s" % [q.get("short", "")]
-				"fleet":
-					txt = "%s (%d/%d)" % [q.get("short", ""), GameState.fleet_count, q.get("target_val", 100)]
-				"celestial_any":
-					var cur_p = GameState.resources.get("Plasma", 0) + GameState.resources.get("Ice", 0)
-					txt = "%s (%d/%d)" % [q.get("short", ""), cur_p, q.get("target_val", 5)]
-				"megastructure":
-					txt = "%s" % [q.get("short", "")]
-				"liberation":
-					txt = "%s (HP: %.0f)" % [q.get("short", ""), GameState.hostile_core_health]
-					
-			objective_label.text = "[ %s ]" % txt
-			objective_label.add_theme_color_override("font_color", Color(0.0, 2.2, 2.8))
+		var pwr = float(info["power"])
+		var pl = Label.new()
+		pl.text = ("+%d kW" % int(pwr)) if pwr >= 0 else ("%d kW" % int(pwr))
+		pl.add_theme_font_size_override("font_size", 11)
+		pl.add_theme_color_override("font_color", Color(0.45, 1.0, 0.6) if pwr >= 0 else Color(1.0, 0.72, 0.35))
+		meta_r.add_child(pl)
 
-func _on_nav_overlay_draw() -> void:
-	if not nav_overlay or not main_node: return
-	var camera = main_node.get_node_or_null("Camera2D")
-	var player = main_node.get_node_or_null("Player")
-	if not camera or not player: return
-
-	var vp_size = nav_overlay.size
-	var cam_p = camera.global_position
-	var zoom = camera.zoom
-	var half_w = (vp_size.x * 0.5) / zoom.x
-	var half_h = (vp_size.y * 0.5) / zoom.y
-	var screen_center = vp_size * 0.5
-
-	# 環境ハザードアラート (Solar Heat / Singularity Hazard Vignette)
-	if grid_manager:
-		var d_sun = player.global_position - grid_manager.SUN_POS
-		var dist_sun = d_sun.length()
-		if dist_sun < grid_manager.SUN_RADIUS * 1.4:
-			var heat_ratio = clampf((grid_manager.SUN_RADIUS * 1.4 - dist_sun) / (grid_manager.SUN_RADIUS * 0.4), 0.0, 1.0)
-			var h_pulse = (sin(hud_anim_time * 10.0) * 0.5 + 0.5)
-			var h_col = Color(1.0, 0.35, 0.05, (0.3 + 0.4 * h_pulse) * heat_ratio)
-			nav_overlay.draw_rect(Rect2(Vector2.ZERO, vp_size), h_col, false, 8.0)
-			nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 140, 150), "[!] WARNING: EXTREME SOLAR RADIATION [!]", HORIZONTAL_ALIGNMENT_CENTER, 280, 12, Color(1.0, 0.85, 0.2))
-
-		for p in grid_manager.active_planets:
-			if p.get("id", "") == "GARGANTUA-ZERO":
-				var d_bh = player.global_position - p["pos"]
-				if d_bh.length() < p["radius"] * 1.25:
-					var bh_ratio = clampf((p["radius"] * 1.25 - d_bh.length()) / (p["radius"] * 0.5), 0.0, 1.0)
-					var bh_pulse = (sin(hud_anim_time * 12.0) * 0.5 + 0.5)
-					var bh_col = Color(0.7, 0.1, 1.0, (0.35 + 0.45 * bh_pulse) * bh_ratio)
-					nav_overlay.draw_rect(Rect2(Vector2.ZERO, vp_size), bh_col, false, 8.0)
-					nav_overlay.draw_string(ThemeDB.fallback_font, Vector2(screen_center.x - 150, 150), "[!] EVENT HORIZON: TIDAL DISRUPTION [!]", HORIZONTAL_ALIGNMENT_CENTER, 300, 12, Color(0.9, 0.4, 1.0))
-
-	# ナビ対象天体リスト (星系の主要天体 Key Solar Bodies のみに厳格選定)
-	var targets: Array[Dictionary] = []
-	if grid_manager:
-		targets.append({"name": "HOME", "pos": grid_manager.HOME_CENTER, "col": Color(0.2, 0.8, 1.0), "icon": "[HOME]"})
-		targets.append({"name": "SUN", "pos": grid_manager.SUN_POS, "col": Color(1.0, 0.7, 0.1), "icon": "[SUN]"})
-		
-		# 1. 母星の公式衛星 LUNA-PRIME のみ
-		if not grid_manager.moon_body.is_empty():
-			targets.append({"name": "LUNA", "pos": grid_manager.moon_body.get("pos", Vector2.ZERO), "col": Color(0.3, 0.9, 1.0), "icon": "[LUNA]"})
-			
-		# 2. 彗星 COMET-NEOWISE
-		if not grid_manager.comet_body.is_empty():
-			targets.append({"name": "COMET", "pos": grid_manager.comet_body.get("pos", Vector2.ZERO), "col": Color(0.4, 0.9, 1.0), "icon": "[COMET]"})
-			
-		# 3. 特異天体 (ブラックホール Gargantua & パルサー Pulsar-X)
-		for p in grid_manager.active_planets:
-			var pid = p.get("id", "")
-			if pid == "GARGANTUA-ZERO":
-				targets.append({"name": "HOLE", "pos": p["pos"], "col": Color(0.8, 0.3, 1.0), "icon": "[HOLE]"})
-			elif pid == "PULSAR-X":
-				targets.append({"name": "PULSAR", "pos": p["pos"], "col": Color(0.1, 1.0, 0.8), "icon": "[PULSAR]"})
-		
-		# 4. 敵ボス要塞 (宇宙進出フェーズ以降かつ遠距離表示)
-		if GameState.story_phase >= GameState.StoryPhase.SPACE:
-			targets.append({"name": "BOSS", "pos": grid_manager.SUN_POS + Vector2(7600.0, -1200.0), "col": Color(1.0, 0.25, 0.25), "icon": "[BOSS]"})
-
-	# 画面外マーカーの角度ファンアウト（重なり回避）バッファ
-	var placed_marker_angles: Array[float] = []
-	var placed_screen_marker_positions: Array[Vector2] = []
-
-	for t in targets:
-		var t_pos: Vector2 = t["pos"]
-		var diff = t_pos - cam_p
-		var in_screen = (abs(diff.x) < half_w - 50.0 and abs(diff.y) < half_h - 50.0)
-		var p_dist = player.global_position.distance_to(t_pos)
-
-		if in_screen:
-			# 画面内：近接採掘可能な場合、ロックオンレティクル描画
-			if p_dist < 450.0:
-				var screen_tpos = screen_center + diff * zoom
-				var ret_col = t["col"]
-				nav_overlay.draw_arc(screen_tpos, 32.0, 0, TAU, 24, ret_col * Color(1, 1, 1, 0.6), 1.5)
-				nav_overlay.draw_line(screen_tpos - Vector2(38, 0), screen_tpos - Vector2(24, 0), ret_col, 2.0)
-				nav_overlay.draw_line(screen_tpos + Vector2(24, 0), screen_tpos + Vector2(38, 0), ret_col, 2.0)
-				nav_overlay.draw_line(screen_tpos - Vector2(0, 38), screen_tpos - Vector2(0, 24), ret_col, 2.0)
-				nav_overlay.draw_line(screen_tpos + Vector2(0, 24), screen_tpos + Vector2(0, 38), ret_col, 2.0)
-				nav_overlay.draw_string(ThemeDB.fallback_font, screen_tpos + Vector2(-36, 46), "LOCK-ON: %s" % t["name"], HORIZONTAL_ALIGNMENT_CENTER, -1, 9, ret_col)
+		var status_l = Label.new()
+		status_l.add_theme_font_size_override("font_size", 11)
+		if not unlocked:
+			status_l.text = "LOCKED (NEED %d DRONES)" % req_d
+			status_l.add_theme_color_override("font_color", Color(1.0, 0.45, 0.35))
+		elif can_pay:
+			status_l.text = "READY TO BUILD"
+			status_l.add_theme_color_override("font_color", Color(0.35, 1.0, 0.7))
 		else:
-			# 画面外：画面端にポインターアイコン＋距離を描画 (角度ファンアウトによる完全デコリジョン)
-			var base_dir = diff.normalized()
-			var base_angle = atan2(base_dir.y, base_dir.x)
-			
-			# 他の配置済みマーカーとの角度近接判定 ＆ ファンアウト
-			var spread_angle = base_angle
-			for placed_a in placed_marker_angles:
-				var diff_a = angle_difference(spread_angle, placed_a)
-				if abs(diff_a) < 0.24: # 約14度以内なら左右に押し出し
-					var push_sign = 1.0 if diff_a >= 0.0 else -1.0
-					spread_angle += push_sign * (0.24 - abs(diff_a))
-			placed_marker_angles.append(spread_angle)
-			
-			var dir = Vector2(cos(spread_angle), sin(spread_angle))
-			var edge_margin = 38.0
-			var max_dx = screen_center.x - edge_margin
-			var max_dy = screen_center.y - edge_margin
-			var scale_x = max_dx / maxf(0.001, abs(dir.x))
-			var scale_y = max_dy / maxf(0.001, abs(dir.y))
-			var scale_factor = minf(scale_x, scale_y)
-			var marker_p = screen_center + dir * scale_factor
-			
-			# 上部UIバー＆ナラティブ目的バナーとの干渉完全回避 (Safe Zone クランプ)
-			if marker_p.y < 118.0 and abs(marker_p.x - screen_center.x) < 280.0:
-				marker_p.y = 118.0
+			status_l.text = GameState.get_missing_text(info["cost"])
+			status_l.add_theme_color_override("font_color", Color(1.0, 0.38, 0.38))
+		meta_r.add_child(status_l)
 
-			# 左下バーチャルジョイスティック領域の完全回避
-			if marker_p.x < 230.0 and marker_p.y > vp_size.y - 230.0:
-				if marker_p.x < 115.0:
-					marker_p.y = vp_size.y - 235.0
-				else:
-					marker_p.x = 235.0
+		var cost_parts: PackedStringArray = []
+		for ck in info["cost"].keys():
+			cost_parts.append("%s:%d" % [ck.to_upper(), int(info["cost"][ck])])
+		var desc_l = Label.new()
+		desc_l.text = "Cost: %s  |  %s %s" % [" ".join(cost_parts), info["desc"], info["usage"]]
+		desc_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc_l.add_theme_font_size_override("font_size", 11)
+		desc_l.add_theme_color_override("font_color", Color(0.75, 0.84, 0.94))
+		card_vbox.add_child(desc_l)
 
-			# 右下アクションボタンクラスタ領域の完全回避
-			if marker_p.x > vp_size.x - 230.0 and marker_p.y > vp_size.y - 230.0:
-				if marker_p.x > vp_size.x - 115.0:
-					marker_p.y = vp_size.y - 235.0
-				else:
-					marker_p.x = vp_size.x - 235.0
+func toggle_tech_modal() -> void:
+	tech_modal.visible = not tech_modal.visible
+	if tech_modal.visible:
+		tech_modal.move_to_front()
+		_rebuild_tech_catalog()
+		_layout_tech_modal()
+		AudioSynth.play_synth("select")
+	_update_touch_pad_visibility()
 
-			# 下部ビルドパレットバー領域の完全回避
-			if marker_p.y > vp_size.y - 85.0 and abs(marker_p.x - screen_center.x) < 380.0:
-				marker_p.y = vp_size.y - 88.0
+func add_log(msg: String, level: String = "info") -> void:
+	var col = Color(0.75, 0.88, 1.0)
+	if level == "good": col = Color(0.4, 1.0, 0.68)
+	elif level == "warn": col = Color(1.0, 0.78, 0.35)
+	elif level == "error": col = Color(1.0, 0.35, 0.35)
 
-			# 他のマーカーとのX/Yスクリーン座標デコリジョン (最低84pxの横間隔を強制保証)
-			for existing_p in placed_screen_marker_positions:
-				if abs(marker_p.y - existing_p.y) < 20.0 and abs(marker_p.x - existing_p.x) < 86.0:
-					var shift = (86.0 - abs(marker_p.x - existing_p.x))
-					if marker_p.x >= existing_p.x:
-						marker_p.x += shift
-					else:
-						marker_p.x -= shift
-			placed_screen_marker_positions.append(marker_p)
+	log_entries.append({"text": msg, "col": col, "life": 14.0})
+	if log_entries.size() > 4:
+		log_entries.remove_at(0)
+	_refresh_log_ui()
 
-			var dist_km = p_dist / 100.0
-			var dist_str = "%.1fkm" % dist_km if dist_km >= 1.0 else "%.0fm" % p_dist
-			var lbl = "%s %s" % [t["icon"], dist_str]
-			var lbl_size = Vector2(80.0, 16.0)
-			var lbl_rect = Rect2(marker_p - Vector2(40, 12), lbl_size)
-			
-			var m_col: Color = t["col"]
-			nav_overlay.draw_circle(marker_p, 3.5, m_col)
-			nav_overlay.draw_line(marker_p, marker_p + dir * 7.0, m_col, 2.0)
-			nav_overlay.draw_string(ThemeDB.fallback_font, lbl_rect.position + Vector2(0, 11), lbl, HORIZONTAL_ALIGNMENT_CENTER, int(lbl_size.x), 9, m_col * Color(1.4, 1.4, 1.4, 0.95))
+func _refresh_log_ui() -> void:
+	for c in log_vbox.get_children():
+		log_vbox.remove_child(c)
+		c.queue_free()
+	for e in log_entries:
+		var l = Label.new()
+		l.text = "> " + e["text"]
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size = Vector2(260, 0)
+		l.add_theme_font_size_override("font_size", 10)
+		l.add_theme_color_override("font_color", e["col"])
+		log_vbox.add_child(l)
+	call_deferred("_position_telemetry")
 
-	# ========================================================
-	# 最優先: 現在のクエスト目標地点へのオフスクリーン矢印誘導
-	# ========================================================
-	if grid_manager and grid_manager.has_method("get_current_mission_waypoint_info"):
-		var m_info = grid_manager.get_current_mission_waypoint_info()
-		if not m_info.is_empty():
-			var m_pos: Vector2 = m_info["pos"]
-			var m_diff = m_pos - cam_p
-			var m_in_screen = (abs(m_diff.x) < half_w - 40.0 and abs(m_diff.y) < half_h - 40.0)
-			var m_pdist = player.global_position.distance_to(m_pos)
-			var m_col: Color = m_info.get("color", Color(0.0, 2.5, 3.0))
+func refresh_all() -> void:
+	for rk in res_labels.keys():
+		res_labels[rk].text = str(GameState.get_res(rk))
 
-			if not m_in_screen:
-				# 画面外：画面端にパルスするターゲットマーカーを描画 (Safe Zone クランプ適用)
-				var dir = m_diff.normalized()
-				var edge_margin = 46.0
-				var max_dx = screen_center.x - edge_margin
-				var max_dy = screen_center.y - edge_margin
-				var scale_factor = minf(max_dx / maxf(0.001, abs(dir.x)), max_dy / maxf(0.001, abs(dir.y)))
-				var marker_p = screen_center + dir * scale_factor
-				
-				# 上部UI Safe Zone 回避
-				if marker_p.y < 120.0 and abs(marker_p.x - screen_center.x) < 280.0:
-					marker_p.y = 120.0
+	lbl_drones.text = "DRONES:%d/%d" % [GameState.drones, GameState.max_drones]
+	var dcost = GameState.get_drone_craft_cost()
+	var dc_parts: PackedStringArray = []
+	for k in dcost.keys():
+		dc_parts.append("%d%s" % [int(dcost[k]), k.capitalize()])
+	btn_craft_drone.text = "+DRONE (%s)" % " ".join(dc_parts)
+	btn_craft_drone.disabled = GameState.drones >= GameState.max_drones
 
-				var pulse = (sin(hud_anim_time * 6.0) * 0.5 + 0.5)
-				var p_col = m_col * Color(1.0 + pulse * 1.5, 1.0 + pulse * 1.5, 1.0 + pulse * 1.5, 1.0)
-				
-				# 菱形アイコン
-				var sz = 7.0 + pulse * 3.0
-				var poly = PackedVector2Array([
-					marker_p + Vector2(0, -sz),
-					marker_p + Vector2(sz, 0),
-					marker_p + Vector2(0, sz),
-					marker_p + Vector2(-sz, 0)
-				])
-				nav_overlay.draw_colored_polygon(poly, p_col)
-				nav_overlay.draw_polyline(poly, Color.WHITE, 1.5)
-				nav_overlay.draw_line(marker_p, marker_p + dir * 12.0, Color.WHITE, 2.0)
+	lbl_fleet.text = "FLEET:%d/10000" % GameState.fleet_count
+	lbl_power.text = "PWR:%d/%dkW (%d%%)" % [int(GameState.power_use), int(GameState.power_gen), int(GameState.power_ratio * 100.0)]
 
-				var m_dist_km = m_pdist / 100.0
-				var m_dist_str = "%.1fkm" % m_dist_km if m_dist_km >= 1.0 else "%.0fm" % m_pdist
-				var m_txt = "GOAL: %s [%s]" % [m_info.get("name", "MISSION"), m_dist_str]
-				nav_overlay.draw_string(ThemeDB.fallback_font, marker_p - Vector2(40, 14), m_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 10, Color(2.5, 2.5, 1.2))
+	if GameState.printer_active:
+		lbl_printer.text = "REPLICATOR:%d%%" % int(GameState.printer_progress * 100.0)
+	else:
+		lbl_printer.text = "PRINTER:OFFLINE"
+	printer_bar.value = GameState.printer_progress * 100.0
 
-	# ========================================================
-	# 宇宙フェーズ: 星系俯瞰ミニレーダー (System Mini Radar)
-	# ========================================================
-	if GameState.story_phase >= GameState.StoryPhase.SPACE and grid_manager:
-		var r_center = Vector2(vp_size.x - 65.0, 68.0)
-		var r_rad = 42.0
-		var r_scale = r_rad / 10000.0 # 太陽系全域(約10000px)をマッピング
-		
-		# レーダー背景とリング
-		nav_overlay.draw_circle(r_center, r_rad, Color(0.02, 0.05, 0.1, 0.75))
-		nav_overlay.draw_arc(r_center, r_rad, 0, TAU, 32, Color(0.1, 0.7, 0.9, 0.6), 1.5)
-		nav_overlay.draw_arc(r_center, r_rad * 0.5, 0, TAU, 24, Color(0.1, 0.7, 0.9, 0.25), 1.0)
-		nav_overlay.draw_line(r_center - Vector2(r_rad, 0), r_center + Vector2(r_rad, 0), Color(0.1, 0.7, 0.9, 0.2), 1.0)
-		nav_overlay.draw_line(r_center - Vector2(0, r_rad), r_center + Vector2(0, r_rad), Color(0.1, 0.7, 0.9, 0.2), 1.0)
-		
-		var sun_p = grid_manager.SUN_POS
-		# 太陽 (中心相対)
-		nav_overlay.draw_circle(r_center, 3.5, Color(1.0, 0.8, 0.2, 0.95))
-		
-		# 母星
-		var home_r_pos = r_center + (grid_manager.HOME_CENTER - sun_p) * r_scale
-		if home_r_pos.distance_to(r_center) <= r_rad:
-			nav_overlay.draw_circle(home_r_pos, 2.8, Color(0.2, 0.8, 1.0, 0.95))
-			
-		# ブラックホール
-		for p in grid_manager.active_planets:
-			if p.get("id", "") == "GARGANTUA-ZERO":
-				var bh_r_pos = r_center + (p["pos"] - sun_p) * r_scale
-				if bh_r_pos.distance_to(r_center) <= r_rad:
-					nav_overlay.draw_circle(bh_r_pos, 2.5, Color(0.8, 0.2, 1.0, 0.9))
-					
-		# 敵要塞
-		var boss_pos = sun_p + Vector2(7600.0, -1200.0)
-		var boss_r_pos = r_center + (boss_pos - sun_p) * r_scale
-		if boss_r_pos.distance_to(r_center) <= r_rad and GameState.hostile_core_health > 0.0:
-			nav_overlay.draw_circle(boss_r_pos, 3.0, Color(1.0, 0.2, 0.2, 0.95))
-			
-		# 自機位置 (パルス点滅)
-		var p_r_pos = r_center + (player.global_position - sun_p) * r_scale
-		if p_r_pos.distance_to(r_center) <= r_rad:
-			var p_pulse = 0.5 + 0.5 * sin(hud_anim_time * 8.0)
-			nav_overlay.draw_circle(p_r_pos, 3.0, Color(1.0, 1.0, 1.0, p_pulse))
-			
-		nav_overlay.draw_string(ThemeDB.fallback_font, r_center + Vector2(-30, r_rad + 12), "RADAR: 10 AU", HORIZONTAL_ALIGNMENT_CENTER, 60, 8, Color(0.2, 0.8, 1.0, 0.8))
+	for d_id in doctrine_btns.keys():
+		var b: Button = doctrine_btns[d_id]
+		var act = (GameState.current_doctrine == d_id)
+		_style_button(b, COL_ACTIVE if act else COL_BORDER)
+
+	for cid in cat_btns.keys():
+		var cb: Button = cat_btns[cid]
+		_style_button(cb, COL_ACTIVE if cid == active_category else COL_BORDER)
+
+	if btn_orbit_cam:
+		_style_button(btn_orbit_cam, COL_ACTIVE if orbit_cam_active else COL_BORDER)
+
+	if tech_modal.visible:
+		_rebuild_tech_catalog()
+
+func _process(delta: float) -> void:
+	if player_ref and player_ref.has_method("set_virtual_input"):
+		player_ref.set_virtual_input(touch_move_vec, touch_mining)
+
+		var spd = int(player_ref.velocity.length())
+		var py = player_ref.position.y
+		if py < -52.0:
+			lbl_zone.text = "ZONE: ORBIT +%dm (INERTIAL)" % int(absf(py) * 0.5)
+		elif py > 28.0:
+			lbl_zone.text = "ZONE: CAVERN -%dm (ROCK)" % int(py * 0.5)
+		else:
+			lbl_zone.text = "ZONE: SURFACE HORIZON (ANCHORED)"
+		lbl_speed.text = "VEL:%d u/s | SWARM:%d | HOST:%d" % [spd, GameState.fleet_count, GameState.hostiles_active]
+
+	var changed = false
+	for i in range(log_entries.size() - 1, -1, -1):
+		log_entries[i]["life"] -= delta
+		if log_entries[i]["life"] <= 0.0:
+			log_entries.remove_at(i)
+			changed = true
+	if changed:
+		_refresh_log_ui()
+
+func _on_viewport_resized() -> void:
+	var vp = get_viewport().get_visible_rect().size
+	var narrow = vp.x < 780.0
+
+	top_left_panel.position = Vector2(8, 8)
+	top_left_panel.size = Vector2(minf(vp.x - 16.0, 520.0 if not narrow else vp.x - 16.0), 0)
+
+	var tr_w = minf(vp.x * 0.44, 520.0) if not narrow else (vp.x - 16.0)
+	top_right_flow.size = Vector2(tr_w, 44.0)
+	if narrow:
+		top_right_flow.position = Vector2(8.0, top_left_panel.position.y + maxf(94.0, top_left_panel.size.y) + 8.0)
+		top_right_flow.alignment = FlowContainer.ALIGNMENT_BEGIN
+	else:
+		top_right_flow.position = Vector2(vp.x - tr_w - 8.0, 8.0)
+		top_right_flow.alignment = FlowContainer.ALIGNMENT_END
+
+	var bar_w = clampf(vp.x - (340.0 if not narrow else 16.0), 300.0, 920.0)
+	bottom_bar.size = Vector2(bar_w, 86.0)
+	if narrow:
+		bottom_bar.position = Vector2((vp.x - bar_w) * 0.5, vp.y - 94.0)
+	else:
+		bottom_bar.position = Vector2(maxf(12.0, (vp.x - 310.0 - bar_w) * 0.5), vp.y - 94.0)
+
+	telemetry_panel.visible = not narrow
+	_position_telemetry()
+	_layout_tech_modal()
+	_update_touch_pad_visibility()
+
+func _position_telemetry() -> void:
+	if not telemetry_panel or not telemetry_panel.visible:
+		return
+	var vp = get_viewport().get_visible_rect().size
+	var h = clampf(telemetry_panel.get_combined_minimum_size().y, 88.0, 140.0)
+	telemetry_panel.size = Vector2(284.0, h)
+	telemetry_panel.position = Vector2(vp.x - 294.0, vp.y - h - 10.0)
+
+func _layout_tech_modal() -> void:
+	var vp = get_viewport().get_visible_rect().size
+	var mw = minf(vp.x - 16.0, 860.0)
+	var mh = minf(vp.y - 36.0, 620.0)
+	tech_modal.size = Vector2(mw, mh)
+	tech_modal.position = Vector2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5)
+
+func _update_touch_pad_visibility() -> void:
+	var vp = get_viewport().get_visible_rect().size
+	var show_pad = (not tech_modal.visible) and (force_touch_pad or OS.has_feature("mobile") or vp.x < 780.0)
+	touch_overlay.visible = show_pad
+	if show_pad:
+		touch_overlay.position = Vector2(10.0, vp.y - 230.0)
+
+func is_blocking_world_input() -> bool:
+	if tech_modal.visible:
+		return true
+	var mp = get_viewport().get_mouse_position()
+	for p in [top_left_panel, top_right_flow, bottom_bar, telemetry_panel]:
+		if p and p.visible and p.get_global_rect().has_point(mp):
+			return true
+	if touch_overlay.visible and Rect2(touch_overlay.position, Vector2(210, 140)).has_point(mp):
+		return true
+	return false
