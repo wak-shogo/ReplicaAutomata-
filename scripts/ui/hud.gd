@@ -18,7 +18,7 @@ signal brake_requested
 enum MenuState { FIELD, BUILD_TREE, CMD_TREE }
 
 const BUILD_BRANCHES: Array[String] = ["MINE", "FACTORY", "POWER", "MEGA"]
-const CMD_TABS: Array[String] = ["FLEET", "SYSTEM"]
+const CMD_TABS: Array[String] = ["PRINTER", "SWARM", "SYSTEM"]
 
 var menu_state: int = MenuState.FIELD
 var active_branch_idx: int = 0
@@ -41,6 +41,9 @@ var joy_vec: Vector2 = Vector2.ZERO
 var btn_rects: Dictionary = {} # key -> Rect2 / pos+r
 var tree_hitboxes: Array[Dictionary] = [] # {rect: Rect2, action: Callable}
 var pressed_flash: Dictionary = {} # key -> float
+var held_btn: String = ""
+var held_btn_idx: int = -1
+var last_pointer_press_ms: int = 0
 
 var orbit_cam_active: bool = false
 var status_banner: String = ""
@@ -48,6 +51,7 @@ var status_banner_col: Color = Color(0.35, 0.95, 1.0)
 var status_banner_t: float = 0.0
 var stick_nav_cd: float = 0.0
 var anim_time: float = 0.0
+var telemetry_t: float = 0.0
 
 # AAA Sci-Fi Color Palette
 const C_BG = Color(0.035, 0.055, 0.105, 0.88)
@@ -163,34 +167,70 @@ func _process(delta: float) -> void:
 			player_ref.set_virtual_input(Vector2.ZERO, false)
 		_poll_menu_stick()
 	else:
+		if held_btn == "A":
+			pressed_flash["A"] = 0.08
 		if player_ref and player_ref.has_method("set_virtual_input"):
-			player_ref.set_virtual_input(joy_vec, pressed_flash.get("A", 0.0) > 0.0)
+			player_ref.set_virtual_input(joy_vec, (held_btn == "A") or (pressed_flash.get("A", 0.0) > 0.0))
 
 	if hud_canvas:
 		hud_canvas.queue_redraw()
 
+	if OS.has_feature("web") and player_ref:
+		telemetry_t += delta
+		if telemetry_t >= 0.25:
+			telemetry_t = 0.0
+			var near_ast := {}
+			if world_ref and world_ref.asteroids.size() > 0:
+				var best_d := 1e9
+				for a in world_ref.asteroids:
+					var d := float(a["pos"].distance_to(player_ref.position))
+					if d < best_d:
+						best_d = d
+						near_ast = {"x": int(a["pos"].x), "y": int(a["pos"].y), "ore": a["ore"], "d": int(d)}
+			var payload := {
+				"fe": GameState.fe, "cu": GameState.cu, "si": GameState.si, "ti": GameState.ti,
+				"plate_fe": GameState.plate_fe, "circuit": GameState.circuit, "probe_stock": GameState.probe_stock,
+				"eng": GameState.engine_tier, "spd": int(GameState.get_flight_speed()),
+				"drones": GameState.drones, "fleet": GameState.fleet_count, "launches": GameState.total_launches,
+				"doc": GameState.current_doctrine, "tool": GameState.selected_tool, "menu": menu_state,
+				"px": int(player_ref.position.x), "py": int(player_ref.position.y),
+				"alt": int(maxf(0.0, player_ref.position.length() - PlanetWorld.R_SURFACE)),
+				"r": int(player_ref.position.length()),
+				"boss_hp": int(GameState.boss_hp), "boss_dead": GameState.boss_defeated,
+				"won": GameState.game_won,
+				"mega": GameState.megastructures,
+				"orbit_cam": orbit_cam_active,
+				"bldg": player_ref.factory.buildings.size() if ("factory" in player_ref and player_ref.factory) else 0,
+				"near_ast": near_ast,
+			}
+			JavaScriptBridge.eval("window.__hudTelemetry = %s;" % JSON.stringify(payload))
+
 func _poll_menu_stick() -> void:
+	var j = joy_vec + Vector2(Input.get_joy_axis(0, JOY_AXIS_LEFT_X), Input.get_joy_axis(0, JOY_AXIS_LEFT_Y))
+	# Instant cooldown reset on stick release so rapid discrete flicks never drop
+	if j.length() < 0.25:
+		stick_nav_cd = 0.0
+		return
 	if stick_nav_cd > 0.0:
 		return
-	var j = joy_vec + Vector2(Input.get_joy_axis(0, JOY_AXIS_LEFT_X), Input.get_joy_axis(0, JOY_AXIS_LEFT_Y))
 	if absf(j.x) > 0.55 and absf(j.x) >= absf(j.y):
 		var tab_step = 1 if j.x > 0.0 else -1
 		if menu_state == MenuState.BUILD_TREE:
 			active_branch_idx = posmod(active_branch_idx + tab_step, BUILD_BRANCHES.size())
 			cursor_idx = 0
-			stick_nav_cd = 0.22
+			stick_nav_cd = 0.38
 			AudioSynth.play_synth("click")
 		elif menu_state == MenuState.CMD_TREE:
 			active_cmd_tab_idx = posmod(active_cmd_tab_idx + tab_step, CMD_TABS.size())
 			cursor_idx = 0
-			stick_nav_cd = 0.22
+			stick_nav_cd = 0.38
 			AudioSynth.play_synth("click")
 	elif absf(j.y) > 0.45:
 		var step = 1 if j.y > 0.45 else -1
 		var items = _get_active_tree_nodes()
 		if items.size() > 0:
 			cursor_idx = posmod(cursor_idx + step, items.size())
-			stick_nav_cd = 0.18
+			stick_nav_cd = 0.38
 			AudioSynth.play_synth("click")
 
 func _input(event: InputEvent) -> void:
@@ -203,7 +243,11 @@ func _input(event: InputEvent) -> void:
 			if event.index == joy_drag_idx:
 				joy_drag_idx = -1
 				joy_vec = Vector2.ZERO
+				stick_nav_cd = 0.0
 				get_viewport().set_input_as_handled()
+			if event.index == held_btn_idx:
+				held_btn = ""
+				held_btn_idx = -1
 	elif event is InputEventScreenDrag:
 		if event.index == joy_drag_idx:
 			_update_joy_from_pos(event.position)
@@ -216,6 +260,10 @@ func _input(event: InputEvent) -> void:
 			if joy_drag_idx == 99:
 				joy_drag_idx = -1
 				joy_vec = Vector2.ZERO
+				stick_nav_cd = 0.0
+			if held_btn_idx == 99:
+				held_btn = ""
+				held_btn_idx = -1
 	elif event is InputEventMouseMotion and joy_drag_idx == 99:
 		_update_joy_from_pos(event.position)
 
@@ -243,27 +291,36 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 
 func _handle_pointer_press(pos: Vector2, idx: int) -> bool:
+	var now_ms = Time.get_ticks_msec()
+	if now_ms - last_pointer_press_ms < 120:
+		return false
+
 	# Check ABXY Diamond buttons first
 	for k in ["A", "B", "X", "Y"]:
 		var bd = btn_rects.get(k, null)
 		if bd and pos.distance_to(bd["pos"]) <= float(bd["r"]) + 8.0:
+			last_pointer_press_ms = now_ms
+			held_btn = k
+			held_btn_idx = idx
 			_trigger_abxy(k)
 			return true
+
+	# Check Left Analog Joystick zone (active in BOTH field & menu tree tab/row navigation!)
+	if pos.distance_to(joy_center) <= joy_radius * 1.45:
+		joy_drag_idx = idx
+		_update_joy_from_pos(pos)
+		return true
 
 	# Check 2-Click Tree Node hitboxes when menu is open
 	if menu_state != MenuState.FIELD:
 		for hb in tree_hitboxes:
 			if hb["rect"].has_point(pos):
+				last_pointer_press_ms = now_ms
 				hb["action"].call()
 				return true
 		# Tapping backdrop outside tree closes cleanly
+		last_pointer_press_ms = now_ms
 		menu_state = MenuState.FIELD
-		return true
-
-	# Check Left Analog Joystick zone
-	if pos.distance_to(joy_center) <= joy_radius * 1.45:
-		joy_drag_idx = idx
-		_update_joy_from_pos(pos)
 		return true
 
 	return false
@@ -275,6 +332,8 @@ func _update_joy_from_pos(pos: Vector2) -> void:
 		joy_vec = delta / maxf(d, joy_radius)
 		if joy_vec.length() > 1.0:
 			joy_vec = joy_vec.normalized()
+		if menu_state != MenuState.FIELD:
+			_poll_menu_stick()
 	else:
 		joy_vec = Vector2.ZERO
 
@@ -300,10 +359,12 @@ func _trigger_abxy(btn: String) -> void:
 					player_ref.trigger_primary_action()
 			"X":
 				menu_state = MenuState.BUILD_TREE
+				active_branch_idx = 0
 				cursor_idx = 0
 				AudioSynth.play_synth("select")
 			"Y":
 				menu_state = MenuState.CMD_TREE
+				active_cmd_tab_idx = 0
 				cursor_idx = 0
 				AudioSynth.play_synth("select")
 		return
@@ -357,14 +418,39 @@ func _get_active_tree_nodes() -> Array[Dictionary]:
 				})
 		MenuState.CMD_TREE:
 			if active_cmd_tab_idx == 0:
+				var eng_info = GameState.get_next_engine_info()
+				if not eng_info.is_empty():
+					var ec: PackedStringArray = []
+					for k in eng_info["cost"].keys(): ec.append("%d %s" % [int(eng_info["cost"][k]), k.to_upper()])
+					var can_e = GameState.can_afford(eng_info["cost"])
+					out.append({
+						"label": "PRINT: %s (%s)" % [eng_info["name"].to_upper(), " ".join(ec)],
+						"sub": eng_info["desc"] if can_e else GameState.get_missing_text(eng_info["cost"]) + " | " + eng_info["desc"],
+						"col": C_EMERALD if can_e else C_AMBER,
+						"icon": icons.get("pick", null),
+						"action": func():
+							if GameState.try_print_engine(): AudioSynth.play_synth("craft")
+							else: AudioSynth.play_synth("error")
+							menu_state = MenuState.FIELD
+					})
+				else:
+					out.append({
+						"label": "PROPULSION: WARP CORE Mk-III MAX",
+						"sub": "Top flight speed 520 u/s active",
+						"col": C_CYAN,
+						"icon": icons.get("pick", null),
+						"action": func(): menu_state = MenuState.FIELD
+					})
+
 				var dcost = GameState.get_drone_craft_cost()
 				var dc: PackedStringArray = []
 				for k in dcost.keys(): dc.append("%d %s" % [int(dcost[k]), k.to_upper()])
-				out.append({"label": "CRAFT DRONE (%s)" % " ".join(dc), "sub": "Dock +1 Drone (%d/%d) & unlock tech" % [GameState.drones, GameState.max_drones], "col": C_EMERALD, "icon": icons.get("probe_stock", null), "action": func():
+				out.append({"label": "CRAFT DRONE (%s)" % " ".join(dc), "sub": "Dock +1 Drone (%d/%d) & unlock tech" % [GameState.drones, GameState.max_drones], "col": C_EMERALD if GameState.can_afford(dcost) else C_AMBER, "icon": icons.get("probe_stock", null), "action": func():
 					if GameState.try_craft_drone(): AudioSynth.play_synth("craft")
 					else: AudioSynth.play_synth("error")
 					menu_state = MenuState.FIELD
 				})
+			elif active_cmd_tab_idx == 1:
 				var docs = [
 					[GameState.Doctrine.HARVEST, "SWARM: HARVEST", "Mine orbital asteroids passively"],
 					[GameState.Doctrine.REPLICATE, "SWARM: REPLICATE", "Multiply Swarm fleet in orbit"],
@@ -463,10 +549,13 @@ func _on_hud_draw() -> void:
 	hud_canvas.draw_string(font, Vector2(148, 87), "FLEET %d" % GameState.fleet_count, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, C_CYAN)
 	hud_canvas.draw_string(font, Vector2(246, 87), "PWR %d/%dkW" % [int(GameState.power_use), int(GameState.power_gen)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, pwr_col)
 
-	# Active Tool / Status Micro-Line cleanly padded inside bottom border
+	# Active Engine / Tool / Atmosphere Telemetry inside Cluster
 	var doc_names = ["HARVEST", "REPLICATE", "DEFEND", "ASSAULT"]
-	var tname = "MINE LASER" if GameState.selected_tool == "pick" else ("SALVAGE" if GameState.selected_tool == "demolish" else GameState.BUILDINGS.get(GameState.selected_tool, {}).get("name", "TOOL"))
-	hud_canvas.draw_string(font, Vector2(26, 111), "MODE:%s | SWARM:%s" % [tname.to_upper(), doc_names[GameState.current_doctrine]], HORIZONTAL_ALIGNMENT_LEFT, int(tl_w - 36), 12, C_MUTED)
+	var eng_lbl = "GROUNDED" if GameState.engine_tier == 0 else "Mk-%d(%du/s)" % [GameState.engine_tier, int(GameState.get_flight_speed())]
+	var alt_m = int(maxf(0.0, player_ref.position.length() - PlanetWorld.R_SURFACE)) if player_ref else 0
+	var tname = "LASER" if GameState.selected_tool == "pick" else ("SALVAGE" if GameState.selected_tool == "demolish" else GameState.BUILDINGS.get(GameState.selected_tool, {}).get("name", "TOOL"))
+	var alt_str = ("ALT %d/3600m" % alt_m) if (player_ref and player_ref.position.length() > PlanetWorld.R_SURFACE + 28.0 and player_ref.position.length() <= PlanetWorld.R_ATMOS_OUTER) else ("SPACE" if (player_ref and player_ref.position.length() > PlanetWorld.R_ATMOS_OUTER) else doc_names[GameState.current_doctrine])
+	hud_canvas.draw_string(font, Vector2(26, 111), "%s | ENG:%s | %s" % [tname.to_upper(), eng_lbl, alt_str], HORIZONTAL_ALIGNMENT_LEFT, int(tl_w - 36), 11, C_MUTED)
 
 	# 2. TOP-RIGHT OPEN-WORLD RADAR MINIMAP
 	var rad_r = 40.0 if narrow else 46.0
@@ -474,9 +563,10 @@ func _on_hud_draw() -> void:
 	hud_canvas.draw_circle(rad_c, rad_r + 2.0, C_BG_DARK)
 	hud_canvas.draw_arc(rad_c, rad_r + 2.0, 0.0, TAU, 36, C_STEEL, 1.8)
 	hud_canvas.draw_arc(rad_c, rad_r * 0.45, 0.0, TAU, 24, Color(0.18, 0.32, 0.48, 0.45), 1.0)
-	# Origin-Prime center dot
+	# Origin-Prime scaled center dot + atmosphere ring
 	hud_canvas.draw_circle(rad_c, 4.5, Color(0.32, 0.72, 0.95))
 	var map_scale = rad_r / PlanetWorld.WORLD_LIMIT_R
+	hud_canvas.draw_arc(rad_c, maxf(6.0, PlanetWorld.R_ATMOS_OUTER * map_scale), 0.0, TAU, 24, Color(0.22, 0.78, 1.0, 0.4), 1.0)
 	if world_ref:
 		for cbody in world_ref.celestials:
 			var cp = rad_c + cbody["pos"] * map_scale
@@ -486,12 +576,17 @@ func _on_hud_draw() -> void:
 	if player_ref:
 		var pp = rad_c + player_ref.position * map_scale
 		hud_canvas.draw_circle(pp, 3.2, C_EMERALD)
-	var zone_lbl = "SPACE" if (player_ref and player_ref.position.length() > PlanetWorld.R_SURFACE + 72.0) else "PLANET"
+	var zone_lbl = "GROUND" if GameState.engine_tier == 0 else ("SPACE" if (player_ref and player_ref.position.length() > PlanetWorld.R_ATMOS_OUTER) else ("ATMOS" if (player_ref and player_ref.position.length() > PlanetWorld.R_SURFACE + 28.0) else "PLANET"))
 	var zsz = font.get_string_size(zone_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 	hud_canvas.draw_string(font, Vector2(rad_c.x - zsz.x * 0.5, rad_c.y + rad_r + 16.0), zone_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_CYAN)
 
-	# 3. STATUS BANNER (Clean floating cue when event occurs)
-	if status_banner_t > 0.0:
+	# 3. STATUS BANNER / VICTORY BANNER
+	if GameState.game_won:
+		var vw = minf(vp.x - 40.0, 440.0)
+		var vrect = Rect2((vp.x - vw) * 0.5, tl_rect.end.y + 10.0, vw, 34.0)
+		_draw_chamfer_panel(vrect, Color(0.04, 0.14, 0.10, 0.96), C_EMERALD, 8.0, 2.0)
+		hud_canvas.draw_string(font, vrect.position + Vector2(14, 22), "VICTORY: WARP GATE & CORE HUB COMPLETE!", HORIZONTAL_ALIGNMENT_LEFT, int(vw - 24), 13, C_EMERALD)
+	elif status_banner_t > 0.0:
 		var bw = minf(vp.x - 40.0, 420.0)
 		var brect = Rect2((vp.x - bw) * 0.5, tl_rect.end.y + 10.0, bw, 30.0)
 		_draw_chamfer_panel(brect, Color(0.03, 0.05, 0.09, 0.92), status_banner_col, 7.0, 1.5)
@@ -504,12 +599,12 @@ func _on_hud_draw() -> void:
 	var stick_pos = joy_center + joy_vec * (joy_radius * 0.65)
 	_draw_octagon_btn(stick_pos, 18.0, Color(0.10, 0.25, 0.42, 0.95), C_CYAN, C_CYAN, joy_vec.length() > 0.1)
 
-	# 5. BOTTOM-RIGHT AAA ABXY ACTION DIAMOND
+	# 5. BOTTOM-RIGHT AAA ABXY ACTION DIAMOND (Strictly NO duplicate labels!)
 	var labels = {
-		"A": "BUILD" if (GameState.selected_tool in GameState.BUILDINGS) else ("SALVAGE" if GameState.selected_tool == "demolish" else "MINE"),
+		"A": "PLACE" if (GameState.selected_tool in GameState.BUILDINGS) else ("SALVAGE" if GameState.selected_tool == "demolish" else "MINE"),
 		"B": "CANCEL" if GameState.selected_tool != "pick" else "BRAKE",
 		"X": "BUILD" if menu_state == MenuState.FIELD else "PICK 2",
-		"Y": "CMD" if menu_state == MenuState.FIELD else "PICK 1",
+		"Y": "PRINTER" if menu_state == MenuState.FIELD else "PICK 1",
 	}
 	if menu_state != MenuState.FIELD:
 		labels["A"] = "CONFIRM"
@@ -534,15 +629,19 @@ func _on_hud_draw() -> void:
 	if menu_state != MenuState.FIELD:
 		var nodes = _get_active_tree_nodes()
 		var mw = minf(vp.x - 24.0, 444.0)
-		var row_h = 52.0
-		var tab_h = 28.0
-		var mh = 44.0 + tab_h + float(nodes.size()) * (row_h + 6.0)
+		var tab_h = 26.0
+		var y_top = float(btn_rects["Y"]["pos"].y) - float(btn_rects["Y"]["r"])
+		var controls_top_y = minf(joy_center.y - joy_radius, y_top)
+		var max_avail_h = maxf(160.0, (controls_top_y - 14.0) - (tl_rect.end.y + 8.0))
+		var row_h = clampf((max_avail_h - 46.0 - tab_h) / maxf(1.0, float(nodes.size())) - 5.0, 36.0, 52.0)
+		var gap_y = 4.0 if row_h < 44.0 else 6.0
+		var mh = 42.0 + tab_h + float(nodes.size()) * (row_h + gap_y)
 		var mx = clampf(vp.x - mw - 18.0, 12.0, (vp.x - mw) * 0.5)
-		var my = clampf(joy_center.y - joy_radius - mh - 18.0, tl_rect.end.y + 10.0, vp.y - mh - 186.0)
+		var my = clampf(controls_top_y - mh - 14.0, tl_rect.end.y + 8.0, maxf(tl_rect.end.y + 8.0, controls_top_y - mh - 12.0))
 		var mrect = Rect2(mx, my, mw, mh)
 		_draw_chamfer_panel(mrect, C_BG_DARK, C_CYAN, 14.0, 2.0)
 
-		var header = "BUILD TREE [2-CLICK | L-STICK TAB]" if menu_state == MenuState.BUILD_TREE else "COMMAND TREE [2-CLICK | L-STICK TAB]"
+		var header = "BUILD TREE [2-CLICK | L-STICK TAB]" if menu_state == MenuState.BUILD_TREE else "ONBOARD 3D PRINTER & CMD [2-CLICK]"
 		hud_canvas.draw_string(font, Vector2(mx + 16, my + 24), header, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_CYAN)
 
 		# Category Tabs (Interactive + L-Stick Left/Right)
@@ -566,17 +665,18 @@ func _on_hud_draw() -> void:
 
 		for i in range(nodes.size()):
 			var nd = nodes[i]
-			var ny = my + 38.0 + tab_h + float(i) * (row_h + 6.0)
+			var ny = my + 38.0 + tab_h + float(i) * (row_h + gap_y)
 			var nrect = Rect2(mx + 12.0, ny, mw - 24.0, row_h)
 			var sel = (i == cursor_idx)
 			var nc: Color = nd["col"]
 			_draw_chamfer_panel(nrect, Color(0.08, 0.16, 0.28, 0.96) if sel else Color(0.04, 0.07, 0.13, 0.95), C_CYAN if sel else nc, 8.0, 2.2 if sel else 1.2)
 			if nd["icon"]:
-				hud_canvas.draw_texture_rect(nd["icon"], Rect2(nrect.position + Vector2(10, 11), Vector2(30, 30)), false)
-			var tx = nrect.position.x + (48.0 if nd["icon"] else 14.0)
+				var isz = minf(28.0, row_h - 10.0)
+				hud_canvas.draw_texture_rect(nd["icon"], Rect2(nrect.position + Vector2(10, (row_h - isz) * 0.5), Vector2(isz, isz)), false)
+			var tx = nrect.position.x + (46.0 if nd["icon"] else 14.0)
 			var qbadge = "[Y] " if i == 0 else ("[X] " if i == 1 else ("[A] " if sel else ""))
-			hud_canvas.draw_string(font, Vector2(tx, ny + 21), qbadge + nd["label"], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 76), 14, C_TEXT if sel else nc)
-			hud_canvas.draw_string(font, Vector2(tx, ny + 40), nd["sub"], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 76), 11, C_MUTED)
+			hud_canvas.draw_string(font, Vector2(tx, ny + row_h * 0.42), qbadge + nd["label"], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 68), 13 if row_h < 44.0 else 14, C_TEXT if sel else nc)
+			hud_canvas.draw_string(font, Vector2(tx, ny + row_h * 0.80), nd["sub"], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 68), 10 if row_h < 44.0 else 10, C_MUTED)
 			tree_hitboxes.append({"rect": nrect, "action": nd["action"]})
 
 func is_blocking_world_input() -> bool:

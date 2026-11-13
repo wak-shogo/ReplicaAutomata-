@@ -31,8 +31,8 @@ window/handheld/orientation="sensor"
 
 [input_devices]
 
-pointing/emulate_touch_from_mouse=true
-pointing/emulate_mouse_from_touch=true
+pointing/emulate_touch_from_mouse=false
+pointing/emulate_mouse_from_touch=false
 
 [rendering]
 
@@ -41,4 +41,5 @@ renderer/rendering_method.web="gl_compatibility"
 textures/canvas_textures/default_texture_filter=0
 viewport/hdr_2d=true
 anti_aliasing/quality/msaa_2d=2
+anti_aliasing/quality/msaa_2d.web=0
 environment/defaults/default_clear_color=Color(0.02, 0.03, 0.06, 1)

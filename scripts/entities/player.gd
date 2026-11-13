@@ -7,10 +7,9 @@ class_name PlayerUnit
 # Fully operable with 1 Joystick + ABXY buttons.
 # ==============================================================================
 
-const GROUND_SPEED: float = 250.0
-const SPACE_ACCEL: float = 480.0
-const SPACE_MAX_SPEED: float = 520.0
-const ATMOSPHERE_R: float = PlanetWorld.R_SURFACE + 72.0 # 712 px
+const GROUND_SPEED: float = 175.0
+const SPACE_ACCEL: float = 420.0
+const SURFACE_LOCK_R: float = PlanetWorld.R_SURFACE + 24.0
 
 var world: PlanetWorld
 var factory: FactorySim
@@ -19,6 +18,7 @@ var tex_core: Texture2D
 var tex_drone: Texture2D
 var anim_time: float = 0.0
 var mine_cooldown: float = 0.0
+var grounded_warn_cd: float = 0.0
 var mine_beams: Array[Dictionary] = []
 
 var virtual_move_vec: Vector2 = Vector2.ZERO
@@ -64,14 +64,20 @@ func trigger_primary_action() -> void:
 
 func _physics_process(delta: float) -> void:
 	anim_time += delta
+	if grounded_warn_cd > 0.0:
+		grounded_warn_cd -= delta
 	var move_dir = _read_move_input()
 	var dist_center = position.length()
-	var in_open_space = dist_center > ATMOSPHERE_R
+	var normal = position.normalized() if dist_center > 1.0 else Vector2.UP
+	var max_flight = GameState.get_flight_speed()
+	var in_open_space = dist_center > PlanetWorld.R_ATMOS_OUTER
+	var is_lifting_off = (GameState.engine_tier > 0 and move_dir.length_squared() > 0.01 and move_dir.normalized().dot(normal) > 0.45)
+	var airborne = dist_center > PlanetWorld.R_SURFACE + 38.0 or is_lifting_off
 
 	is_anchored_surface = false
 
-	if in_open_space:
-		# Deep Open World: Pure Uniform Linear Motion (Newtons 1st Law)
+	if in_open_space and GameState.engine_tier > 0:
+		# Deep Open World: Pure Uniform Linear Motion (Newtons 1st Law), speed capped by Engine Tier
 		if Input.is_key_pressed(KEY_B) or brake_active:
 			velocity = velocity.move_toward(Vector2.ZERO, SPACE_ACCEL * 2.8 * delta)
 			if velocity.length() < 4.0:
@@ -80,23 +86,46 @@ func _physics_process(delta: float) -> void:
 		elif move_dir.length_squared() > 0.01:
 			brake_active = false
 			velocity += move_dir.normalized() * SPACE_ACCEL * delta
-			if velocity.length() > SPACE_MAX_SPEED:
-				velocity = velocity.normalized() * SPACE_MAX_SPEED
-		# Smoothly face heading in deep space or normal outward near planet
+			if velocity.length() > max_flight:
+				velocity = velocity.normalized() * max_flight
 		if velocity.length() > 15.0:
 			rotation = lerp_angle(rotation, velocity.angle() + PI * 0.5, clampf(6.0 * delta, 0.0, 1.0))
 	else:
-		# Planetary Surface / Caverns: Radial alignment + Zero-Drift Magnetic Hover
+		# Planetary Surface, Underground & Thick Atmosphere
 		brake_active = false
 		var target_rot = position.angle() + PI * 0.5
 		rotation = lerp_angle(rotation, target_rot, clampf(12.0 * delta, 0.0, 1.0))
 		if move_dir.length_squared() > 0.01:
-			velocity = velocity.lerp(move_dir.normalized() * GROUND_SPEED, clampf(16.0 * delta, 0.0, 1.0))
+			var want_dir = move_dir.normalized()
+			var radial_out = want_dir.dot(normal)
+			# If Grounded (no Engine printed yet), block flying off planet surface!
+			if GameState.engine_tier <= 0 and dist_center >= PlanetWorld.R_SURFACE + 14.0 and radial_out > 0.15:
+				want_dir = (want_dir - normal * radial_out)
+				if want_dir.length_squared() > 0.01:
+					want_dir = want_dir.normalized()
+				else:
+					want_dir = Vector2.ZERO
+				if grounded_warn_cd <= 0.0:
+					grounded_warn_cd = 2.5
+					GameState.emit_signal("log_event", "GROUNDED: Print Thruster Mk-I via [Y] PRINTER!", "warn")
+			var spd = max_flight if airborne else GROUND_SPEED
+			if not in_open_space and dist_center <= PlanetWorld.R_SURFACE + 38.0 and not is_lifting_off and move_dir.dot(normal) >= -0.25 and dist_center >= PlanetWorld.R_SURFACE - 6.0:
+				# Hug curved spherical surface gently while moving laterally unless lifting off outward!
+				var tang_dir = (want_dir - normal * radial_out)
+				if tang_dir.length_squared() > 0.01:
+					want_dir = (tang_dir.normalized() - normal * 0.18).normalized()
+			velocity = velocity.lerp(want_dir * spd, clampf(16.0 * delta, 0.0, 1.0))
 		else:
 			velocity = Vector2.ZERO
 			is_anchored_surface = true
 
 	var next_pos = position + velocity * delta
+	# Clamp atmospheric ceiling back to ground when engine_tier == 0
+	if GameState.engine_tier <= 0 and next_pos.length() > SURFACE_LOCK_R:
+		next_pos = next_pos.normalized() * SURFACE_LOCK_R
+		if velocity.dot(normal) > 0.0:
+			velocity -= normal * velocity.dot(normal)
+
 	# Keep within open-world cosmic boundary
 	if next_pos.length() > PlanetWorld.WORLD_LIMIT_R - 80.0:
 		next_pos = next_pos.normalized() * (PlanetWorld.WORLD_LIMIT_R - 80.0)
@@ -112,8 +141,8 @@ func _physics_process(delta: float) -> void:
 			if GameState.selected_tool == "pick" and move_dir.length_squared() > 0.01 and mine_cooldown <= 0.0:
 				_mine_cell(c.x, c.y)
 			# Allow smooth tangential sliding along curved solid surface!
-			var surf_r = PlanetWorld.R_SURFACE + 24.0
-			if position.length() >= PlanetWorld.R_SURFACE - 6.0 and move_dir.dot(position.normalized()) >= -0.35:
+			var surf_r = SURFACE_LOCK_R
+			if position.length() >= PlanetWorld.R_SURFACE - 6.0 and move_dir.dot(normal) >= -0.35:
 				next_pos = next_pos.normalized() * surf_r
 			else:
 				next_pos = position
@@ -166,7 +195,7 @@ func _perform_mining() -> void:
 
 func _mine_cell(s: int, l: int, world_target: Vector2 = Vector2.ZERO) -> void:
 	var tgt = world_target if world_target != Vector2.ZERO else world.cell_center(s, l)
-	var dmg = 4.0 + float(GameState.drones) * 2.4
+	var dmg = 7.5 + float(GameState.drones) * 3.0
 	world.damage_cell(s, l, dmg, true)
 	mine_cooldown = 0.22
 	AudioSynth.play_synth("mine")

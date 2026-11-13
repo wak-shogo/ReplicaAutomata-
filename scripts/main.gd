@@ -47,7 +47,10 @@ func _start_fresh_landing() -> void:
 	swarm.reset_swarm()
 	player.reset_to_spawn()
 	GameState.set_tool("pick")
-	GameState.emit_signal("log_event", "Landed on Origin-Prime. Hold [A] to mine, [X] Build, [Y] Cmd.", "info")
+	if camera:
+		camera.position = player.position
+		camera.zoom = Vector2(target_zoom, target_zoom)
+	GameState.emit_signal("log_event", "Grounded on Origin-Prime. Hold [A] to mine, [Y] Printer.", "info")
 
 func _on_reset_requested() -> void:
 	SaveManager.delete_save()
@@ -65,9 +68,11 @@ func _update_camera(delta: float) -> void:
 	var goal_z = target_zoom * narrow_boost
 	if orbit_overview:
 		goal_pos = Vector2.ZERO
-		goal_z = 0.34 * narrow_boost
-	elif player.position.length() > PlanetWorld.R_SURFACE + 140.0:
-		goal_z = 0.72 * narrow_boost
+		goal_z = 0.052 * narrow_boost
+	elif player.position.length() > PlanetWorld.R_ATMOS_OUTER:
+		goal_z = 0.42 * narrow_boost
+	elif player.position.length() > PlanetWorld.R_SURFACE + 180.0:
+		goal_z = 0.68 * narrow_boost
 	camera.position = camera.position.lerp(goal_pos, clampf(7.5 * delta, 0.0, 1.0))
 	var nz = lerpf(camera.zoom.x, goal_z, clampf(7.5 * delta, 0.0, 1.0))
 	camera.zoom = Vector2(nz, nz)
@@ -102,10 +107,18 @@ func _run_automated_suite() -> void:
 	if GameState.drones != 0 or GameState.fleet_count != 0 or GameState.fe != 0:
 		failures.append("Phase 1 clean slate failed")
 
-	# Radial mining on spherical ore vein
-	var hit = world.damage_cell(52, 8, 100.0, true)
+	# Radial mining on 10x spherical ore vein around SPAWN_SECTOR = 270
+	var hit = world.damage_cell(268, 38, 100.0, true)
 	if not hit["destroyed"] or GameState.fe <= 0:
 		failures.append("Spherical cell mining failed")
+
+	# Grounded check: Engine Tier 0 cannot fly off planet surface (R_SURFACE = 6400)
+	player.reset_to_spawn()
+	player.position = Vector2(0.0, -(PlanetWorld.R_SURFACE + 120.0))
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if player.position.length() > PlanetWorld.R_SURFACE + 28.0:
+		failures.append("Grounded Seed Unit escaped planet without printing Thruster Mk-I")
 
 	# Spherical surface zero-drift clamp
 	player.reset_to_spawn()
@@ -115,16 +128,26 @@ func _run_automated_suite() -> void:
 	if player.velocity.length() > 1.0:
 		failures.append("Surface anchor drifted")
 
-	# Open-world space pure uniform linear motion
-	player.position = Vector2(1800.0, -900.0)
-	player.velocity = Vector2(220.0, -50.0)
+	# Print Thruster Engine Mk-I via Onboard 3D Printer [Y] -> [Y] (2 clicks!), verify slow ~58s Atmos Climb speed = 62px/s
+	GameState.add_res("fe", 40)
+	GameState.add_res("cu", 20)
+	hud._trigger_abxy("Y")
+	if hud.menu_state != GameHUD.MenuState.CMD_TREE:
+		failures.append("Y failed to open Onboard Printer tree")
+	hud._trigger_abxy("Y") # Slot 0 = PRINT Thruster Mk-I
+	if GameState.engine_tier != 1 or not is_equal_approx(GameState.get_flight_speed(), 62.0):
+		failures.append("Onboard Printer Engine Mk-I craft failed")
+
+	# Open-world space pure uniform linear motion (> R_ATMOS_OUTER = 10000) capped by engine speed
+	player.position = Vector2(12800.0, -900.0)
+	player.velocity = Vector2(55.0, -15.0)
 	await get_tree().physics_frame
 	await get_tree().physics_frame
-	if player.velocity.distance_to(Vector2(220.0, -50.0)) > 1.0:
+	if player.velocity.distance_to(Vector2(55.0, -15.0)) > 1.0:
 		failures.append("Open-space inertial flight drifted")
 	player.reset_to_spawn()
 
-	# 2-click ABXY tree verification (Click 1: X -> BUILD_TREE, Click 2: Y -> Drill -> FIELD)
+	# 2-click ABXY Build Tree verification (Click 1: X -> BUILD_TREE, Click 2: Y -> Drill -> FIELD)
 	hud._trigger_abxy("X")
 	if hud.menu_state != GameHUD.MenuState.BUILD_TREE:
 		failures.append("X failed to open 2-click Build Tree")
@@ -133,12 +156,12 @@ func _run_automated_suite() -> void:
 		failures.append("2-click Drill selection via ABXY failed")
 	hud._trigger_abxy("Y")
 	if hud.menu_state != GameHUD.MenuState.CMD_TREE:
-		failures.append("Y failed to open 2-click Command Tree")
+		failures.append("Y failed to open 2-click Printer/Cmd Tree")
 	hud._trigger_abxy("B")
 	if hud.menu_state != GameHUD.MenuState.FIELD:
-		failures.append("B failed to close Command Tree")
+		failures.append("B failed to close Tree")
 
-	# Drone craft & spherical factory build around globe
+	# Drone craft & 10x spherical factory build around globe
 	GameState.add_res("fe", 650)
 	GameState.add_res("cu", 320)
 	GameState.add_res("si", 220)
@@ -148,17 +171,17 @@ func _run_automated_suite() -> void:
 			failures.append("Drone craft failed")
 
 	var plan = [
-		["drill", 51, 8],
-		["lift", 53, 8],
-		["lift", 53, 9],
-		["belt", 53, PlanetWorld.LAYERS],
-		["depot", 50, PlanetWorld.LAYERS],
-		["smelter", 54, PlanetWorld.LAYERS],
-		["assembler", 56, PlanetWorld.LAYERS],
-		["printer", 58, PlanetWorld.LAYERS],
-		["mass_driver", 61, PlanetWorld.LAYERS],
-		["solar", 48, PlanetWorld.LAYERS],
-		["turret", 47, PlanetWorld.LAYERS],
+		["drill", 267, 38],
+		["lift", 273, 38],
+		["lift", 273, 39],
+		["belt", 273, PlanetWorld.LAYERS],
+		["depot", 269, PlanetWorld.LAYERS],
+		["smelter", 274, PlanetWorld.LAYERS],
+		["assembler", 276, PlanetWorld.LAYERS],
+		["printer", 278, PlanetWorld.LAYERS],
+		["mass_driver", 281, PlanetWorld.LAYERS],
+		["solar", 266, PlanetWorld.LAYERS],
+		["turret", 265, PlanetWorld.LAYERS],
 	]
 	for item in plan:
 		if not factory.try_place_building(item[0], item[1], item[2]):
@@ -219,19 +242,19 @@ func _capture_visual_shots() -> void:
 	await _save_shot(out_dir + "/v2_shot2_abxy_build_tree.png")
 	hud.menu_state = GameHUD.MenuState.FIELD
 
-	# Shot 3: 360-deg Spherical Colony & Curved Surface Factory + Cyan Ghosts
+	# Shot 3: 360-deg 10x Spherical Colony & Curved Surface Factory + Cyan Ghosts
 	GameState.add_res("fe", 800); GameState.add_res("cu", 400); GameState.add_res("si", 300); GameState.add_res("ti", 200)
 	GameState.add_res("plate_fe", 60); GameState.add_res("circuit", 40)
 	for _i in range(4): GameState.try_craft_drone()
-	for s in range(51, 56):
-		world.damage_cell(s, 8, 999.0, false)
+	for s in range(267, 276):
+		world.damage_cell(s, 38, 999.0, false)
 	var layout = [
-		["drill", 51, 8], ["lift", 53, 8], ["lift", 53, 9],
-		["belt", 53, PlanetWorld.LAYERS], ["depot", 50, PlanetWorld.LAYERS],
-		["smelter", 54, PlanetWorld.LAYERS], ["assembler", 56, PlanetWorld.LAYERS],
-		["printer", 58, PlanetWorld.LAYERS], ["mass_driver", 61, PlanetWorld.LAYERS],
-		["solar", 48, PlanetWorld.LAYERS], ["turret", 47, PlanetWorld.LAYERS],
-		["elevator", 65, PlanetWorld.LAYERS],
+		["drill", 267, 38], ["lift", 273, 38], ["lift", 273, 39],
+		["belt", 273, PlanetWorld.LAYERS], ["depot", 269, PlanetWorld.LAYERS],
+		["smelter", 274, PlanetWorld.LAYERS], ["assembler", 276, PlanetWorld.LAYERS],
+		["printer", 278, PlanetWorld.LAYERS], ["mass_driver", 281, PlanetWorld.LAYERS],
+		["solar", 266, PlanetWorld.LAYERS], ["turret", 265, PlanetWorld.LAYERS],
+		["elevator", 285, PlanetWorld.LAYERS],
 	]
 	for item in layout:
 		factory.try_place_building(item[0], item[1], item[2])
@@ -241,12 +264,12 @@ func _capture_visual_shots() -> void:
 		await get_tree().process_frame
 		factory._process(0.05)
 		world._process(0.05)
-	camera.position = Vector2(180, -610)
-	camera.zoom = Vector2(0.76, 0.76)
+	camera.position = Vector2(560, -6420)
+	camera.zoom = Vector2(0.70, 0.70)
 	await _wait_frames(3)
 	await _save_shot(out_dir + "/v2_shot3_spherical_factory.png")
 
-	# Shot 4: Open-World Cosmic View + Spherical Globe + 1,500 Swarm Battle
+	# Shot 4: Open-World Cosmic View + 10x Spherical Globe + 1,500 Swarm Battle
 	GameState.add_fleet_units(1500)
 	swarm.sync_to_game_state(GameState.fleet_count)
 	GameState.set_doctrine(GameState.Doctrine.ASSAULT)
@@ -254,8 +277,8 @@ func _capture_visual_shots() -> void:
 		await get_tree().process_frame
 		swarm._process(0.05)
 	GameState.set_tool("pick")
-	camera.position = Vector2(450, -680)
-	camera.zoom = Vector2(0.32, 0.32)
+	camera.position = Vector2(5200, -7800)
+	camera.zoom = Vector2(0.055, 0.055)
 	await _wait_frames(3)
 	await _save_shot(out_dir + "/v2_shot4_open_world_orbit.png")
 
@@ -263,8 +286,8 @@ func _capture_visual_shots() -> void:
 	get_window().size = Vector2i(1080, 2400)
 	await _wait_frames(4)
 	hud._on_viewport_resized()
-	camera.position = Vector2(0, -480)
-	camera.zoom = Vector2(0.75, 0.75)
+	camera.position = Vector2(0, -6220)
+	camera.zoom = Vector2(0.68, 0.68)
 	await _wait_frames(4)
 	await _save_shot(out_dir + "/v2_shot5_mobile_1080x2400.png")
 

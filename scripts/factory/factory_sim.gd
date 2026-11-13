@@ -145,8 +145,7 @@ func refresh_blueprint_slots() -> void:
 	var base_sec = pcell.x
 
 	if rule == "SURFACE":
-		var step = maxi(1, sec_w)
-		for offset in range(-12, 13, step):
+		for offset in range(-22, 23):
 			var s = world.wrap_sector(base_sec + offset)
 			var l = PlanetWorld.LAYERS
 			if can_place_building(bid, s, l):
@@ -157,8 +156,8 @@ func refresh_blueprint_slots() -> void:
 					"w_px": pose["w_px"], "h_px": h_px,
 				})
 	elif rule == "UNDERGROUND":
-		for l in range(maxi(1, pcell.y - 3), mini(PlanetWorld.LAYERS - 1, pcell.y + 3)):
-			for offset in range(-6, 7):
+		for l in range(maxi(1, pcell.y - 3), mini(PlanetWorld.LAYERS, pcell.y + 3)):
+			for offset in range(-8, 9):
 				var s = world.wrap_sector(base_sec + offset)
 				if bid == "drill" and world.get_ore(s, l) == "":
 					continue
@@ -267,6 +266,9 @@ func try_place_building(bid: String, sec: int, layer: int) -> bool:
 		GameState.megastructures[bid] = true
 		AudioSynth.play_synth("mega")
 		GameState.emit_signal("log_event", "MEGASTRUCTURE: %s" % info["name"], "good")
+		if GameState.boss_defeated and GameState.megastructures["warpgate"]:
+			GameState.game_won = true
+			GameState.emit_signal("log_event", "COLONY VICTORY: WARP GATE & CORE LIBERATED!", "good")
 	else:
 		AudioSynth.play_synth("build")
 		GameState.emit_signal("log_event", "Built %s" % info["name"], "good")
@@ -359,29 +361,36 @@ func _process(delta: float) -> void:
 		match bid:
 			"drill":
 				b["frame"] = int(anim_time * 9.0) % 4
-				if b["timer"] >= 1.35:
+				if b["timer"] >= 1.1:
 					b["timer"] = 0.0
 					var oname: String = b.get("ore_target", "fe")
 					if oname == "": oname = "fe"
-					GameState.add_res(oname, 1)
+					GameState.add_res(oname, 2)
+					if oname != "fe":
+						GameState.add_res("fe", 1)
 					var bp = _find_adj_belt_or_lift(b["sec"], b["layer"], b["sec_w"])
 					if bp.x >= 0: _spawn_belt_item(bp.x, bp.y, oname)
 			"belt", "lift":
 				b["frame"] = int(anim_time * 8.0) % 4
 			"smelter":
 				b["frame"] = int(anim_time * 5.0) % 4
-				if b["timer"] >= 1.5:
+				if b["timer"] >= 1.3:
 					b["timer"] = 0.0
-					var out = ""
-					if GameState.fe >= 1:
-						GameState.add_res("fe", -1); GameState.add_res("plate_fe", 1); out = "plate_fe"
-					elif GameState.cu >= 1:
-						GameState.add_res("cu", -1); GameState.add_res("wire_cu", 1); out = "wire_cu"
-					elif GameState.si >= 1:
-						GameState.add_res("si", -1); GameState.add_res("wafer_si", 1); out = "wafer_si"
-					if out != "":
+					# Balance refined Plate / Wire / Wafer cleanly without starving raw reserve
+					var opts: Array = []
+					if GameState.fe >= 16 and GameState.plate_fe < 30:
+						opts.append(["fe", "plate_fe", GameState.plate_fe])
+					if GameState.cu >= 16 and GameState.wire_cu < 24:
+						opts.append(["cu", "wire_cu", GameState.wire_cu])
+					if GameState.si >= 24 and GameState.wafer_si < 16:
+						opts.append(["si", "wafer_si", GameState.wafer_si])
+					if not opts.is_empty():
+						opts.sort_custom(func(a, c): return a[2] < c[2])
+						var pick = opts[0]
+						GameState.add_res(pick[0], -1)
+						GameState.add_res(pick[1], 1)
 						var bp = _find_adj_belt_or_lift(b["sec"], b["layer"], b["sec_w"])
-						if bp.x >= 0: _spawn_belt_item(bp.x, bp.y, out)
+						if bp.x >= 0: _spawn_belt_item(bp.x, bp.y, pick[1])
 				if b["smoke_t"] >= 0.45 and world:
 					b["smoke_t"] = 0.0
 					var up_dir = Vector2(cos(pose["ang"]), sin(pose["ang"]))
@@ -391,12 +400,12 @@ func _process(delta: float) -> void:
 				if b["timer"] >= 1.7:
 					b["timer"] = 0.0
 					var made = ""
-					if GameState.wire_cu >= 1 and GameState.wafer_si >= 1:
+					if GameState.circuit < 18 and GameState.wire_cu >= 1 and GameState.wafer_si >= 1:
 						GameState.add_res("wire_cu", -1); GameState.add_res("wafer_si", -1); GameState.add_res("circuit", 1); made = "circuit"
-					elif GameState.plate_fe >= 1 and GameState.ti >= 1:
-						GameState.add_res("plate_fe", -1); GameState.add_res("ti", -1); GameState.add_res("alloy", 1); made = "alloy"
-					elif GameState.cu >= 2 and GameState.si >= 1:
+					elif GameState.circuit < 14 and GameState.cu >= 18 and GameState.si >= 20:
 						GameState.add_res("cu", -2); GameState.add_res("si", -1); GameState.add_res("circuit", 1); made = "circuit"
+					elif GameState.ti >= 160 and GameState.plate_fe >= 1:
+						GameState.add_res("plate_fe", -1); GameState.add_res("ti", -1); GameState.add_res("alloy", 1); made = "alloy"
 					if made != "":
 						var bp = _find_adj_belt_or_lift(b["sec"], b["layer"], b["sec_w"])
 						if bp.x >= 0: _spawn_belt_item(bp.x, bp.y, made)
@@ -406,10 +415,11 @@ func _process(delta: float) -> void:
 				var spd = (0.4 if not has_elev else 0.78) * (1.35 if has_dyson else 1.0)
 				if b["timer"] >= 1.0 / spd:
 					var printed = false
-					if GameState.plate_fe >= 2 and GameState.circuit >= 1:
-						GameState.add_res("plate_fe", -2); GameState.add_res("circuit", -1); printed = true
-					elif GameState.fe >= 6 and GameState.cu >= 2:
-						GameState.add_res("fe", -6); GameState.add_res("cu", -2); printed = true
+					if GameState.probe_stock < 12:
+						if GameState.plate_fe >= 2 and GameState.circuit >= 1:
+							GameState.add_res("plate_fe", -2); GameState.add_res("circuit", -1); printed = true
+						elif GameState.fe >= 18 and GameState.cu >= 10:
+							GameState.add_res("fe", -6); GameState.add_res("cu", -2); printed = true
 					if printed:
 						b["timer"] = 0.0
 						GameState.add_res("probe_stock", 1)
@@ -495,11 +505,11 @@ func _process(delta: float) -> void:
 func _fire_mass_driver(pose: Dictionary) -> void:
 	var n_dir = Vector2(cos(pose["ang"]), sin(pose["ang"]))
 	var tang = Vector2(-n_dir.y, n_dir.x)
-	var muzzle = pose["pos"] + n_dir * 52.0 + tang * 14.0
+	var muzzle = pose["pos"] + n_dir * 64.0 + tang * 14.0
 	projectiles.append({
 		"pos": muzzle,
-		"vel": (n_dir * 0.9 + tang * 0.35).normalized() * 620.0,
-		"target_r": 1080.0,
+		"vel": (n_dir * 0.92 + tang * 0.30).normalized() * 980.0,
+		"target_r": PlanetWorld.R_SURFACE + 520.0,
 		"trail": [muzzle],
 	})
 	if world:
@@ -513,8 +523,8 @@ func _draw() -> void:
 		var bid: String = b["id"]
 		var info = GameState.BUILDINGS.get(bid, {})
 		var pose = _slot_world_pose(b["sec"], b["layer"], b["sec_w"])
-		var h_px = float(info.get("h_px", 40.0))
-		var w_px = maxf(28.0, pose["w_px"] * 1.15)
+		var h_px = float(info.get("h_px", 40.0)) * 1.45
+		var w_px = maxf(36.0, pose["w_px"] * 1.02)
 		var rect = Rect2(-w_px * 0.5, -h_px, w_px, h_px)
 
 		draw_set_transform(pose["pos"], pose["rot"])
@@ -539,11 +549,11 @@ func _draw() -> void:
 
 		# Player-constructed Orbital Shipyard Hub anchored cleanly ONLY after Space Elevator is built!
 		if bid == "elevator" and tex_orbital_hub:
-			var orb_r = 1040.0
+			var orb_r = PlanetWorld.R_SURFACE + 460.0
 			var orb_p = Vector2(cos(pose["ang"]), sin(pose["ang"])) * orb_r
-			draw_line(pose["pos"], orb_p, Color(0.3, 0.88, 1.0, 0.65), 2.5)
+			draw_line(pose["pos"], orb_p, Color(0.3, 0.88, 1.0, 0.72), 3.0)
 			draw_set_transform(orb_p, pose["rot"])
-			draw_texture_rect(tex_orbital_hub, Rect2(-85, -42, 170, 84), false)
+			draw_texture_rect(tex_orbital_hub, Rect2(-120, -60, 240, 120), false)
 			draw_set_transform(Vector2.ZERO, 0.0)
 
 	# 2. Moving belt items
@@ -569,8 +579,9 @@ func _draw() -> void:
 			var is_focus = (i == active_ghost_idx)
 			var col = Color(0.22, 0.94, 1.0, pulse + (0.2 if is_focus else 0.0)) if can_pay else Color(1.0, 0.38, 0.25, pulse + 0.1)
 			var bcol = Color(0.95, 1.0, 1.0, 0.95) if is_focus else Color(col.r, col.g, col.b, 0.85)
-			var w_px = maxf(28.0, sl["w_px"] * 1.15)
-			var rect = Rect2(-w_px * 0.5, -sl["h_px"], w_px, sl["h_px"])
+			var w_px = maxf(36.0, sl["w_px"] * 1.02)
+			var h_sc = sl["h_px"] * 1.45
+			var rect = Rect2(-w_px * 0.5, -h_sc, w_px, h_sc)
 			draw_set_transform(sl["pos"], sl["rot"])
 			draw_rect(rect, Color(col.r, col.g, col.b, 0.22))
 			if tex:
@@ -581,10 +592,10 @@ func _draw() -> void:
 			draw_rect(rect, bcol, false, 2.2 if is_focus else 1.3)
 			draw_set_transform(Vector2.ZERO, 0.0)
 			if is_focus and font:
-				var msg = "[A] BUILD" if can_pay else GameState.get_missing_text(info["cost"])
+				var msg = "[A] PLACE" if can_pay else GameState.get_missing_text(info["cost"])
 				if GameState.drones < int(info.get("req_drones", 0)):
 					msg = "NEED %d DRONES" % int(info.get("req_drones", 0))
-				var lp = sl["pos"] + Vector2(cos(sl["rot"] - PI * 0.5), sin(sl["rot"] - PI * 0.5)) * (sl["h_px"] + 12.0)
+				var lp = sl["pos"] + Vector2(cos(sl["rot"] - PI * 0.5), sin(sl["rot"] - PI * 0.5)) * (h_sc + 14.0)
 				draw_string(font, lp + Vector2(-34, 0), msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.45, 1.0, 1.0) if can_pay else Color(1.0, 0.32, 0.32))
 
 	# 4. Mass Driver Launched Projectiles

@@ -34,7 +34,8 @@ var circuit: int = 0
 var alloy: int = 0
 var probe_stock: int = 0
 
-# Progression & Swarm Fleet
+# Progression, Propulsion & Swarm Fleet
+var engine_tier: int = 0 # 0=Grounded (needs Onboard 3D Printer!), 1=Mk-I (62px/s, ~58s Atmos Exit), 2=Mk-II (190px/s), 3=Mk-III (520px/s)
 var drones: int = 0
 var max_drones: int = 12
 var fleet_count: int = 0
@@ -45,6 +46,13 @@ var hostiles_active: int = 0
 var boss_hp: float = 3000.0
 var boss_max_hp: float = 3000.0
 var boss_defeated: bool = false
+var game_won: bool = false
+
+const ENGINE_TIERS: Dictionary = {
+	1: {"name": "Thruster Engine Mk-I", "speed": 62.0, "cost": {"fe": 20, "cu": 10}, "desc": "Unlock flight (~58s atmospheric climb)."},
+	2: {"name": "Plasma Engine Mk-II", "speed": 190.0, "cost": {"fe": 30, "cu": 20, "si": 15}, "desc": "Upgrades flight & orbital cruise velocity (3x speed)."},
+	3: {"name": "Warp Core Mk-III", "speed": 520.0, "cost": {"fe": 70, "si": 35, "ti": 25, "circuit": 10}, "desc": "High-speed deep-space star-system propulsion."},
+}
 
 # Energy Grid
 var power_gen: float = 15.0
@@ -232,7 +240,7 @@ const BUILDINGS: Dictionary = {
 	"elevator": {
 		"name": "Orbital Anchor",
 		"branch": "MEGA",
-		"cost": {"fe": 120, "cu": 70, "si": 45, "ti": 35},
+		"cost": {"fe": 75, "cu": 45, "si": 25, "ti": 18},
 		"power": -55.0,
 		"req_drones": 6,
 		"sec_w": 3,
@@ -246,7 +254,7 @@ const BUILDINGS: Dictionary = {
 	"dyson": {
 		"name": "Dyson Ring",
 		"branch": "MEGA",
-		"cost": {"fe": 200, "cu": 130, "si": 90, "ti": 60},
+		"cost": {"fe": 110, "cu": 65, "si": 45, "ti": 30},
 		"power": 420.0,
 		"req_drones": 7,
 		"sec_w": 4,
@@ -260,7 +268,7 @@ const BUILDINGS: Dictionary = {
 	"citadel": {
 		"name": "Plasma Citadel",
 		"branch": "MEGA",
-		"cost": {"fe": 190, "cu": 100, "si": 75, "ti": 80},
+		"cost": {"fe": 110, "cu": 60, "si": 40, "ti": 35},
 		"power": -45.0,
 		"req_drones": 7,
 		"sec_w": 3,
@@ -274,7 +282,7 @@ const BUILDINGS: Dictionary = {
 	"warpgate": {
 		"name": "Warp Gate",
 		"branch": "MEGA",
-		"cost": {"fe": 300, "cu": 180, "si": 150, "ti": 130},
+		"cost": {"fe": 150, "cu": 85, "si": 65, "ti": 50},
 		"power": -100.0,
 		"req_drones": 8,
 		"sec_w": 4,
@@ -301,6 +309,7 @@ func reset_state() -> void:
 	circuit = 0
 	alloy = 0
 	probe_stock = 0
+	engine_tier = 0
 	drones = 0
 	fleet_count = 0
 	total_launches = 0
@@ -308,6 +317,7 @@ func reset_state() -> void:
 	hostiles_active = 0
 	boss_hp = boss_max_hp
 	boss_defeated = false
+	game_won = false
 	power_gen = 15.0
 	power_use = 0.0
 	power_ratio = 1.0
@@ -338,11 +348,14 @@ func get_drone_craft_cost() -> Dictionary:
 	if drones == 0:
 		return {"fe": 10}
 	elif drones == 1:
-		return {"fe": 16, "cu": 6}
+		return {"fe": 14, "cu": 6}
 	elif drones == 2:
-		return {"fe": 24, "cu": 12, "si": 6}
+		return {"fe": 18, "cu": 8, "si": 4}
 	else:
-		return {"fe": 16 + drones * 10, "cu": 8 + drones * 6, "si": 4 + drones * 4}
+		var cost := {"fe": 12 + drones * 5, "cu": 5 + drones * 3}
+		if drones >= 4:
+			cost["si"] = drones * 2
+		return cost
 
 func can_afford(cost: Dictionary) -> bool:
 	for k in cost.keys():
@@ -405,6 +418,32 @@ func add_res(key: String, amount: int, track_mining_popup: bool = false) -> void
 		recent_ore_timer = 1.8
 	emit_signal("inventory_changed")
 
+func get_flight_speed() -> float:
+	if engine_tier <= 0:
+		return 0.0
+	return float(ENGINE_TIERS.get(clampi(engine_tier, 1, 3), {}).get("speed", 62.0))
+
+func get_next_engine_info() -> Dictionary:
+	var nxt = engine_tier + 1
+	if not ENGINE_TIERS.has(nxt):
+		return {}
+	return ENGINE_TIERS[nxt]
+
+func try_print_engine() -> bool:
+	var nxt = engine_tier + 1
+	if not ENGINE_TIERS.has(nxt):
+		emit_signal("log_event", "Propulsion already at MAX Mk-III!", "info")
+		return false
+	var info: Dictionary = ENGINE_TIERS[nxt]
+	var cost: Dictionary = info["cost"]
+	if not spend_cost(cost):
+		emit_signal("log_event", get_missing_text(cost), "error")
+		return false
+	engine_tier = nxt
+	emit_signal("state_updated")
+	emit_signal("log_event", "Printed %s! Flight Speed: %du/s" % [info["name"], int(info["speed"])], "good")
+	return true
+
 func try_craft_drone() -> bool:
 	if drones >= max_drones:
 		emit_signal("log_event", "Max fabricator drones docked (%d)" % max_drones, "warn")
@@ -448,9 +487,9 @@ func to_dict() -> Dictionary:
 		"fe": fe, "cu": cu, "si": si, "ti": ti, "he3": he3,
 		"plate_fe": plate_fe, "wire_cu": wire_cu, "wafer_si": wafer_si,
 		"circuit": circuit, "alloy": alloy, "probe_stock": probe_stock,
-		"drones": drones, "fleet_count": fleet_count,
+		"drones": drones, "engine_tier": engine_tier, "fleet_count": fleet_count,
 		"total_launches": total_launches, "hostiles_defeated": hostiles_defeated,
-		"boss_hp": boss_hp, "boss_defeated": boss_defeated,
+		"boss_hp": boss_hp, "boss_defeated": boss_defeated, "game_won": game_won,
 		"current_doctrine": current_doctrine,
 		"megastructures": megastructures.duplicate(),
 	}
@@ -467,12 +506,14 @@ func from_dict(d: Dictionary) -> void:
 	circuit = int(d.get("circuit", 0))
 	alloy = int(d.get("alloy", 0))
 	probe_stock = int(d.get("probe_stock", 0))
+	engine_tier = int(d.get("engine_tier", 0))
 	drones = int(d.get("drones", 0))
 	fleet_count = int(d.get("fleet_count", 0))
 	total_launches = int(d.get("total_launches", 0))
 	hostiles_defeated = int(d.get("hostiles_defeated", 0))
 	boss_hp = float(d.get("boss_hp", boss_max_hp))
 	boss_defeated = bool(d.get("boss_defeated", false))
+	game_won = bool(d.get("game_won", false))
 	current_doctrine = int(d.get("current_doctrine", Doctrine.HARVEST))
 	var ms = d.get("megastructures", {})
 	if ms is Dictionary:

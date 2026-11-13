@@ -24,7 +24,7 @@ var h_active: int = 0
 var friendly_mm: MultiMeshInstance2D
 var hostile_mm: MultiMeshInstance2D
 
-var boss_pos: Vector2 = Vector2(1650.0, -1720.0)
+var boss_pos: Vector2 = Vector2(18500.0, -17200.0)
 var tex_boss: Texture2D
 
 var shot_fx: Array[Dictionary] = []
@@ -96,7 +96,7 @@ func reset_swarm() -> void:
 func sync_to_game_state(target_count: int) -> void:
 	var clamped = clampi(target_count, 0, MAX_FRIENDLY)
 	if clamped > f_active:
-		spawn_friendly_units(clamped - f_active, Vector2(0.0, -980.0))
+		spawn_friendly_units(clamped - f_active, Vector2(0.0, -(PlanetWorld.R_SURFACE + 560.0)))
 	elif clamped < f_active:
 		f_active = clamped
 		friendly_mm.multimesh.visible_instance_count = f_active
@@ -105,12 +105,12 @@ func spawn_friendly_units(count: int, origin: Vector2) -> void:
 	var n = mini(count, MAX_FRIENDLY - f_active)
 	for _i in range(n):
 		var ang = float(f_active) * 2.39996 + randf_range(-0.2, 0.2)
-		var rad = randf_range(24.0, 260.0 if count > 10 else 48.0)
+		var rad = randf_range(60.0, 950.0 if count > 10 else 140.0)
 		var p = origin + Vector2(cos(ang), sin(ang)) * rad
-		if p.length() < PlanetWorld.R_SURFACE + 140.0:
-			p = p.normalized() * (PlanetWorld.R_SURFACE + 160.0)
+		if p.length() < PlanetWorld.R_SURFACE + 380.0:
+			p = p.normalized() * (PlanetWorld.R_SURFACE + 420.0)
 		f_pos[f_active] = p
-		f_vel[f_active] = Vector2(-p.y, p.x).normalized() * randf_range(120.0, 220.0)
+		f_vel[f_active] = Vector2(-p.y, p.x).normalized() * randf_range(260.0, 480.0)
 		f_active += 1
 	friendly_mm.multimesh.visible_instance_count = f_active
 
@@ -170,7 +170,7 @@ func _process(delta: float) -> void:
 
 	if f_active > 0:
 		if doc == GameState.Doctrine.HARVEST and world and world.asteroids.size() > 0:
-			harvest_accum += delta * (0.45 + sqrt(float(f_active)) * 0.3)
+			harvest_accum += delta * (0.95 + sqrt(float(f_active)) * 0.55)
 			if harvest_accum >= 1.0:
 				var gain = int(harvest_accum)
 				harvest_accum -= float(gain)
@@ -202,9 +202,9 @@ func _process(delta: float) -> void:
 	for i in range(f_active):
 		var p = f_pos[i]
 		var v = f_vel[i]
-		var phi = float(i) * 2.39996 + sim_time * 0.45
-		var ring_r = 920.0 + float(i % 15) * 22.0
-		var wing_off = Vector2(cos(phi), sin(phi)) * (45.0 + float(i % 13) * 14.0)
+		var phi = float(i) * 2.39996 + sim_time * 0.25
+		var ring_r = PlanetWorld.R_ATMOS_OUTER + 420.0 + float(i % 15) * 90.0
+		var wing_off = Vector2(cos(phi), sin(phi)) * (140.0 + float(i % 13) * 45.0)
 		var target = Vector2(cos(phi), sin(phi)) * ring_r
 
 		match doc:
@@ -212,11 +212,11 @@ func _process(delta: float) -> void:
 				if ast_count > 0:
 					target = world.asteroids[i % ast_count]["pos"] + wing_off * 0.5
 			GameState.Doctrine.REPLICATE:
-				var ra = sim_time * 0.75 + float(i) * 0.11
-				target = Vector2(cos(ra), sin(ra)) * (980.0 + float(i % 12) * 18.0)
+				var ra = sim_time * 0.45 + float(i) * 0.11
+				target = Vector2(cos(ra), sin(ra)) * (PlanetWorld.R_SURFACE + 1400.0 + float(i % 12) * 85.0)
 			GameState.Doctrine.DEFEND:
-				var da = sim_time * 0.9 + float(i) * 0.19
-				target = Vector2(cos(da), sin(da)) * (PlanetWorld.R_SURFACE + 190.0 + float(i % 9) * 16.0)
+				var da = sim_time * 0.55 + float(i) * 0.19
+				target = Vector2(cos(da), sin(da)) * (PlanetWorld.R_SURFACE + 520.0 + float(i % 9) * 65.0)
 			GameState.Doctrine.ASSAULT:
 				if h_active > 0:
 					target = h_pos[i % h_active] + wing_off * 0.75
@@ -225,15 +225,15 @@ func _process(delta: float) -> void:
 
 		var to_tgt = target - p
 		var dist = to_tgt.length()
-		if dist > 4.0:
-			var steer = (to_tgt / dist) * 260.0 - v
-			v += steer.limit_length(320.0 * delta)
-		v = v.limit_length(270.0)
+		if dist > 6.0:
+			var steer = (to_tgt / dist) * 760.0 - v
+			v += steer.limit_length(820.0 * delta)
+		v = v.limit_length(780.0)
 		p += v * delta
 
-		# Planetary atmosphere bounce out so ships orbit around globe cleanly
-		if p.length() < PlanetWorld.R_SURFACE + 80.0:
-			p = p.normalized() * (PlanetWorld.R_SURFACE + 82.0)
+		# Planetary surface clearance so ships orbit around 10x sphere cleanly
+		if p.length() < PlanetWorld.R_SURFACE + 280.0:
+			p = p.normalized() * (PlanetWorld.R_SURFACE + 290.0)
 
 		f_pos[i] = p
 		f_vel[i] = v
@@ -286,7 +286,11 @@ func _process(delta: float) -> void:
 
 func _on_boss_defeated() -> void:
 	GameState.boss_defeated = true
-	GameState.emit_signal("log_event", "CORRUPTED CORE HUB LIBERATED!", "good")
+	if GameState.megastructures["warpgate"]:
+		GameState.game_won = true
+		GameState.emit_signal("log_event", "COLONY VICTORY: CORRUPTED HUB LIBERATED!", "good")
+	else:
+		GameState.emit_signal("log_event", "CORRUPTED CORE HUB LIBERATED!", "good")
 	AudioSynth.play_synth("victory")
 	for _i in range(20):
 		explode_fx.append({

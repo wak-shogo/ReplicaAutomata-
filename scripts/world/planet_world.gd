@@ -7,14 +7,15 @@ class_name PlanetWorld
 # molten core, curved surface slots, asteroid rings, and explorable planets.
 # ==============================================================================
 
-const SECTORS: int = 72
-const LAYERS: int = 10
-const LAYER_THICK: float = 48.0
-const R_MAGMA: float = 160.0
-const R_SURFACE: float = R_MAGMA + LAYERS * LAYER_THICK # 640.0
+const SECTORS: int = 360
+const LAYERS: int = 40
+const LAYER_THICK: float = 120.0
+const R_MAGMA: float = 1600.0
+const R_SURFACE: float = R_MAGMA + LAYERS * LAYER_THICK # 6400.0 (10x planet scale!)
+const R_ATMOS_OUTER: float = R_SURFACE + 3600.0 # 10000.0 (3600px thick atmosphere: ~58s exit at Mk-I 62px/s)
 const DA: float = TAU / float(SECTORS)
-const WORLD_LIMIT_R: float = 7200.0
-const SPAWN_SECTOR: int = 54 # Top (north pole, -PI/2 = 270 deg)
+const WORLD_LIMIT_R: float = 96000.0
+const SPAWN_SECTOR: int = 270 # Top (north pole, -PI/2 = 270 deg)
 
 enum CellKind { EMPTY, SURFACE, ROCK, MAGMA }
 
@@ -64,25 +65,25 @@ func _init_open_world_cosmos() -> void:
 	var rng = RandomNumberGenerator.new()
 	rng.seed = 90421
 	stars.clear()
-	for _i in range(640):
+	for _i in range(2200):
 		var a = rng.randf_range(0.0, TAU)
 		var d = sqrt(rng.randf()) * WORLD_LIMIT_R
 		stars.append({
 			"pos": Vector2(cos(a), sin(a)) * d,
-			"size": 1.5 if rng.randf() < 0.72 else 3.0,
+			"size": 2.0 if rng.randf() < 0.72 else 4.0,
 			"phase": rng.randf_range(0.0, TAU),
 			"tint": Color(0.82, 0.90, 1.0) if rng.randf() < 0.7 else Color(1.0, 0.88, 0.68),
 		})
 
-	# Open-world celestial bodies (all genuinely reachable in open space!)
+	# Huge Open-World Celestial Bodies scaled for 10x universe (all reachable!)
 	celestials = [
-		{"tex": "moon", "pos": Vector2(1420.0, -1180.0), "r": 120.0, "ore": "fe", "name": "LUNA-PRIME"},
-		{"tex": "planet_crystal", "pos": Vector2(-2450.0, -1720.0), "r": 180.0, "ore": "si", "name": "CRYO-CRYSTAL"},
-		{"tex": "planet_volcanic", "pos": Vector2(2650.0, 1520.0), "r": 185.0, "ore": "ti", "name": "IGNIS-IV"},
-		{"tex": "planet_large", "pos": Vector2(-2100.0, 2300.0), "r": 240.0, "ore": "cu", "name": "GAIA-MAJOR"},
-		{"tex": "sun", "pos": Vector2(4400.0, -3100.0), "r": 320.0, "ore": "", "name": "HELIOS-PRIME"},
-		{"tex": "pulsar", "pos": Vector2(-4300.0, -3300.0), "r": 160.0, "ore": "ti", "name": "PULSAR-X"},
-		{"tex": "blackhole", "pos": Vector2(3900.0, 3600.0), "r": 250.0, "ore": "", "name": "GARGANTUA-0"},
+		{"tex": "moon", "pos": Vector2(12800.0, -9600.0), "r": 1100.0, "ore": "fe", "name": "LUNA-PRIME"},
+		{"tex": "planet_crystal", "pos": Vector2(-21500.0, -14200.0), "r": 1800.0, "ore": "si", "name": "CRYO-CRYSTAL"},
+		{"tex": "planet_volcanic", "pos": Vector2(24200.0, 13800.0), "r": 1850.0, "ore": "ti", "name": "IGNIS-IV"},
+		{"tex": "planet_large", "pos": Vector2(-19600.0, 21400.0), "r": 2500.0, "ore": "cu", "name": "GAIA-MAJOR"},
+		{"tex": "sun", "pos": Vector2(42000.0, -29500.0), "r": 3600.0, "ore": "", "name": "HELIOS-PRIME"},
+		{"tex": "pulsar", "pos": Vector2(-41000.0, -31000.0), "r": 1600.0, "ore": "ti", "name": "PULSAR-X"},
+		{"tex": "blackhole", "pos": Vector2(38000.0, 34500.0), "r": 2800.0, "ore": "", "name": "GARGANTUA-0"},
 	]
 
 func generate_world(seed_val: int = 42077) -> void:
@@ -105,63 +106,75 @@ func generate_world(seed_val: int = 42077) -> void:
 				cell_max_hp[idx] = 9999.0
 			elif l == LAYERS - 1:
 				cell_kind[idx] = CellKind.SURFACE
-				cell_hp[idx] = 12.0
-				cell_max_hp[idx] = 12.0
+				cell_hp[idx] = 14.0
+				cell_max_hp[idx] = 14.0
 			else:
 				cell_kind[idx] = CellKind.ROCK
-				var depth_hp = 10.0 + float(LAYERS - l) * 1.8
+				var depth_hp = 10.0 + float(LAYERS - l) * 0.75
 				cell_hp[idx] = depth_hp
 				cell_max_hp[idx] = depth_hp
 
-	# Carve curved subterranean caverns inside middle strata (keeping crust solid at layer 9!)
-	var cavs = [
-		Vector2i(10, 5), Vector2i(22, 4), Vector2i(35, 6),
-		Vector2i(47, 5), Vector2i(62, 6), Vector2i(54, 4),
-	]
-	for cv in cavs:
+	# Carve large subterranean caverns around the 360-degree interior
+	for ci in range(36):
+		var cs = posmod(ci * 10 + rng.randi_range(-3, 3), SECTORS)
+		var cl = rng.randi_range(6, LAYERS - 6)
 		for dl in range(-2, 3):
 			for ds in range(-3, 4):
-				if abs(dl) + abs(ds) <= 3:
-					var l = clampi(cv.y + dl, 1, LAYERS - 2)
-					var s = posmod(cv.x + ds, SECTORS)
+				if abs(dl) + abs(ds) <= 4:
+					var l = clampi(cl + dl, 1, LAYERS - 3)
+					var s = posmod(cs + ds, SECTORS)
 					var idx = l * SECTORS + s
 					cell_kind[idx] = CellKind.EMPTY
 					cell_hp[idx] = 0.0
 
-	# Guaranteed rich starter veins right beneath North Pole spawn (SPAWN_SECTOR = 54)
-	_paint_vein(rng, 52, 8, "fe", 2, 1, 14)
-	_paint_vein(rng, 56, 8, "fe", 2, 1, 14)
-	_paint_vein(rng, 50, 7, "cu", 1, 1, 14)
-	_paint_vein(rng, 58, 7, "cu", 1, 1, 14)
-	_paint_vein(rng, 54, 6, "si", 1, 1, 14)
-	_paint_vein(rng, 54, 3, "ti", 2, 1, 18)
+	# Guaranteed rich starter veins right around & beneath North Pole spawn (SPAWN_SECTOR = 270)
+	# Rich multi-layer starter veins right around & beneath North Pole spawn (SPAWN_SECTOR = 270)
+	_paint_vein(rng, 270, 38, "cu", 1, 1, 6)
+	_paint_vein(rng, 267, 37, "fe", 2, 2, 6)
+	_paint_vein(rng, 273, 37, "fe", 2, 2, 6)
+	_paint_vein(rng, 268, 38, "fe", 1, 1, 6)
+	_paint_vein(rng, 272, 38, "fe", 1, 1, 6)
+	_paint_vein(rng, 263, 37, "cu", 2, 1, 8)
+	_paint_vein(rng, 277, 37, "cu", 2, 1, 8)
+	_paint_vein(rng, 266, 34, "si", 2, 1, 10)
+	_paint_vein(rng, 274, 34, "si", 2, 1, 10)
+	_paint_vein(rng, 270, 34, "si", 2, 1, 10)
+	_paint_vein(rng, 270, 28, "ti", 3, 2, 14)
 
-	# Distributed planetary ore pockets across 360-degree sphere
-	for _i in range(16):
-		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(5, 8), "fe", 1, 1, 12)
-	for _i in range(13):
-		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(4, 8), "cu", 1, 1, 12)
-	for _i in range(10):
-		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(2, 6), "si", 1, 1, 14)
-	for _i in range(8):
-		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(1, 4), "ti", 1, 1, 18)
+	# Embed exposed surface crust ores near spawn so Mk-I Engine Fe/Cu is immediately gatherable
+	for ds in [-3, -2, -1, 1, 2, 3]:
+		var ws = wrap_sector(SPAWN_SECTOR + ds)
+		cell_ore[(LAYERS - 1) * SECTORS + ws] = "cu" if (ds == 1 or ds == -2 or ds == 3) else "fe"
+		cell_hp[(LAYERS - 1) * SECTORS + ws] = 9.0
+		cell_max_hp[(LAYERS - 1) * SECTORS + ws] = 9.0
 
-	# Natural Orbital Asteroid Rings (no stations!)
+	# Distributed planetary ore pockets across 360-degree 10x sphere
+	for _i in range(95):
+		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(26, LAYERS - 2), "fe", 2, 2, 10)
+	for _i in range(78):
+		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(20, LAYERS - 2), "cu", 2, 2, 10)
+	for _i in range(60):
+		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(10, 34), "si", 2, 2, 12)
+	for _i in range(45):
+		_paint_vein(rng, rng.randi_range(0, SECTORS - 1), rng.randi_range(2, 24), "ti", 2, 2, 16)
+
+	# Natural Orbital Asteroid Rings outside Origin-Prime atmosphere (dense near-orbit ring + outer belt)
 	asteroids.clear()
-	var ore_cycle = ["fe", "cu", "si", "ti"]
-	for i in range(44):
-		var ang = rng.randf_range(0.0, TAU)
-		var dist = rng.randf_range(960.0, 2900.0)
+	var ore_cycle = ["cu", "si", "fe", "ti"]
+	for i in range(180):
+		var ang = (-PI * 0.5 + float(i - 5) * 0.032) if i < 12 else ((-PI * 0.5 + float(i - 22) * 0.075 + rng.randf_range(-0.02, 0.02)) if i < 42 else rng.randf_range(0.0, TAU))
+		var dist = rng.randf_range(R_ATMOS_OUTER + 200.0, R_ATMOS_OUTER + 760.0) if i < 12 else (rng.randf_range(R_ATMOS_OUTER + 260.0, R_ATMOS_OUTER + 2200.0) if i < 42 else rng.randf_range(R_ATMOS_OUTER + 800.0, 30000.0))
 		var ot = ore_cycle[i % ore_cycle.size()]
 		asteroids.append({
 			"pos": Vector2(cos(ang), sin(ang)) * dist,
 			"ore": ot,
-			"hp": 110.0,
-			"max_hp": 110.0,
-			"radius": rng.randf_range(22.0, 36.0),
+			"hp": 100.0,
+			"max_hp": 100.0,
+			"radius": rng.randf_range(38.0, 72.0),
 			"ang": ang,
 			"dist": dist,
-			"orbit_spd": rng.randf_range(0.008, 0.022) * (1.0 if i % 2 == 0 else -1.0),
+			"near_belt": i < 42,
+			"orbit_spd": rng.randf_range(0.002, 0.005) * (1.0 if i % 2 == 0 else -1.0),
 		})
 	queue_redraw()
 
@@ -260,10 +273,10 @@ func damage_cell(s: int, l: int, power: float, track_player_popup: bool = true) 
 			cell_ore[idx] = ""
 			spawn_world_popup(center, "+%d %s" % [burst, ore_name.to_upper()], _ore_color(ore_name))
 		else:
-			GameState.add_res("fe", 2, track_player_popup)
+			GameState.add_res("fe", 4, track_player_popup)
 			res["ore"] = "fe"
-			res["amount"] += 2
-			spawn_world_popup(center, "+2 FE", Color(0.55, 0.85, 1.0))
+			res["amount"] += 4
+			spawn_world_popup(center, "+4 FE", Color(0.55, 0.85, 1.0))
 		spawn_spark_burst(center, _ore_color(ore_name), 10)
 		queue_redraw()
 	return res
@@ -287,20 +300,24 @@ func mine_asteroid_at(world_pos: Vector2, power: float, max_dist: float = 180.0)
 	if randf() < 0.48:
 		GameState.add_res(ore_name, 1, true)
 	if ast["hp"] <= 0.0:
-		var burst = 14
+		var burst = 24
 		GameState.add_res(ore_name, burst, true)
+		if ore_name != "fe":
+			GameState.add_res("fe", 8, false)
+		if ore_name != "cu":
+			GameState.add_res("cu", 4, false)
 		spawn_world_popup(ast["pos"], "+%d %s" % [burst, ore_name.to_upper()], _ore_color(ore_name))
 		spawn_spark_burst(ast["pos"], Color(1.0, 0.85, 0.4), 14)
 		ast["hp"] = ast["max_hp"]
-		ast["ang"] += randf_range(0.6, 2.5)
+		ast["ang"] += randf_range(0.18, 0.55) if ast.get("near_belt", false) else randf_range(0.6, 2.2)
 		ast["pos"] = Vector2(cos(ast["ang"]), sin(ast["ang"])) * ast["dist"]
 	return {"hit": true, "pos": ast["pos"], "ore": ore_name}
 
-func find_nearest_mine_target(world_pos: Vector2, max_range: float = 160.0) -> Dictionary:
-	# First check orbital asteroids if above atmosphere
-	if world_pos.length() > R_SURFACE + 60.0:
+func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0) -> Dictionary:
+	# First check orbital asteroids if above planet surface
+	if world_pos.length() > R_SURFACE + 120.0:
 		var best_ast = null
-		var best_d = max_range * 1.4
+		var best_d = max_range * 1.6
 		for a in asteroids:
 			var d = a["pos"].distance_to(world_pos)
 			if d < best_d:
@@ -327,7 +344,7 @@ func find_nearest_mine_target(world_pos: Vector2, max_range: float = 160.0) -> D
 				if d < best_ore_d:
 					best_ore_d = d
 					best_ore_c = Vector2i(s, l)
-			elif l < LAYERS - 1: # Prefer mining underground rock rather than punching holes in surface floor
+			else:
 				if d < best_rock_d:
 					best_rock_d = d
 					best_rock_c = Vector2i(s, l)
@@ -424,11 +441,15 @@ func _draw() -> void:
 		c.a = 0.35 + 0.65 * tw
 		draw_rect(Rect2(sp, Vector2(st["size"], st["size"])), c)
 
-	# 3. Spherical Atmospheric Corona around Origin-Prime (0,0)
-	if Rect2(-950, -950, 1900, 1900).intersects(Rect2(min_x, min_y, max_x - min_x, max_y - min_y)):
-		draw_circle(Vector2.ZERO, R_SURFACE + 145.0, Color(0.06, 0.14, 0.28, 0.35))
-		draw_circle(Vector2.ZERO, R_SURFACE + 72.0, Color(0.11, 0.24, 0.44, 0.42))
-		draw_circle(Vector2.ZERO, R_SURFACE + 22.0, Color(0.16, 0.35, 0.58, 0.48))
+	# 3. Spherical Atmospheric Corona around Origin-Prime (0,0) (Thick 3600px atmosphere)
+	var view_c = (tl + br) * 0.5
+	var view_rad = tl.distance_to(br) * 0.5 + 320.0
+	var vc_len = view_c.length()
+	if vc_len - view_rad <= R_ATMOS_OUTER + 400.0:
+		draw_circle(Vector2.ZERO, R_ATMOS_OUTER, Color(0.035, 0.085, 0.19, 0.28))
+		draw_circle(Vector2.ZERO, R_SURFACE + 1800.0, Color(0.06, 0.14, 0.30, 0.32))
+		draw_circle(Vector2.ZERO, R_SURFACE + 520.0, Color(0.10, 0.24, 0.48, 0.40))
+		draw_arc(Vector2.ZERO, R_ATMOS_OUTER, 0.0, TAU, 128, Color(0.22, 0.65, 0.95, 0.24), 4.0)
 
 	# 4. Distant Open-World Planets & Stars
 	var font = ThemeDB.fallback_font
@@ -441,7 +462,7 @@ func _draw() -> void:
 		if tex:
 			draw_texture_rect(tex, Rect2(bp - Vector2(br_rad, br_rad), Vector2(br_rad * 2.0, br_rad * 2.0)), false)
 		if font:
-			draw_string(font, bp + Vector2(-46.0, br_rad + 18.0), b["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.65, 0.85, 1.0, 0.85))
+			draw_string(font, bp + Vector2(-46.0, br_rad + 22.0), b["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.65, 0.85, 1.0, 0.90))
 
 	# 5. Orbital Harvestable Asteroids
 	var ast_tex: Texture2D = tex_celestials.get("asteroid", null)
@@ -453,23 +474,39 @@ func _draw() -> void:
 		if ast_tex:
 			draw_texture_rect(ast_tex, Rect2(ap - Vector2(r, r), Vector2(r * 2.0, r * 2.0)), false, _ore_color(a["ore"]).lerp(Color.WHITE, 0.45))
 
-	# 6. Spherical Cross-Section Planet Origin-Prime (Only if near viewport)
-	if Rect2(-720, -720, 1440, 1440).intersects(Rect2(min_x, min_y, max_x - min_x, max_y - min_y)):
+	# 6. Spherical Cross-Section Planet Origin-Prime (Frustum & Angle Culling for 60fps at 10x Scale)
+	if vc_len - view_rad <= R_SURFACE + 120.0:
 		# Deep dark interior bedrock void
 		draw_circle(Vector2.ZERO, R_SURFACE, Color(0.04, 0.045, 0.085, 1.0))
 
-		# Molten Inner Core Glow (R < R_MAGMA) with plasma swirl arcs
+		# Molten Inner Core Glow (R < R_MAGMA)
 		var core_pulse = 0.88 + 0.12 * sin(anim_time * 3.0)
-		draw_circle(Vector2.ZERO, R_MAGMA, Color(0.95, 0.36 * core_pulse, 0.08, 1.0))
-		draw_circle(Vector2.ZERO, R_MAGMA * 0.65, Color(1.0, 0.72 * core_pulse, 0.22, 1.0))
-		draw_arc(Vector2.ZERO, R_MAGMA * 0.82, anim_time * 0.4, anim_time * 0.4 + 2.2, 20, Color(1.0, 0.82, 0.32, 0.55), 3.0)
-		draw_arc(Vector2.ZERO, R_MAGMA * 0.44, -anim_time * 0.7, -anim_time * 0.7 + 2.8, 16, Color(1.0, 0.95, 0.70, 0.65), 2.5)
+		if vc_len - view_rad <= R_MAGMA + 120.0:
+			draw_circle(Vector2.ZERO, R_MAGMA, Color(0.95, 0.36 * core_pulse, 0.08, 1.0))
+			draw_circle(Vector2.ZERO, R_MAGMA * 0.65, Color(1.0, 0.72 * core_pulse, 0.22, 1.0))
+			draw_arc(Vector2.ZERO, R_MAGMA * 0.82, anim_time * 0.4, anim_time * 0.4 + 2.2, 32, Color(1.0, 0.82, 0.32, 0.55), 5.0)
+			draw_arc(Vector2.ZERO, R_MAGMA * 0.44, -anim_time * 0.7, -anim_time * 0.7 + 2.8, 24, Color(1.0, 0.95, 0.70, 0.65), 4.0)
 
-		# Radial Wedge Strata Cells (72 sectors x 10 layers)
-		for l in range(LAYERS):
+		# Determine visible layer range & sector angle span
+		var l_min = clampi(int(floor((maxf(R_MAGMA, vc_len - view_rad) - R_MAGMA) / LAYER_THICK)) - 1, 0, LAYERS - 1)
+		var l_max = clampi(int(ceil((minf(R_SURFACE, vc_len + view_rad) - R_MAGMA) / LAYER_THICK)) + 1, 0, LAYERS - 1)
+		var draw_all_sec = vc_len <= view_rad + 180.0
+		var s_list: Array[int] = []
+		if draw_all_sec:
+			for s in range(SECTORS):
+				s_list.append(s)
+		else:
+			var ang_c = fposmod(view_c.angle(), TAU)
+			var half_span = asin(clampf(view_rad / maxf(1.0, vc_len), 0.0, 1.0)) + DA * 3.0
+			var sec_span = mini(SECTORS / 2, int(ceil(half_span / DA)))
+			var center_s = int(floor(ang_c / DA))
+			for ds in range(-sec_span, sec_span + 1):
+				s_list.append(wrap_sector(center_s + ds))
+
+		for l in range(l_min, l_max + 1):
 			var r0 = layer_inner_r(l)
 			var r1 = layer_outer_r(l)
-			for s in range(SECTORS):
+			for s in s_list:
 				var idx = l * SECTORS + s
 				var k = cell_kind[idx]
 				if k == CellKind.EMPTY:
@@ -493,27 +530,25 @@ func _draw() -> void:
 					base_col = Color(0.90, (0.34 + grain) * core_pulse, 0.09, 1.0)
 				draw_colored_polygon(pts, base_col)
 
-				# Subtle sector border & cavern rim highlight for crisp readability
 				if k == CellKind.SURFACE:
-					draw_line(pts[1], pts[2], Color(0.45, 0.88, 1.0, 0.90), 2.4)
-					draw_line(pts[0], pts[3], Color(0.18, 0.24, 0.34, 0.70), 1.2)
+					draw_line(pts[1], pts[2], Color(0.45, 0.88, 1.0, 0.90), 2.8)
+					draw_line(pts[0], pts[3], Color(0.18, 0.24, 0.34, 0.70), 1.4)
 				else:
-					draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2]]), Color(0.08, 0.10, 0.16, 0.50), 1.0)
+					draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2]]), Color(0.08, 0.10, 0.16, 0.50), 1.2)
 					if not is_solid_cell(s, l + 1):
-						draw_line(pts[1], pts[2], Color(0.46, 0.54, 0.72, 0.85), 2.0)
+						draw_line(pts[1], pts[2], Color(0.46, 0.54, 0.72, 0.85), 2.2)
 					if not is_solid_cell(s - 1, l):
-						draw_line(pts[0], pts[1], Color(0.46, 0.54, 0.72, 0.85), 2.0)
+						draw_line(pts[0], pts[1], Color(0.46, 0.54, 0.72, 0.85), 2.2)
 
-				# Mineral Ore Vein Icon + Glowing Crystal Flecks
 				var ore = cell_ore[idx]
 				if ore != "":
 					var center = cell_center(s, l)
 					var oc = _ore_color(ore)
-					draw_circle(center, 11.0, Color(oc.r, oc.g, oc.b, 0.14))
+					draw_circle(center, 18.0, Color(oc.r, oc.g, oc.b, 0.15))
 					var otex: Texture2D = tex_ores.get(ore, null)
 					if otex:
-						draw_texture_rect(otex, Rect2(center - Vector2(11, 11), Vector2(22, 22)), false)
-					draw_circle(center, 3.8, Color(oc.r, oc.g, oc.b, 0.45 + 0.25 * sin(anim_time * 3.0 + float(s + l))))
+						draw_texture_rect(otex, Rect2(center - Vector2(18, 18), Vector2(36, 36)), false)
+					draw_circle(center, 5.0, Color(oc.r, oc.g, oc.b, 0.45 + 0.25 * sin(anim_time * 3.0 + float(s + l))))
 
 	# 7. Sparks & Smoke
 	for p in particles:
