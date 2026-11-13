@@ -2,9 +2,12 @@ extends CanvasLayer
 class_name GameHUD
 
 # ==============================================================================
-# STAR REPLICA: AUTOMA - PIXEL-CYBER TACTICAL HUD
-# Modeled cleanly on target_gameplay_concept.jpeg with responsive desktop/mobile
-# layout, opaque scrollable Tech Tree Catalog, and zero missing font glyphs.
+# STAR REPLICA: AUTOMA - AAA MINIMALIST HUD & 2-CLICK ABXY/JOYSTICK TREE
+# Features:
+#   - DPR-aware auto-scaling (crisp large text on Desktop & 3x-DPR Mobile)
+#   - Bespoke chamfered sci-fi vector polygons (zero plain rounded rectangles)
+#   - Open-world circular radar + essential vitals (HP, Shield, Ores, Fleet)
+#   - 1 Analog Left Stick + 4 ABXY triggers reaching every feature in <= 2 clicks
 # ==============================================================================
 
 signal orbit_cam_toggled
@@ -12,59 +15,67 @@ signal save_requested
 signal reset_requested
 signal brake_requested
 
-var top_left_panel: PanelContainer
-var top_right_flow: HFlowContainer
-var bottom_bar: PanelContainer
-var telemetry_panel: PanelContainer
-var tech_modal: PanelContainer
-var touch_overlay: Control
+enum MenuState { FIELD, BUILD_TREE, CMD_TREE }
 
-# Live Label / Control references
-var res_labels: Dictionary = {}
-var lbl_fleet: Label
-var lbl_drones: Label
-var btn_craft_drone: Button
-var lbl_power: Label
-var printer_bar: ProgressBar
-var lbl_printer: Label
-var doctrine_btns: Dictionary = {}
+const BUILD_BRANCHES: Array[String] = ["MINE", "FACTORY", "POWER", "MEGA"]
+const CMD_TABS: Array[String] = ["FLEET", "SYSTEM"]
 
-var active_category: String = "MINE"
-var cat_btns: Dictionary = {}
-var hotbar_container: HBoxContainer
-var tech_list_vbox: VBoxContainer
-var tech_summary_lbl: Label
-
-var lbl_zone: Label
-var lbl_speed: Label
-var log_vbox: VBoxContainer
-var log_entries: Array[Dictionary] = []
-
-var btn_orbit_cam: Button
-var btn_mute: Button
-var btn_pad: Button
-var orbit_cam_active: bool = false
-var force_touch_pad: bool = false
+var menu_state: int = MenuState.FIELD
+var active_branch_idx: int = 0
+var active_cmd_tab_idx: int = 0
+var cursor_idx: int = 0
 
 var player_ref: Node2D
-var touch_move_vec: Vector2 = Vector2.ZERO
-var touch_mining: bool = false
+var world_ref: PlanetWorld
+var swarm_ref: SwarmSimulation
+
+var hud_canvas: Control
 var icons: Dictionary = {}
 
-const COL_BG = Color(0.045, 0.068, 0.115, 0.92)
-const COL_BORDER = Color(0.18, 0.42, 0.65, 0.95)
-const COL_ACTIVE = Color(0.22, 0.88, 1.0, 1.0)
+# Virtual Joystick & ABXY interaction state
+var joy_drag_idx: int = -1
+var joy_center: Vector2 = Vector2(110, 500)
+var joy_radius: float = 54.0
+var joy_vec: Vector2 = Vector2.ZERO
+
+var btn_rects: Dictionary = {} # key -> Rect2 / pos+r
+var tree_hitboxes: Array[Dictionary] = [] # {rect: Rect2, action: Callable}
+var pressed_flash: Dictionary = {} # key -> float
+
+var orbit_cam_active: bool = false
+var status_banner: String = ""
+var status_banner_col: Color = Color(0.35, 0.95, 1.0)
+var status_banner_t: float = 0.0
+var stick_nav_cd: float = 0.0
+var anim_time: float = 0.0
+
+# AAA Sci-Fi Color Palette
+const C_BG = Color(0.035, 0.055, 0.105, 0.88)
+const C_BG_DARK = Color(0.02, 0.032, 0.065, 0.94)
+const C_STEEL = Color(0.20, 0.42, 0.65, 0.92)
+const C_CYAN = Color(0.22, 0.92, 1.0, 1.0)
+const C_EMERALD = Color(0.28, 0.96, 0.68, 1.0)
+const C_AMBER = Color(1.0, 0.72, 0.25, 1.0)
+const C_CRIMSON = Color(1.0, 0.28, 0.34, 1.0)
+const C_TEXT = Color(0.94, 0.97, 1.0, 1.0)
+const C_MUTED = Color(0.62, 0.76, 0.90, 1.0)
 
 func _ready() -> void:
 	_load_icons()
-	_build_ui()
-	_connect_signals()
+	hud_canvas = Control.new()
+	hud_canvas.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hud_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_canvas.draw.connect(_on_hud_draw)
+	add_child(hud_canvas)
+
+	GameState.log_event.connect(_on_log_event)
 	get_viewport().size_changed.connect(_on_viewport_resized)
 	_on_viewport_resized()
-	refresh_all()
 
-func setup(p_player: Node2D) -> void:
+func setup(p_player: Node2D, p_world: PlanetWorld = null, p_swarm: SwarmSimulation = null) -> void:
 	player_ref = p_player
+	world_ref = p_world
+	swarm_ref = p_swarm
 
 func _load_icons() -> void:
 	var paths = {
@@ -75,7 +86,6 @@ func _load_icons() -> void:
 		"plate_fe": "res://assets/ui/item_plate_fe.png",
 		"circuit": "res://assets/ui/item_circuit.png",
 		"probe_stock": "res://assets/ui/item_drone_unit.png",
-		"energy": "res://assets/ui/energy.png",
 		"pick": "res://assets/ui/tool_pick.png",
 		"demolish": "res://assets/ui/tool_demolish.png",
 	}
@@ -87,654 +97,496 @@ func _load_icons() -> void:
 		if ip != "" and ResourceLoader.exists(ip):
 			icons[bid] = load(ip)
 
-func _make_panel_style(bg: Color = COL_BG, border: Color = COL_BORDER, bwidth: int = 1, radius: int = 4) -> StyleBoxFlat:
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = border
-	sb.set_border_width_all(bwidth)
-	sb.set_corner_radius_all(radius)
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
-	return sb
-
-func _make_btn_style(bg: Color, border: Color) -> StyleBoxFlat:
-	var sb = StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = border
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 7
-	sb.content_margin_right = 7
-	sb.content_margin_top = 4
-	sb.content_margin_bottom = 4
-	return sb
-
-func _style_button(btn: Button, accent: Color = COL_BORDER) -> void:
-	btn.add_theme_stylebox_override("normal", _make_btn_style(Color(0.08, 0.12, 0.20, 0.94), accent))
-	btn.add_theme_stylebox_override("hover", _make_btn_style(Color(0.13, 0.22, 0.34, 0.98), COL_ACTIVE))
-	btn.add_theme_stylebox_override("pressed", _make_btn_style(Color(0.18, 0.36, 0.52, 1.0), COL_ACTIVE))
-	btn.add_theme_font_size_override("font_size", 11)
-	btn.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
-
-func _build_ui() -> void:
-	# 1. TOP-LEFT TACTICAL STATUS PANEL
-	top_left_panel = PanelContainer.new()
-	top_left_panel.position = Vector2(10, 10)
-	top_left_panel.add_theme_stylebox_override("panel", _make_panel_style())
-	add_child(top_left_panel)
-
-	var tl_vbox = VBoxContainer.new()
-	tl_vbox.add_theme_constant_override("separation", 4)
-	top_left_panel.add_child(tl_vbox)
-
-	# Row 1: Pixel-Icon Resource Strip
-	var res_flow = HFlowContainer.new()
-	res_flow.add_theme_constant_override("h_separation", 8)
-	res_flow.add_theme_constant_override("v_separation", 2)
-	tl_vbox.add_child(res_flow)
-
-	for rk in ["fe", "cu", "si", "ti", "plate_fe", "circuit", "probe_stock"]:
-		var item_box = HBoxContainer.new()
-		item_box.add_theme_constant_override("separation", 3)
-		var tex = TextureRect.new()
-		tex.custom_minimum_size = Vector2(16, 16)
-		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		tex.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		tex.texture = icons.get(rk, null)
-		var lbl = Label.new()
-		lbl.add_theme_font_size_override("font_size", 12)
-		lbl.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
-		lbl.text = "0"
-		item_box.add_child(tex)
-		item_box.add_child(lbl)
-		res_flow.add_child(item_box)
-		res_labels[rk] = lbl
-
-	# Row 2: Drones, Craft Drone Button, Fleet & Power
-	var mid_hbox = HFlowContainer.new()
-	mid_hbox.add_theme_constant_override("h_separation", 8)
-	mid_hbox.add_theme_constant_override("v_separation", 3)
-	tl_vbox.add_child(mid_hbox)
-
-	lbl_drones = Label.new()
-	lbl_drones.add_theme_font_size_override("font_size", 12)
-	lbl_drones.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
-	mid_hbox.add_child(lbl_drones)
-
-	btn_craft_drone = Button.new()
-	_style_button(btn_craft_drone, Color(0.25, 0.85, 0.65))
-	btn_craft_drone.pressed.connect(func():
-		if GameState.try_craft_drone():
-			AudioSynth.play_synth("craft")
-		else:
-			AudioSynth.play_synth("error")
-		refresh_all()
-	)
-	mid_hbox.add_child(btn_craft_drone)
-
-	lbl_fleet = Label.new()
-	lbl_fleet.add_theme_font_size_override("font_size", 12)
-	lbl_fleet.add_theme_color_override("font_color", Color(0.35, 0.95, 1.0))
-	mid_hbox.add_child(lbl_fleet)
-
-	lbl_power = Label.new()
-	lbl_power.add_theme_font_size_override("font_size", 12)
-	lbl_power.add_theme_color_override("font_color", Color(0.55, 1.0, 0.65))
-	mid_hbox.add_child(lbl_power)
-
-	# Row 3: Macro Replicator Progress + Doctrine Switcher
-	var bot_row = HFlowContainer.new()
-	bot_row.add_theme_constant_override("h_separation", 6)
-	bot_row.add_theme_constant_override("v_separation", 3)
-	tl_vbox.add_child(bot_row)
-
-	lbl_printer = Label.new()
-	lbl_printer.add_theme_font_size_override("font_size", 11)
-	lbl_printer.add_theme_color_override("font_color", Color(0.75, 0.86, 0.96))
-	lbl_printer.text = "PRINTER: IDLE"
-	bot_row.add_child(lbl_printer)
-
-	printer_bar = ProgressBar.new()
-	printer_bar.custom_minimum_size = Vector2(96, 14)
-	printer_bar.max_value = 100.0
-	printer_bar.show_percentage = false
-	var pb_bg = StyleBoxFlat.new()
-	pb_bg.bg_color = Color(0.08, 0.11, 0.18, 1.0)
-	pb_bg.set_corner_radius_all(3)
-	var pb_fill = StyleBoxFlat.new()
-	pb_fill.bg_color = Color(0.18, 0.85, 1.0, 1.0)
-	pb_fill.set_corner_radius_all(3)
-	printer_bar.add_theme_stylebox_override("background", pb_bg)
-	printer_bar.add_theme_stylebox_override("fill", pb_fill)
-	bot_row.add_child(printer_bar)
-
-	var docs = [
-		[GameState.Doctrine.HARVEST, "HARVEST"],
-		[GameState.Doctrine.REPLICATE, "REPLICATE"],
-		[GameState.Doctrine.DEFEND, "DEFEND"],
-		[GameState.Doctrine.ASSAULT, "ASSAULT"],
-	]
-	for d in docs:
-		var db = Button.new()
-		db.text = d[1]
-		_style_button(db)
-		var d_id: int = d[0]
-		db.pressed.connect(func():
-			GameState.set_doctrine(d_id)
-			AudioSynth.play_synth("select")
-			refresh_all()
-		)
-		bot_row.add_child(db)
-		doctrine_btns[d_id] = db
-
-	# 2. TOP-RIGHT COMPACT UTILITY BUTTONS
-	top_right_flow = HFlowContainer.new()
-	top_right_flow.alignment = FlowContainer.ALIGNMENT_END
-	top_right_flow.add_theme_constant_override("h_separation", 5)
-	top_right_flow.add_theme_constant_override("v_separation", 4)
-	add_child(top_right_flow)
-
-	var btn_tech = Button.new()
-	btn_tech.text = "TECH / BUILD [B]"
-	_style_button(btn_tech, COL_ACTIVE)
-	btn_tech.pressed.connect(toggle_tech_modal)
-	top_right_flow.add_child(btn_tech)
-
-	btn_orbit_cam = Button.new()
-	btn_orbit_cam.text = "ORBIT VIEW [M]"
-	_style_button(btn_orbit_cam)
-	btn_orbit_cam.pressed.connect(func():
-		orbit_cam_active = not orbit_cam_active
-		emit_signal("orbit_cam_toggled")
-		AudioSynth.play_synth("select")
-		refresh_all()
-	)
-	top_right_flow.add_child(btn_orbit_cam)
-
-	var btn_rot = Button.new()
-	btn_rot.text = "FLIP [R]"
-	_style_button(btn_rot)
-	btn_rot.pressed.connect(func():
-		GameState.build_rotation = (GameState.build_rotation + 2) % 4
-		AudioSynth.play_synth("click")
-		add_log("Belt Direction Flipped", "info")
-	)
-	top_right_flow.add_child(btn_rot)
-
-	var btn_brake = Button.new()
-	btn_brake.text = "BRAKE"
-	_style_button(btn_brake)
-	btn_brake.pressed.connect(func(): emit_signal("brake_requested"))
-	top_right_flow.add_child(btn_brake)
-
-	var btn_save = Button.new()
-	btn_save.text = "SAVE"
-	_style_button(btn_save)
-	btn_save.pressed.connect(func(): emit_signal("save_requested"))
-	top_right_flow.add_child(btn_save)
-
-	btn_mute = Button.new()
-	btn_mute.text = "AUDIO: ON"
-	_style_button(btn_mute)
-	btn_mute.pressed.connect(func():
-		var m = AudioSynth.toggle_mute()
-		btn_mute.text = "AUDIO: OFF" if m else "AUDIO: ON"
-	)
-	top_right_flow.add_child(btn_mute)
-
-	btn_pad = Button.new()
-	btn_pad.text = "PAD"
-	_style_button(btn_pad)
-	btn_pad.pressed.connect(func():
-		force_touch_pad = not force_touch_pad
-		_update_touch_pad_visibility()
-	)
-	top_right_flow.add_child(btn_pad)
-
-	var btn_rst = Button.new()
-	btn_rst.text = "RST"
-	_style_button(btn_rst, Color(0.85, 0.35, 0.35))
-	btn_rst.pressed.connect(func(): emit_signal("reset_requested"))
-	top_right_flow.add_child(btn_rst)
-
-	# 3. BOTTOM-CENTER TABBED BUILD HOTBAR
-	bottom_bar = PanelContainer.new()
-	bottom_bar.add_theme_stylebox_override("panel", _make_panel_style())
-	add_child(bottom_bar)
-
-	var bot_vbox = VBoxContainer.new()
-	bot_vbox.add_theme_constant_override("separation", 4)
-	bottom_bar.add_child(bot_vbox)
-
-	var tab_hbox = HBoxContainer.new()
-	tab_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	tab_hbox.add_theme_constant_override("separation", 4)
-	bot_vbox.add_child(tab_hbox)
-
-	for cat in [["MINE", "MINE & LOGI"], ["FACTORY", "FACTORY"], ["POWER", "POWER & DEF"], ["SPACE", "SPACE & MEGA"]]:
-		var cb = Button.new()
-		cb.text = cat[1]
-		_style_button(cb)
-		var cid: String = cat[0]
-		cb.pressed.connect(func():
-			active_category = cid
-			AudioSynth.play_synth("click")
-			_rebuild_hotbar()
-			refresh_all()
-		)
-		tab_hbox.add_child(cb)
-		cat_btns[cid] = cb
-
-	var scroll_bar = ScrollContainer.new()
-	scroll_bar.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll_bar.custom_minimum_size = Vector2(200, 48)
-	bot_vbox.add_child(scroll_bar)
-
-	hotbar_container = HBoxContainer.new()
-	hotbar_container.alignment = BoxContainer.ALIGNMENT_CENTER
-	hotbar_container.add_theme_constant_override("separation", 4)
-	scroll_bar.add_child(hotbar_container)
-
-	# 4. BOTTOM-RIGHT TELEMETRY & LOG PANEL
-	telemetry_panel = PanelContainer.new()
-	telemetry_panel.clip_contents = true
-	telemetry_panel.add_theme_stylebox_override("panel", _make_panel_style())
-	add_child(telemetry_panel)
-
-	var tel_vbox = VBoxContainer.new()
-	tel_vbox.custom_minimum_size = Vector2(264, 0)
-	tel_vbox.add_theme_constant_override("separation", 2)
-	telemetry_panel.add_child(tel_vbox)
-
-	lbl_zone = Label.new()
-	lbl_zone.add_theme_font_size_override("font_size", 11)
-	lbl_zone.add_theme_color_override("font_color", Color(0.45, 0.92, 1.0))
-	tel_vbox.add_child(lbl_zone)
-
-	lbl_speed = Label.new()
-	lbl_speed.add_theme_font_size_override("font_size", 11)
-	lbl_speed.add_theme_color_override("font_color", Color(0.85, 0.92, 0.98))
-	tel_vbox.add_child(lbl_speed)
-
-	log_vbox = VBoxContainer.new()
-	log_vbox.add_theme_constant_override("separation", 1)
-	tel_vbox.add_child(log_vbox)
-
-	# 5. OPAQUE RESPONSIVE BLUEPRINT & TECH CATALOG MODAL
-	tech_modal = PanelContainer.new()
-	tech_modal.visible = false
-	tech_modal.clip_contents = true
-	tech_modal.add_theme_stylebox_override("panel", _make_panel_style(Color(0.035, 0.05, 0.09, 1.0), COL_ACTIVE, 2, 6))
-	add_child(tech_modal)
-
-	var modal_vbox = VBoxContainer.new()
-	modal_vbox.add_theme_constant_override("separation", 8)
-	tech_modal.add_child(modal_vbox)
-
-	var header_hbox = HBoxContainer.new()
-	modal_vbox.add_child(header_hbox)
-
-	var title_lbl = Label.new()
-	title_lbl.text = "TECH TREE & BLUEPRINTS"
-	title_lbl.clip_text = true
-	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title_lbl.add_theme_font_size_override("font_size", 14)
-	title_lbl.add_theme_color_override("font_color", COL_ACTIVE)
-	header_hbox.add_child(title_lbl)
-
-	var btn_close_modal = Button.new()
-	btn_close_modal.text = "CLOSE [ESC]"
-	_style_button(btn_close_modal, Color(0.95, 0.35, 0.35))
-	btn_close_modal.pressed.connect(func():
-		tech_modal.visible = false
-		_update_touch_pad_visibility()
-	)
-	header_hbox.add_child(btn_close_modal)
-
-	tech_summary_lbl = Label.new()
-	tech_summary_lbl.add_theme_font_size_override("font_size", 12)
-	tech_summary_lbl.add_theme_color_override("font_color", Color(0.82, 0.9, 0.98))
-	tech_summary_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	modal_vbox.add_child(tech_summary_lbl)
-
-	var modal_scroll = ScrollContainer.new()
-	modal_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	modal_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	modal_vbox.add_child(modal_scroll)
-
-	tech_list_vbox = VBoxContainer.new()
-	tech_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tech_list_vbox.add_theme_constant_override("separation", 6)
-	modal_scroll.add_child(tech_list_vbox)
-
-	# 6. MOBILE VIRTUAL TOUCH D-PAD + MINE BUTTON
-	_build_touch_controls()
-	_rebuild_hotbar()
-
-func _build_touch_controls() -> void:
-	touch_overlay = Control.new()
-	touch_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(touch_overlay)
-
-	var dpad_data = [
-		["U", Vector2(46, 0), Vector2(0, -1)],
-		["D", Vector2(46, 86), Vector2(0, 1)],
-		["L", Vector2(2, 43), Vector2(-1, 0)],
-		["R", Vector2(90, 43), Vector2(1, 0)],
-	]
-	for dd in dpad_data:
-		var b = Button.new()
-		b.text = dd[0]
-		b.position = dd[1]
-		b.custom_minimum_size = Vector2(40, 40)
-		_style_button(b, Color(0.25, 0.72, 0.95, 0.8))
-		var dir: Vector2 = dd[2]
-		b.button_down.connect(func(): touch_move_vec += dir)
-		b.button_up.connect(func(): touch_move_vec = Vector2.ZERO)
-		touch_overlay.add_child(b)
-
-	var mine_btn = Button.new()
-	mine_btn.text = "MINE"
-	mine_btn.position = Vector2(142, 34)
-	mine_btn.custom_minimum_size = Vector2(58, 52)
-	_style_button(mine_btn, Color(0.35, 0.95, 0.72, 0.9))
-	mine_btn.button_down.connect(func(): touch_mining = true)
-	mine_btn.button_up.connect(func(): touch_mining = false)
-	touch_overlay.add_child(mine_btn)
-
-func _connect_signals() -> void:
-	GameState.inventory_changed.connect(refresh_all)
-	GameState.state_updated.connect(refresh_all)
-	GameState.blueprint_selected.connect(func(_id): _rebuild_hotbar(); refresh_all())
-	GameState.log_event.connect(add_log)
-
-func _rebuild_hotbar() -> void:
-	for c in hotbar_container.get_children():
-		c.queue_free()
-
-	# Always first: PICK / LASER MINE tool
-	_add_hotbar_btn("pick", "Mine[Q]", icons.get("pick", null), true)
-
-	for bid in GameState.BUILDINGS.keys():
-		var info = GameState.BUILDINGS[bid]
-		if info["category"] != active_category:
-			continue
-		var hk = info["hotkey"]
-		var short_name = info["name"].replace("Mining ", "").replace("Conveyor ", "").replace("Ore Lift ", "Lift ").replace("Inserter ", "").replace("Container ", "").replace("Blast ", "").replace("Auto ", "").replace("Macro ", "").replace("Defense ", "").replace("Geothermal ", "Geo ")
-		var label = "%s" % short_name
-		if hk != "":
-			label = "[%s] %s" % [hk, short_name]
-		var unlocked = GameState.drones >= int(info.get("req_drones", 0))
-		_add_hotbar_btn(bid, label, icons.get(bid, null), unlocked)
-
-	# Always last: DEMOLISH tool
-	_add_hotbar_btn("demolish", "Salvage[X]", icons.get("demolish", null), true)
-
-func _add_hotbar_btn(tool_id: String, text_lbl: String, icon_tex: Texture2D, unlocked: bool) -> void:
-	var b = Button.new()
-	b.text = text_lbl
-	if icon_tex:
-		b.icon = icon_tex
-		b.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	var is_sel = (GameState.selected_tool == tool_id)
-	var border = COL_ACTIVE if is_sel else (COL_BORDER if unlocked else Color(0.45, 0.32, 0.25))
-	var bg = Color(0.14, 0.30, 0.46, 0.98) if is_sel else Color(0.06, 0.09, 0.16, 0.94)
-	b.add_theme_stylebox_override("normal", _make_btn_style(bg, border))
-	b.add_theme_stylebox_override("hover", _make_btn_style(Color(0.14, 0.24, 0.36, 0.98), COL_ACTIVE))
-	b.add_theme_font_size_override("font_size", 11)
-	b.add_theme_color_override("font_color", Color(1, 1, 1) if unlocked else Color(0.7, 0.6, 0.5))
-	b.pressed.connect(func():
-		GameState.set_tool(tool_id)
-		AudioSynth.play_synth("click")
-	)
-	hotbar_container.add_child(b)
-
-func _rebuild_tech_catalog() -> void:
-	for c in tech_list_vbox.get_children():
-		c.queue_free()
-
-	tech_summary_lbl.text = "DOCKED DRONES: %d/%d  |  Fe:%d  Cu:%d  Si:%d  Ti:%d  Plate:%d  Circ:%d  |  Click a facility to project blue Blueprint Ghosts on valid slots." % [
-		GameState.drones, GameState.max_drones,
-		GameState.fe, GameState.cu, GameState.si, GameState.ti,
-		GameState.plate_fe, GameState.circuit
-	]
-
-	for bid in GameState.BUILDINGS.keys():
-		var info = GameState.BUILDINGS[bid]
-		var req_d = int(info.get("req_drones", 0))
-		var unlocked = GameState.drones >= req_d
-		var can_pay = GameState.can_afford(info["cost"])
-
-		var card = PanelContainer.new()
-		var c_border = Color(0.24, 0.82, 0.98) if (unlocked and can_pay) else (Color(0.85, 0.45, 0.28) if unlocked else Color(0.38, 0.38, 0.44))
-		card.add_theme_stylebox_override("panel", _make_panel_style(Color(0.06, 0.088, 0.145, 0.98), c_border, 1, 4))
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tech_list_vbox.add_child(card)
-
-		var card_vbox = VBoxContainer.new()
-		card_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card_vbox.add_theme_constant_override("separation", 4)
-		card.add_child(card_vbox)
-
-		var top_row = HBoxContainer.new()
-		top_row.add_theme_constant_override("separation", 8)
-		card_vbox.add_child(top_row)
-
-		var icon_rect = TextureRect.new()
-		icon_rect.custom_minimum_size = Vector2(28, 28)
-		icon_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		icon_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		icon_rect.texture = icons.get(bid, null)
-		top_row.add_child(icon_rect)
-
-		var nl = Label.new()
-		nl.text = "%s [%s]" % [info["name"], info["category"]]
-		nl.clip_text = true
-		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		nl.add_theme_font_size_override("font_size", 13)
-		nl.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
-		top_row.add_child(nl)
-
-		var sel_btn = Button.new()
-		sel_btn.text = "SELECT"
-		_style_button(sel_btn, COL_ACTIVE if unlocked else Color(0.45, 0.35, 0.35))
-		sel_btn.pressed.connect(func():
-			active_category = info["category"]
-			GameState.set_tool(bid)
-			tech_modal.visible = false
-			_update_touch_pad_visibility()
-			AudioSynth.play_synth("select")
-		)
-		top_row.add_child(sel_btn)
-
-		var meta_r = HFlowContainer.new()
-		meta_r.add_theme_constant_override("h_separation", 8)
-		card_vbox.add_child(meta_r)
-
-		var pwr = float(info["power"])
-		var pl = Label.new()
-		pl.text = ("+%d kW" % int(pwr)) if pwr >= 0 else ("%d kW" % int(pwr))
-		pl.add_theme_font_size_override("font_size", 11)
-		pl.add_theme_color_override("font_color", Color(0.45, 1.0, 0.6) if pwr >= 0 else Color(1.0, 0.72, 0.35))
-		meta_r.add_child(pl)
-
-		var status_l = Label.new()
-		status_l.add_theme_font_size_override("font_size", 11)
-		if not unlocked:
-			status_l.text = "LOCKED (NEED %d DRONES)" % req_d
-			status_l.add_theme_color_override("font_color", Color(1.0, 0.45, 0.35))
-		elif can_pay:
-			status_l.text = "READY TO BUILD"
-			status_l.add_theme_color_override("font_color", Color(0.35, 1.0, 0.7))
-		else:
-			status_l.text = GameState.get_missing_text(info["cost"])
-			status_l.add_theme_color_override("font_color", Color(1.0, 0.38, 0.38))
-		meta_r.add_child(status_l)
-
-		var cost_parts: PackedStringArray = []
-		for ck in info["cost"].keys():
-			cost_parts.append("%s:%d" % [ck.to_upper(), int(info["cost"][ck])])
-		var desc_l = Label.new()
-		desc_l.text = "Cost: %s  |  %s %s" % [" ".join(cost_parts), info["desc"], info["usage"]]
-		desc_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		desc_l.add_theme_font_size_override("font_size", 11)
-		desc_l.add_theme_color_override("font_color", Color(0.75, 0.84, 0.94))
-		card_vbox.add_child(desc_l)
-
-func toggle_tech_modal() -> void:
-	tech_modal.visible = not tech_modal.visible
-	if tech_modal.visible:
-		tech_modal.move_to_front()
-		_rebuild_tech_catalog()
-		_layout_tech_modal()
-		AudioSynth.play_synth("select")
-	_update_touch_pad_visibility()
-
-func add_log(msg: String, level: String = "info") -> void:
-	var col = Color(0.75, 0.88, 1.0)
-	if level == "good": col = Color(0.4, 1.0, 0.68)
-	elif level == "warn": col = Color(1.0, 0.78, 0.35)
-	elif level == "error": col = Color(1.0, 0.35, 0.35)
-
-	log_entries.append({"text": msg, "col": col, "life": 14.0})
-	if log_entries.size() > 4:
-		log_entries.remove_at(0)
-	_refresh_log_ui()
-
-func _refresh_log_ui() -> void:
-	for c in log_vbox.get_children():
-		log_vbox.remove_child(c)
-		c.queue_free()
-	for e in log_entries:
-		var l = Label.new()
-		l.text = "> " + e["text"]
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		l.custom_minimum_size = Vector2(260, 0)
-		l.add_theme_font_size_override("font_size", 10)
-		l.add_theme_color_override("font_color", e["col"])
-		log_vbox.add_child(l)
-	call_deferred("_position_telemetry")
-
-func refresh_all() -> void:
-	for rk in res_labels.keys():
-		res_labels[rk].text = str(GameState.get_res(rk))
-
-	lbl_drones.text = "DRONES:%d/%d" % [GameState.drones, GameState.max_drones]
-	var dcost = GameState.get_drone_craft_cost()
-	var dc_parts: PackedStringArray = []
-	for k in dcost.keys():
-		dc_parts.append("%d%s" % [int(dcost[k]), k.capitalize()])
-	btn_craft_drone.text = "+DRONE (%s)" % " ".join(dc_parts)
-	btn_craft_drone.disabled = GameState.drones >= GameState.max_drones
-
-	lbl_fleet.text = "FLEET:%d/10000" % GameState.fleet_count
-	lbl_power.text = "PWR:%d/%dkW (%d%%)" % [int(GameState.power_use), int(GameState.power_gen), int(GameState.power_ratio * 100.0)]
-
-	if GameState.printer_active:
-		lbl_printer.text = "REPLICATOR:%d%%" % int(GameState.printer_progress * 100.0)
-	else:
-		lbl_printer.text = "PRINTER:OFFLINE"
-	printer_bar.value = GameState.printer_progress * 100.0
-
-	for d_id in doctrine_btns.keys():
-		var b: Button = doctrine_btns[d_id]
-		var act = (GameState.current_doctrine == d_id)
-		_style_button(b, COL_ACTIVE if act else COL_BORDER)
-
-	for cid in cat_btns.keys():
-		var cb: Button = cat_btns[cid]
-		_style_button(cb, COL_ACTIVE if cid == active_category else COL_BORDER)
-
-	if btn_orbit_cam:
-		_style_button(btn_orbit_cam, COL_ACTIVE if orbit_cam_active else COL_BORDER)
-
-	if tech_modal.visible:
-		_rebuild_tech_catalog()
-
-func _process(delta: float) -> void:
-	if player_ref and player_ref.has_method("set_virtual_input"):
-		player_ref.set_virtual_input(touch_move_vec, touch_mining)
-
-		var spd = int(player_ref.velocity.length())
-		var py = player_ref.position.y
-		if py < -52.0:
-			lbl_zone.text = "ZONE: ORBIT +%dm (INERTIAL)" % int(absf(py) * 0.5)
-		elif py > 28.0:
-			lbl_zone.text = "ZONE: CAVERN -%dm (ROCK)" % int(py * 0.5)
-		else:
-			lbl_zone.text = "ZONE: SURFACE HORIZON (ANCHORED)"
-		lbl_speed.text = "VEL:%d u/s | SWARM:%d | HOST:%d" % [spd, GameState.fleet_count, GameState.hostiles_active]
-
-	var changed = false
-	for i in range(log_entries.size() - 1, -1, -1):
-		log_entries[i]["life"] -= delta
-		if log_entries[i]["life"] <= 0.0:
-			log_entries.remove_at(i)
-			changed = true
-	if changed:
-		_refresh_log_ui()
+func _on_log_event(msg: String, level: String) -> void:
+	status_banner = msg
+	status_banner_t = 3.2
+	match level:
+		"good": status_banner_col = C_EMERALD
+		"warn": status_banner_col = C_AMBER
+		"error": status_banner_col = C_CRIMSON
+		_: status_banner_col = C_CYAN
 
 func _on_viewport_resized() -> void:
+	var win = get_tree().root
+	var win_sz = Vector2(DisplayServer.window_get_size())
+	if win_sz.x < 10.0:
+		win_sz = get_viewport().get_visible_rect().size
+	# DPR-aware auto-scale so Desktop (1600x900), Mobile (390x844), AND 3x Mobile (1080x2400)
+	# all render crisp readable AAA typography & thumb-friendly ABXY pads!
+	var min_dim = minf(win_sz.x, win_sz.y)
+	var scale_f = clampf(min_dim / 520.0, 0.90, 2.55)
+	if absf(win.content_scale_factor - scale_f) > 0.04:
+		win.content_scale_factor = scale_f
+
 	var vp = get_viewport().get_visible_rect().size
-	var narrow = vp.x < 780.0
+	joy_radius = clampf(minf(vp.x, vp.y) * 0.105, 44.0, 58.0)
+	var d = clampf(joy_radius * 0.92, 42.0, 54.0)
+	var r = clampf(d * 0.46, 20.0, 26.0)
+	var bottom_margin = 28.0
+	joy_center = Vector2(joy_radius + 26.0, vp.y - joy_radius - bottom_margin - 6.0)
 
-	top_left_panel.position = Vector2(8, 8)
-	top_left_panel.size = Vector2(minf(vp.x - 16.0, 520.0 if not narrow else vp.x - 16.0), 0)
+	# Bottom-Right ABXY Diamond cluster layout (bottom-safe so 'A' badge never clips viewport)
+	var pad_center = Vector2(vp.x - d - r - 24.0, vp.y - d - r - bottom_margin)
+	btn_rects = {
+		"Y": {"pos": pad_center + Vector2(0, -d), "r": r},
+		"X": {"pos": pad_center + Vector2(-d, 0), "r": r},
+		"B": {"pos": pad_center + Vector2(d, 0), "r": r},
+		"A": {"pos": pad_center + Vector2(0, d), "r": r},
+	}
+	if hud_canvas:
+		hud_canvas.queue_redraw()
 
-	var tr_w = minf(vp.x * 0.44, 520.0) if not narrow else (vp.x - 16.0)
-	top_right_flow.size = Vector2(tr_w, 44.0)
-	if narrow:
-		top_right_flow.position = Vector2(8.0, top_left_panel.position.y + maxf(94.0, top_left_panel.size.y) + 8.0)
-		top_right_flow.alignment = FlowContainer.ALIGNMENT_BEGIN
+func refresh_all() -> void:
+	if hud_canvas:
+		hud_canvas.queue_redraw()
+
+func toggle_tech_modal() -> void:
+	if menu_state == MenuState.FIELD:
+		menu_state = MenuState.BUILD_TREE
+		cursor_idx = 0
+		AudioSynth.play_synth("select")
 	else:
-		top_right_flow.position = Vector2(vp.x - tr_w - 8.0, 8.0)
-		top_right_flow.alignment = FlowContainer.ALIGNMENT_END
+		menu_state = MenuState.FIELD
 
-	var bar_w = clampf(vp.x - (340.0 if not narrow else 16.0), 300.0, 920.0)
-	bottom_bar.size = Vector2(bar_w, 86.0)
-	if narrow:
-		bottom_bar.position = Vector2((vp.x - bar_w) * 0.5, vp.y - 94.0)
+func _process(delta: float) -> void:
+	anim_time += delta
+	if status_banner_t > 0.0:
+		status_banner_t -= delta
+	if stick_nav_cd > 0.0:
+		stick_nav_cd -= delta
+	for k in pressed_flash.keys():
+		pressed_flash[k] = maxf(0.0, float(pressed_flash[k]) - delta)
+
+	# When inside a command tree, Left Stick navigates tree nodes instead of moving ship!
+	if menu_state != MenuState.FIELD:
+		if player_ref and player_ref.has_method("set_virtual_input"):
+			player_ref.set_virtual_input(Vector2.ZERO, false)
+		_poll_menu_stick()
 	else:
-		bottom_bar.position = Vector2(maxf(12.0, (vp.x - 310.0 - bar_w) * 0.5), vp.y - 94.0)
+		if player_ref and player_ref.has_method("set_virtual_input"):
+			player_ref.set_virtual_input(joy_vec, pressed_flash.get("A", 0.0) > 0.0)
 
-	telemetry_panel.visible = not narrow
-	_position_telemetry()
-	_layout_tech_modal()
-	_update_touch_pad_visibility()
+	if hud_canvas:
+		hud_canvas.queue_redraw()
 
-func _position_telemetry() -> void:
-	if not telemetry_panel or not telemetry_panel.visible:
+func _poll_menu_stick() -> void:
+	if stick_nav_cd > 0.0:
 		return
-	var vp = get_viewport().get_visible_rect().size
-	var h = clampf(telemetry_panel.get_combined_minimum_size().y, 88.0, 140.0)
-	telemetry_panel.size = Vector2(284.0, h)
-	telemetry_panel.position = Vector2(vp.x - 294.0, vp.y - h - 10.0)
+	var j = joy_vec + Vector2(Input.get_joy_axis(0, JOY_AXIS_LEFT_X), Input.get_joy_axis(0, JOY_AXIS_LEFT_Y))
+	if absf(j.x) > 0.55 and absf(j.x) >= absf(j.y):
+		var tab_step = 1 if j.x > 0.0 else -1
+		if menu_state == MenuState.BUILD_TREE:
+			active_branch_idx = posmod(active_branch_idx + tab_step, BUILD_BRANCHES.size())
+			cursor_idx = 0
+			stick_nav_cd = 0.22
+			AudioSynth.play_synth("click")
+		elif menu_state == MenuState.CMD_TREE:
+			active_cmd_tab_idx = posmod(active_cmd_tab_idx + tab_step, CMD_TABS.size())
+			cursor_idx = 0
+			stick_nav_cd = 0.22
+			AudioSynth.play_synth("click")
+	elif absf(j.y) > 0.45:
+		var step = 1 if j.y > 0.45 else -1
+		var items = _get_active_tree_nodes()
+		if items.size() > 0:
+			cursor_idx = posmod(cursor_idx + step, items.size())
+			stick_nav_cd = 0.18
+			AudioSynth.play_synth("click")
 
-func _layout_tech_modal() -> void:
-	var vp = get_viewport().get_visible_rect().size
-	var mw = minf(vp.x - 16.0, 860.0)
-	var mh = minf(vp.y - 36.0, 620.0)
-	tech_modal.size = Vector2(mw, mh)
-	tech_modal.position = Vector2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5)
+func _input(event: InputEvent) -> void:
+	# 1. Screen Touch / Mouse Drag for Analog Stick, ABXY Diamond & Tree Petals
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			if _handle_pointer_press(event.position, event.index):
+				get_viewport().set_input_as_handled()
+		else:
+			if event.index == joy_drag_idx:
+				joy_drag_idx = -1
+				joy_vec = Vector2.ZERO
+				get_viewport().set_input_as_handled()
+	elif event is InputEventScreenDrag:
+		if event.index == joy_drag_idx:
+			_update_joy_from_pos(event.position)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if _handle_pointer_press(event.position, 99):
+				get_viewport().set_input_as_handled()
+		else:
+			if joy_drag_idx == 99:
+				joy_drag_idx = -1
+				joy_vec = Vector2.ZERO
+	elif event is InputEventMouseMotion and joy_drag_idx == 99:
+		_update_joy_from_pos(event.position)
 
-func _update_touch_pad_visibility() -> void:
+	# 2. Physical Gamepad & Keyboard ABXY Bindings
+	elif event is InputEventJoypadButton and event.pressed:
+		match event.button_index:
+			JOY_BUTTON_A: _trigger_abxy("A"); get_viewport().set_input_as_handled()
+			JOY_BUTTON_B: _trigger_abxy("B"); get_viewport().set_input_as_handled()
+			JOY_BUTTON_X: _trigger_abxy("X"); get_viewport().set_input_as_handled()
+			JOY_BUTTON_Y: _trigger_abxy("Y"); get_viewport().set_input_as_handled()
+	elif event is InputEventKey and event.pressed and not event.echo:
+		match event.keycode:
+			KEY_J, KEY_SPACE, KEY_ENTER:
+				if menu_state != MenuState.FIELD or GameState.selected_tool != "pick":
+					_trigger_abxy("A")
+					get_viewport().set_input_as_handled()
+			KEY_K, KEY_ESCAPE:
+				_trigger_abxy("B")
+				get_viewport().set_input_as_handled()
+			KEY_L, KEY_E, KEY_B:
+				_trigger_abxy("X")
+				get_viewport().set_input_as_handled()
+			KEY_I, KEY_F, KEY_TAB:
+				_trigger_abxy("Y")
+				get_viewport().set_input_as_handled()
+
+func _handle_pointer_press(pos: Vector2, idx: int) -> bool:
+	# Check ABXY Diamond buttons first
+	for k in ["A", "B", "X", "Y"]:
+		var bd = btn_rects.get(k, null)
+		if bd and pos.distance_to(bd["pos"]) <= float(bd["r"]) + 8.0:
+			_trigger_abxy(k)
+			return true
+
+	# Check 2-Click Tree Node hitboxes when menu is open
+	if menu_state != MenuState.FIELD:
+		for hb in tree_hitboxes:
+			if hb["rect"].has_point(pos):
+				hb["action"].call()
+				return true
+		# Tapping backdrop outside tree closes cleanly
+		menu_state = MenuState.FIELD
+		return true
+
+	# Check Left Analog Joystick zone
+	if pos.distance_to(joy_center) <= joy_radius * 1.45:
+		joy_drag_idx = idx
+		_update_joy_from_pos(pos)
+		return true
+
+	return false
+
+func _update_joy_from_pos(pos: Vector2) -> void:
+	var delta = pos - joy_center
+	var d = delta.length()
+	if d > 4.0:
+		joy_vec = delta / maxf(d, joy_radius)
+		if joy_vec.length() > 1.0:
+			joy_vec = joy_vec.normalized()
+	else:
+		joy_vec = Vector2.ZERO
+
+func _trigger_abxy(btn: String) -> void:
+	pressed_flash[btn] = 0.20
+
+	# Universal B = Back / Cancel Tool / Space Brake!
+	if btn == "B":
+		AudioSynth.play_synth("click")
+		if menu_state != MenuState.FIELD:
+			menu_state = MenuState.FIELD
+		elif GameState.selected_tool != "pick":
+			GameState.set_tool("pick")
+		else:
+			emit_signal("brake_requested")
+		return
+
+	# Field Level (0 clicks)
+	if menu_state == MenuState.FIELD:
+		match btn:
+			"A":
+				if player_ref and player_ref.has_method("trigger_primary_action"):
+					player_ref.trigger_primary_action()
+			"X":
+				menu_state = MenuState.BUILD_TREE
+				cursor_idx = 0
+				AudioSynth.play_synth("select")
+			"Y":
+				menu_state = MenuState.CMD_TREE
+				cursor_idx = 0
+				AudioSynth.play_synth("select")
+		return
+
+	# Depth-1 Tabbed Tree (Any function reachable in at most 2 clicks via Stick + ABXY!)
+	var nodes = _get_active_tree_nodes()
+	match btn:
+		"A":
+			if cursor_idx >= 0 and cursor_idx < nodes.size():
+				nodes[cursor_idx]["action"].call()
+		"Y":
+			if nodes.size() >= 1: nodes[0]["action"].call()
+		"X":
+			if nodes.size() >= 2: nodes[1]["action"].call()
+
+func _get_active_tree_nodes() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	match menu_state:
+		MenuState.BUILD_TREE:
+			var cur_branch = BUILD_BRANCHES[active_branch_idx]
+			for bid in GameState.BUILDINGS.keys():
+				var info = GameState.BUILDINGS[bid]
+				if info["branch"] != cur_branch: continue
+				var req_d = int(info.get("req_drones", 0))
+				var unlocked = GameState.drones >= req_d
+				var can_pay = GameState.can_afford(info["cost"])
+				var cost_s: PackedStringArray = []
+				for ck in info["cost"].keys(): cost_s.append("%s:%d" % [ck.to_upper(), int(info["cost"][ck])])
+				var st = ("READY | " + " ".join(cost_s)) if (unlocked and can_pay) else ("LOCK (%d Drones)" % req_d if not unlocked else GameState.get_missing_text(info["cost"]) + " | " + " ".join(cost_s))
+				var target_bid: String = bid
+				out.append({
+					"label": info["name"],
+					"sub": st,
+					"col": C_EMERALD if (unlocked and can_pay) else (C_AMBER if unlocked else C_CRIMSON),
+					"icon": icons.get(bid, null),
+					"action": func():
+						GameState.set_tool(target_bid)
+						menu_state = MenuState.FIELD
+						AudioSynth.play_synth("select")
+				})
+			if cur_branch == "MEGA":
+				out.append({
+					"label": "Salvage Tool",
+					"sub": "Deconstruct & refund 50%",
+					"col": C_CRIMSON,
+					"icon": icons.get("demolish", null),
+					"action": func():
+						GameState.set_tool("demolish")
+						menu_state = MenuState.FIELD
+						AudioSynth.play_synth("select")
+				})
+		MenuState.CMD_TREE:
+			if active_cmd_tab_idx == 0:
+				var dcost = GameState.get_drone_craft_cost()
+				var dc: PackedStringArray = []
+				for k in dcost.keys(): dc.append("%d %s" % [int(dcost[k]), k.to_upper()])
+				out.append({"label": "CRAFT DRONE (%s)" % " ".join(dc), "sub": "Dock +1 Drone (%d/%d) & unlock tech" % [GameState.drones, GameState.max_drones], "col": C_EMERALD, "icon": icons.get("probe_stock", null), "action": func():
+					if GameState.try_craft_drone(): AudioSynth.play_synth("craft")
+					else: AudioSynth.play_synth("error")
+					menu_state = MenuState.FIELD
+				})
+				var docs = [
+					[GameState.Doctrine.HARVEST, "SWARM: HARVEST", "Mine orbital asteroids passively"],
+					[GameState.Doctrine.REPLICATE, "SWARM: REPLICATE", "Multiply Swarm fleet in orbit"],
+					[GameState.Doctrine.DEFEND, "SWARM: DEFEND", "Guard Origin-Prime perimeter"],
+					[GameState.Doctrine.ASSAULT, "SWARM: ASSAULT", "Raid Corrupted Core Hub"],
+				]
+				for d in docs:
+					var did: int = d[0]
+					out.append({"label": d[1], "sub": d[2], "col": C_CYAN if GameState.current_doctrine == did else C_MUTED, "icon": null, "action": func():
+						GameState.set_doctrine(did)
+						menu_state = MenuState.FIELD
+						AudioSynth.play_synth("select")
+					})
+			else:
+				out.append({"label": "ORBIT CAMERA", "sub": "Toggle Wide Spherical System Camera", "col": C_AMBER, "icon": null, "action": func():
+					orbit_cam_active = not orbit_cam_active
+					emit_signal("orbit_cam_toggled")
+					menu_state = MenuState.FIELD
+					AudioSynth.play_synth("select")
+				})
+				out.append({"label": "SAVE COLONY", "sub": "Persist planet, factory & fleet", "col": C_EMERALD, "icon": null, "action": func(): emit_signal("save_requested"); menu_state = MenuState.FIELD})
+				out.append({"label": "TOGGLE AUDIO", "sub": "Audio: %s" % ("MUTED" if AudioSynth.is_muted else "ACTIVE"), "col": C_CYAN, "icon": null, "action": func(): AudioSynth.toggle_mute(); menu_state = MenuState.FIELD})
+				out.append({"label": "FLIP BELT DIR", "sub": "Reverse Arc Conveyor orientation", "col": C_AMBER, "icon": null, "action": func(): GameState.build_rotation = -GameState.build_rotation; AudioSynth.play_synth("click"); menu_state = MenuState.FIELD})
+				out.append({"label": "RESET COLONY", "sub": "Start fresh 1-Seed survival", "col": C_CRIMSON, "icon": null, "action": func(): emit_signal("reset_requested"); menu_state = MenuState.FIELD})
+	return out
+
+func _draw_chamfer_panel(rect: Rect2, fill: Color, border: Color, cut: float = 10.0, stroke: float = 1.6) -> void:
+	var x0 = rect.position.x
+	var y0 = rect.position.y
+	var x1 = x0 + rect.size.x
+	var y1 = y0 + rect.size.y
+	var pts = PackedVector2Array([
+		Vector2(x0 + cut, y0), Vector2(x1 - cut, y0), Vector2(x1, y0 + cut),
+		Vector2(x1, y1 - cut), Vector2(x1 - cut, y1), Vector2(x0 + cut, y1),
+		Vector2(x0, y1 - cut), Vector2(x0, y0 + cut), Vector2(x0 + cut, y0),
+	])
+	hud_canvas.draw_colored_polygon(pts.slice(0, 8), fill)
+	hud_canvas.draw_polyline(pts, border, stroke, true)
+
+func _draw_octagon_btn(center: Vector2, r: float, fill: Color, border: Color, glow_col: Color, active: bool) -> void:
+	var pts = PackedVector2Array()
+	for i in range(9):
+		var a = (float(i) * TAU / 8.0) + PI / 8.0
+		pts.append(center + Vector2(cos(a), sin(a)) * r)
+	if active:
+		hud_canvas.draw_circle(center, r + 5.0, Color(glow_col.r, glow_col.g, glow_col.b, 0.25))
+	hud_canvas.draw_colored_polygon(pts.slice(0, 8), fill)
+	hud_canvas.draw_polyline(pts, glow_col if active else border, 2.4 if active else 1.6, true)
+
+func _on_hud_draw() -> void:
 	var vp = get_viewport().get_visible_rect().size
-	var show_pad = (not tech_modal.visible) and (force_touch_pad or OS.has_feature("mobile") or vp.x < 780.0)
-	touch_overlay.visible = show_pad
-	if show_pad:
-		touch_overlay.position = Vector2(10.0, vp.y - 230.0)
+	var font = ThemeDB.fallback_font
+	if not font:
+		return
+
+	# 1. TOP-LEFT AAA CHAMFERED VITALS & RESOURCE PANEL
+	var narrow = vp.x < 680.0
+	var tl_w = minf(vp.x - 118.0, 396.0)
+	var tl_h = 122.0 if narrow else 116.0
+	var tl_rect = Rect2(12, 12, tl_w, tl_h)
+	_draw_chamfer_panel(tl_rect, C_BG, C_STEEL, 12.0, 1.8)
+
+	# Accent top bevel strip & corner bracket ticks
+	hud_canvas.draw_line(Vector2(28, 12), Vector2(tl_w * 0.58, 12), C_CYAN, 2.5)
+	hud_canvas.draw_line(Vector2(tl_rect.end.x - 24, tl_rect.end.y), Vector2(tl_rect.end.x - 10, tl_rect.end.y), C_AMBER, 2.0)
+
+	# HP & Shield Segmented Bars
+	var hp_r = clampf(GameState.player_hp / GameState.player_max_hp, 0.0, 1.0)
+	var sh_r = clampf(GameState.player_shield / GameState.player_max_shield, 0.0, 1.0)
+	hud_canvas.draw_string(font, Vector2(26, 33), "HP %d" % int(GameState.player_hp), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_EMERALD)
+	var bar1_w = clampf(tl_w * 0.25, 64.0, 96.0)
+	hud_canvas.draw_rect(Rect2(82, 22, bar1_w, 10), C_BG_DARK)
+	hud_canvas.draw_rect(Rect2(82, 22, bar1_w * hp_r, 10), C_EMERALD)
+
+	var sh_x = 82.0 + bar1_w + 12.0
+	hud_canvas.draw_string(font, Vector2(sh_x, 33), "SHD %d" % int(GameState.player_shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_CYAN)
+	var bar2_x = sh_x + 62.0
+	var bar2_w = maxf(46.0, tl_rect.end.x - 14.0 - bar2_x)
+	hud_canvas.draw_rect(Rect2(bar2_x, 22, bar2_w, 10), C_BG_DARK)
+	hud_canvas.draw_rect(Rect2(bar2_x, 22, bar2_w * sh_r, 10), C_CYAN)
+
+	# Resource Icons & Large Crisp Counts
+	var res_keys = ["fe", "cu", "si", "ti", "plate_fe", "circuit"]
+	var rx = 24.0
+	var step_x = (tl_w - 24.0) / float(res_keys.size())
+	for rk in res_keys:
+		var ic: Texture2D = icons.get(rk, null)
+		if ic:
+			hud_canvas.draw_texture_rect(ic, Rect2(rx, 45, 20, 20), false)
+		hud_canvas.draw_string(font, Vector2(rx + 23, 61), str(GameState.get_res(rk)), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, C_TEXT)
+		rx += step_x
+
+	# Drones / Swarm Fleet / Power summary
+	var pwr_col = C_EMERALD if GameState.power_ratio >= 0.99 else C_AMBER
+	hud_canvas.draw_string(font, Vector2(26, 87), "DRONES %d/%d" % [GameState.drones, GameState.max_drones], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, C_AMBER)
+	hud_canvas.draw_string(font, Vector2(148, 87), "FLEET %d" % GameState.fleet_count, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, C_CYAN)
+	hud_canvas.draw_string(font, Vector2(246, 87), "PWR %d/%dkW" % [int(GameState.power_use), int(GameState.power_gen)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, pwr_col)
+
+	# Active Tool / Status Micro-Line cleanly padded inside bottom border
+	var doc_names = ["HARVEST", "REPLICATE", "DEFEND", "ASSAULT"]
+	var tname = "MINE LASER" if GameState.selected_tool == "pick" else ("SALVAGE" if GameState.selected_tool == "demolish" else GameState.BUILDINGS.get(GameState.selected_tool, {}).get("name", "TOOL"))
+	hud_canvas.draw_string(font, Vector2(26, 111), "MODE:%s | SWARM:%s" % [tname.to_upper(), doc_names[GameState.current_doctrine]], HORIZONTAL_ALIGNMENT_LEFT, int(tl_w - 36), 12, C_MUTED)
+
+	# 2. TOP-RIGHT OPEN-WORLD RADAR MINIMAP
+	var rad_r = 40.0 if narrow else 46.0
+	var rad_c = Vector2(vp.x - rad_r - 16.0, rad_r + 14.0)
+	hud_canvas.draw_circle(rad_c, rad_r + 2.0, C_BG_DARK)
+	hud_canvas.draw_arc(rad_c, rad_r + 2.0, 0.0, TAU, 36, C_STEEL, 1.8)
+	hud_canvas.draw_arc(rad_c, rad_r * 0.45, 0.0, TAU, 24, Color(0.18, 0.32, 0.48, 0.45), 1.0)
+	# Origin-Prime center dot
+	hud_canvas.draw_circle(rad_c, 4.5, Color(0.32, 0.72, 0.95))
+	var map_scale = rad_r / PlanetWorld.WORLD_LIMIT_R
+	if world_ref:
+		for cbody in world_ref.celestials:
+			var cp = rad_c + cbody["pos"] * map_scale
+			hud_canvas.draw_circle(cp, 2.2, C_AMBER)
+	if swarm_ref and not GameState.boss_defeated:
+		hud_canvas.draw_circle(rad_c + swarm_ref.boss_pos * map_scale, 3.0, C_CRIMSON)
+	if player_ref:
+		var pp = rad_c + player_ref.position * map_scale
+		hud_canvas.draw_circle(pp, 3.2, C_EMERALD)
+	var zone_lbl = "SPACE" if (player_ref and player_ref.position.length() > PlanetWorld.R_SURFACE + 72.0) else "PLANET"
+	var zsz = font.get_string_size(zone_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+	hud_canvas.draw_string(font, Vector2(rad_c.x - zsz.x * 0.5, rad_c.y + rad_r + 16.0), zone_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_CYAN)
+
+	# 3. STATUS BANNER (Clean floating cue when event occurs)
+	if status_banner_t > 0.0:
+		var bw = minf(vp.x - 40.0, 420.0)
+		var brect = Rect2((vp.x - bw) * 0.5, tl_rect.end.y + 10.0, bw, 30.0)
+		_draw_chamfer_panel(brect, Color(0.03, 0.05, 0.09, 0.92), status_banner_col, 7.0, 1.5)
+		hud_canvas.draw_string(font, brect.position + Vector2(14, 20), status_banner, HORIZONTAL_ALIGNMENT_LEFT, int(bw - 24), 13, status_banner_col)
+
+	# 4. BOTTOM-LEFT ANALOG JOYSTICK
+	hud_canvas.draw_circle(joy_center, joy_radius, Color(0.03, 0.06, 0.11, 0.72))
+	hud_canvas.draw_arc(joy_center, joy_radius, 0.0, TAU, 32, C_CYAN if joy_drag_idx != -1 else C_STEEL, 2.0)
+	hud_canvas.draw_arc(joy_center, joy_radius * 0.5, 0.0, TAU, 24, Color(0.22, 0.45, 0.65, 0.35), 1.0)
+	var stick_pos = joy_center + joy_vec * (joy_radius * 0.65)
+	_draw_octagon_btn(stick_pos, 18.0, Color(0.10, 0.25, 0.42, 0.95), C_CYAN, C_CYAN, joy_vec.length() > 0.1)
+
+	# 5. BOTTOM-RIGHT AAA ABXY ACTION DIAMOND
+	var labels = {
+		"A": "BUILD" if (GameState.selected_tool in GameState.BUILDINGS) else ("SALVAGE" if GameState.selected_tool == "demolish" else "MINE"),
+		"B": "CANCEL" if GameState.selected_tool != "pick" else "BRAKE",
+		"X": "BUILD" if menu_state == MenuState.FIELD else "PICK 2",
+		"Y": "CMD" if menu_state == MenuState.FIELD else "PICK 1",
+	}
+	if menu_state != MenuState.FIELD:
+		labels["A"] = "CONFIRM"
+		labels["B"] = "CLOSE"
+	var cols = {"A": C_EMERALD, "B": C_CRIMSON, "X": C_CYAN, "Y": C_AMBER}
+	for k in ["Y", "X", "B", "A"]:
+		var bd = btn_rects[k]
+		var bp: Vector2 = bd["pos"]
+		var br: float = bd["r"]
+		var fl = pressed_flash.get(k, 0.0) > 0.0
+		_draw_octagon_btn(bp, br, Color(0.05, 0.09, 0.16, 0.92), C_STEEL, cols[k], fl)
+		var ksz = font.get_string_size(k, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
+		hud_canvas.draw_string(font, Vector2(bp.x - ksz.x * 0.5, bp.y + ksz.y * 0.24), k, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, cols[k])
+		var ltxt: String = labels[k]
+		var lsz = font.get_string_size(ltxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10)
+		var lrect = Rect2(bp.x - lsz.x * 0.5 - 5.0, bp.y + br + 3.0, lsz.x + 10.0, 14.0)
+		hud_canvas.draw_rect(lrect, Color(0.02, 0.04, 0.08, 0.84))
+		hud_canvas.draw_string(font, Vector2(bp.x - lsz.x * 0.5, bp.y + br + 13.0), ltxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, C_TEXT)
+
+	# 6. 2-CLICK TABBED COMMAND & BUILD TREE OVERLAY (Appears cleanly above controls)
+	tree_hitboxes.clear()
+	if menu_state != MenuState.FIELD:
+		var nodes = _get_active_tree_nodes()
+		var mw = minf(vp.x - 24.0, 444.0)
+		var row_h = 52.0
+		var tab_h = 28.0
+		var mh = 44.0 + tab_h + float(nodes.size()) * (row_h + 6.0)
+		var mx = clampf(vp.x - mw - 18.0, 12.0, (vp.x - mw) * 0.5)
+		var my = clampf(joy_center.y - joy_radius - mh - 18.0, tl_rect.end.y + 10.0, vp.y - mh - 186.0)
+		var mrect = Rect2(mx, my, mw, mh)
+		_draw_chamfer_panel(mrect, C_BG_DARK, C_CYAN, 14.0, 2.0)
+
+		var header = "BUILD TREE [2-CLICK | L-STICK TAB]" if menu_state == MenuState.BUILD_TREE else "COMMAND TREE [2-CLICK | L-STICK TAB]"
+		hud_canvas.draw_string(font, Vector2(mx + 16, my + 24), header, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_CYAN)
+
+		# Category Tabs (Interactive + L-Stick Left/Right)
+		var tabs: Array[String] = BUILD_BRANCHES if menu_state == MenuState.BUILD_TREE else CMD_TABS
+		var cur_tab: int = active_branch_idx if menu_state == MenuState.BUILD_TREE else active_cmd_tab_idx
+		var tw = (mw - 24.0) / float(tabs.size())
+		for ti in range(tabs.size()):
+			var trect = Rect2(mx + 12.0 + float(ti) * tw, my + 32.0, tw - 4.0, tab_h)
+			var is_active_t = (ti == cur_tab)
+			_draw_chamfer_panel(trect, Color(0.10, 0.24, 0.38, 0.96) if is_active_t else Color(0.04, 0.07, 0.13, 0.92), C_CYAN if is_active_t else C_STEEL, 6.0, 1.8 if is_active_t else 1.0)
+			var tlbl = tabs[ti]
+			var tsz = font.get_string_size(tlbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
+			hud_canvas.draw_string(font, Vector2(trect.position.x + (trect.size.x - tsz.x) * 0.5, trect.position.y + 18.0), tlbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_TEXT if is_active_t else C_MUTED)
+			var tab_idx: int = ti
+			tree_hitboxes.append({"rect": trect, "action": func():
+				if menu_state == MenuState.BUILD_TREE: active_branch_idx = tab_idx
+				else: active_cmd_tab_idx = tab_idx
+				cursor_idx = 0
+				AudioSynth.play_synth("click")
+			})
+
+		for i in range(nodes.size()):
+			var nd = nodes[i]
+			var ny = my + 38.0 + tab_h + float(i) * (row_h + 6.0)
+			var nrect = Rect2(mx + 12.0, ny, mw - 24.0, row_h)
+			var sel = (i == cursor_idx)
+			var nc: Color = nd["col"]
+			_draw_chamfer_panel(nrect, Color(0.08, 0.16, 0.28, 0.96) if sel else Color(0.04, 0.07, 0.13, 0.95), C_CYAN if sel else nc, 8.0, 2.2 if sel else 1.2)
+			if nd["icon"]:
+				hud_canvas.draw_texture_rect(nd["icon"], Rect2(nrect.position + Vector2(10, 11), Vector2(30, 30)), false)
+			var tx = nrect.position.x + (48.0 if nd["icon"] else 14.0)
+			var qbadge = "[Y] " if i == 0 else ("[X] " if i == 1 else ("[A] " if sel else ""))
+			hud_canvas.draw_string(font, Vector2(tx, ny + 21), qbadge + nd["label"], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 76), 14, C_TEXT if sel else nc)
+			hud_canvas.draw_string(font, Vector2(tx, ny + 40), nd["sub"], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 76), 11, C_MUTED)
+			tree_hitboxes.append({"rect": nrect, "action": nd["action"]})
 
 func is_blocking_world_input() -> bool:
-	if tech_modal.visible:
+	if menu_state != MenuState.FIELD:
 		return true
 	var mp = get_viewport().get_mouse_position()
-	for p in [top_left_panel, top_right_flow, bottom_bar, telemetry_panel]:
-		if p and p.visible and p.get_global_rect().has_point(mp):
-			return true
-	if touch_overlay.visible and Rect2(touch_overlay.position, Vector2(210, 140)).has_point(mp):
+	if mp.distance_to(joy_center) <= joy_radius * 1.45:
 		return true
+	for k in ["A", "B", "X", "Y"]:
+		var bd = btn_rects.get(k, null)
+		if bd and mp.distance_to(bd["pos"]) <= float(bd["r"]) + 10.0:
+			return true
 	return false

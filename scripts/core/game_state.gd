@@ -1,7 +1,8 @@
 extends Node
 
 # ==============================================================================
-# STAR REPLICA: AUTOMA - CORE GAME STATE & CATALOG
+# STAR REPLICA: AUTOMA - CORE GAME STATE, SPHERICAL BUILD CATALOG & 2-CLICK TREE
+# Zero starting structures, zero pre-built stations. Pure ABXY 2-Click Tree.
 # ==============================================================================
 
 signal inventory_changed
@@ -13,7 +14,13 @@ signal log_event(message: String, level: String)
 
 enum Doctrine { HARVEST, REPLICATE, DEFEND, ASSAULT }
 
-# Raw & Refined Resources
+# Core Seed Unit Vitals
+var player_hp: float = 100.0
+var player_max_hp: float = 100.0
+var player_shield: float = 50.0
+var player_max_shield: float = 50.0
+
+# Raw & Refined Resources (Zero start)
 var fe: int = 0
 var cu: int = 0
 var si: int = 0
@@ -27,7 +34,7 @@ var circuit: int = 0
 var alloy: int = 0
 var probe_stock: int = 0
 
-# Progression & Fleet
+# Progression & Swarm Fleet
 var drones: int = 0
 var max_drones: int = 12
 var fleet_count: int = 0
@@ -35,12 +42,12 @@ var max_fleet: int = 10000
 var total_launches: int = 0
 var hostiles_defeated: int = 0
 var hostiles_active: int = 0
-var boss_hp: float = 2500.0
-var boss_max_hp: float = 2500.0
+var boss_hp: float = 3000.0
+var boss_max_hp: float = 3000.0
 var boss_defeated: bool = false
 
 # Energy Grid
-var power_gen: float = 15.0  # Base Seed Unit reactor
+var power_gen: float = 15.0
 var power_use: float = 0.0
 var power_ratio: float = 1.0
 
@@ -49,14 +56,14 @@ var printer_progress: float = 0.0
 var printer_active: bool = false
 var current_doctrine: int = Doctrine.HARVEST
 var selected_tool: String = "pick"
-var build_rotation: int = 0 # 0: Right/Up, 1: Down, 2: Left, 3: Up
+var build_rotation: int = 1 # +1 CW or -1 CCW along planetary sphere
 
-# Cumulative mining feedback near player
+# Cumulative mining feedback next to player
 var recent_ore_type: String = ""
 var recent_ore_amount: int = 0
 var recent_ore_timer: float = 0.0
 
-# Megastructure unlock tracking
+# Megastructures & Orbital Constructions (Zero at start!)
 var megastructures: Dictionary = {
 	"elevator": false,
 	"dyson": false,
@@ -64,251 +71,225 @@ var megastructures: Dictionary = {
 	"warpgate": false,
 }
 
-# Single source of truth for all tools & facilities
+# Spherical Facility Catalog
+# Radial width_sec = sectors wide on sphere surface; place rules:
+#   SURFACE, UNDERGROUND, DEEP_ROCK, ANY_SPHERE
 const BUILDINGS: Dictionary = {
 	"drill": {
 		"name": "Mining Drill",
-		"category": "MINE",
-		"hotkey": "1",
-		"cost": {"fe": 12},
-		"power": -12.0,
+		"branch": "MINE",
+		"cost": {"fe": 10},
+		"power": -10.0,
 		"req_drones": 1,
-		"size": Vector2i(1, 2),
-		"place": "ORE_OR_ROCK",
+		"sec_w": 1,
+		"h_px": 42.0,
+		"place": "UNDERGROUND",
 		"icon": "res://assets/ui/tool_drill.png",
 		"sheet": "res://assets/sprites/mining_drill_sheet.png",
 		"frames": 4,
-		"desc": "Extracts Fe/Cu/Si/Ti veins continuously onto nearby belts or lifts.",
-		"usage": "Place on underground ore veins or rock seams."
+		"desc": "Automated extractor anchored to underground mineral veins."
 	},
 	"belt": {
-		"name": "Conveyor Belt",
-		"category": "MINE",
-		"hotkey": "2",
+		"name": "Arc Belt",
+		"branch": "MINE",
 		"cost": {"fe": 2},
 		"power": 0.0,
 		"req_drones": 1,
-		"size": Vector2i(1, 1),
-		"place": "ANY_CLEAR",
+		"sec_w": 1,
+		"h_px": 20.0,
+		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_belt.png",
 		"sheet": "res://assets/sprites/conveyor_sheet.png",
 		"frames": 4,
-		"desc": "Transports mined ores & plates horizontally across terrain or tunnels.",
-		"usage": "Connect Drills to Smelters, Assemblers & Replicators. Press [R] to flip."
+		"desc": "Curved planetary conveyor routing materials around the globe."
 	},
 	"lift": {
-		"name": "Ore Lift Shaft",
-		"category": "MINE",
-		"hotkey": "3",
+		"name": "Radial Lift",
+		"branch": "MINE",
 		"cost": {"fe": 3},
 		"power": -1.0,
 		"req_drones": 1,
-		"size": Vector2i(1, 1),
-		"place": "ANY_CLEAR",
+		"sec_w": 1,
+		"h_px": 34.0,
+		"place": "UNDERGROUND",
 		"icon": "res://assets/ui/tool_belt.png",
 		"sheet": "res://assets/sprites/lift_shaft_sheet.png",
 		"frames": 4,
-		"desc": "Vertical elevator tube hoisting underground ores to the surface.",
-		"usage": "Stack vertically inside dug shafts to lift items upward."
-	},
-	"inserter": {
-		"name": "Inserter Arm",
-		"category": "MINE",
-		"hotkey": "4",
-		"cost": {"fe": 4, "cu": 2},
-		"power": -2.0,
-		"req_drones": 1,
-		"size": Vector2i(1, 1),
-		"place": "ANY_CLEAR",
-		"icon": "res://assets/ui/tool_assembler.png",
-		"sheet": "res://assets/sprites/inserter_sheet.png",
-		"frames": 4,
-		"desc": "Robotic transfer arm boosting throughput between belts & machines.",
-		"usage": "Place beside Smelters/Assemblers/Drivers."
+		"desc": "Vertical shaft hoisting core ores outward to the surface."
 	},
 	"depot": {
-		"name": "Container Depot",
-		"category": "MINE",
-		"hotkey": "5",
-		"cost": {"fe": 18, "cu": 5},
+		"name": "Cargo Depot",
+		"branch": "MINE",
+		"cost": {"fe": 16, "cu": 4},
 		"power": -3.0,
 		"req_drones": 1,
-		"size": Vector2i(2, 2),
+		"sec_w": 2,
+		"h_px": 46.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_depot.png",
 		"sheet": "res://assets/sprites/container_depot.png",
 		"frames": 1,
-		"desc": "Logistics buffer hub. Connects surface storage & feeds machines automatically.",
-		"usage": "Place on surface horizon to share items across your colony."
+		"desc": "Planetary logistics hub linking storage across sectors."
 	},
 	"smelter": {
 		"name": "Blast Smelter",
-		"category": "FACTORY",
-		"hotkey": "6",
-		"cost": {"fe": 20, "cu": 6},
-		"power": -18.0,
+		"branch": "FACTORY",
+		"cost": {"fe": 18, "cu": 6},
+		"power": -16.0,
 		"req_drones": 2,
-		"size": Vector2i(2, 2),
-		"place": "SURFACE_OR_CAVERN",
+		"sec_w": 2,
+		"h_px": 50.0,
+		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_smelter.png",
 		"sheet": "res://assets/sprites/smelter_sheet.png",
 		"frames": 4,
-		"desc": "Refines raw Fe->Plates, Cu->Wire, Si->Wafers for advanced parts.",
-		"usage": "Feed raw ores via belt/depot to smelt refined components."
+		"desc": "Refines raw Fe/Cu/Si into Plates, Wires & Wafers."
 	},
 	"assembler": {
 		"name": "Auto Assembler",
-		"category": "FACTORY",
-		"hotkey": "7",
-		"cost": {"fe": 25, "cu": 14, "si": 8},
-		"power": -24.0,
+		"branch": "FACTORY",
+		"cost": {"fe": 24, "cu": 12, "si": 6},
+		"power": -22.0,
 		"req_drones": 3,
-		"size": Vector2i(2, 2),
-		"place": "SURFACE_OR_CAVERN",
+		"sec_w": 2,
+		"h_px": 50.0,
+		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_assembler.png",
 		"sheet": "res://assets/sprites/assembler_sheet.png",
 		"frames": 4,
-		"desc": "Fabricates Circuits (Cu Wire + Si Wafer) & Titanium Alloys.",
-		"usage": "Supplies high-tech Circuits & Alloys needed for Replica Probes."
+		"desc": "Assembles Circuits & Titanium Alloys for Swarm Probes."
 	},
 	"printer": {
-		"name": "Macro Replicator",
-		"category": "FACTORY",
-		"hotkey": "8",
-		"cost": {"fe": 45, "cu": 20, "si": 12},
-		"power": -40.0,
+		"name": "Replicator",
+		"branch": "FACTORY",
+		"cost": {"fe": 40, "cu": 18, "si": 10},
+		"power": -36.0,
 		"req_drones": 4,
-		"size": Vector2i(3, 2),
+		"sec_w": 3,
+		"h_px": 62.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_printer.png",
 		"sheet": "res://assets/sprites/factory_hall_sheet.png",
 		"frames": 4,
-		"desc": "Heavy industrial printer assembling autonomous Replica Swarm Probes.",
-		"usage": "Converts Plates, Circuits & Alloys into Orbital Probes automatically."
+		"desc": "Macro printer fabricating autonomous Orbital Replica Probes."
 	},
 	"mass_driver": {
 		"name": "Mass Driver",
-		"category": "FACTORY",
-		"hotkey": "9",
-		"cost": {"fe": 60, "cu": 30, "si": 15, "ti": 8},
-		"power": -45.0,
+		"branch": "FACTORY",
+		"cost": {"fe": 55, "cu": 28, "si": 14, "ti": 6},
+		"power": -42.0,
 		"req_drones": 5,
-		"size": Vector2i(4, 3),
+		"sec_w": 3,
+		"h_px": 74.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_mass_driver.png",
 		"sheet": "res://assets/sprites/mass_driver_sheet.png",
 		"frames": 4,
-		"desc": "Electromagnetic railgun launching finished Replica Probes into orbit!",
-		"usage": "Place on clear surface skyline to fire Probes into your Swarm Fleet."
+		"desc": "Orbital railgun launching Replica Probes into deep space!"
 	},
 	"solar": {
 		"name": "Solar Array",
-		"category": "POWER",
-		"hotkey": "0",
-		"cost": {"fe": 10, "si": 6},
+		"branch": "POWER",
+		"cost": {"fe": 10, "si": 5},
 		"power": 30.0,
 		"req_drones": 1,
-		"size": Vector2i(2, 1),
+		"sec_w": 2,
+		"h_px": 26.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_solar.png",
 		"sheet": "res://assets/sprites/solar_array.png",
 		"frames": 1,
-		"desc": "Clean photovoltaic surface array generating +30 kW power.",
-		"usage": "Build along surface horizon to power drills & smelters."
+		"desc": "Surface photovoltaic panel array generating +30 kW."
 	},
 	"geothermal": {
-		"name": "Geothermal Plant",
-		"category": "POWER",
-		"hotkey": "-",
-		"cost": {"fe": 35, "cu": 15, "ti": 8},
-		"power": 110.0,
+		"name": "Geo Plant",
+		"branch": "POWER",
+		"cost": {"fe": 32, "cu": 14, "ti": 6},
+		"power": 115.0,
 		"req_drones": 3,
-		"size": Vector2i(2, 2),
+		"sec_w": 2,
+		"h_px": 44.0,
 		"place": "DEEP_ROCK",
 		"icon": "res://assets/ui/tool_geothermal.png",
 		"sheet": "res://assets/sprites/geothermal_plant.png",
 		"frames": 1,
-		"desc": "Taps planetary magma vents for massive +110 kW baseload energy.",
-		"usage": "Place deep underground near magma crust."
+		"desc": "Taps molten core magma layer for +115 kW constant energy."
 	},
 	"turret": {
-		"name": "Defense Turret",
-		"category": "POWER",
-		"hotkey": "=",
-		"cost": {"fe": 20, "cu": 12, "ti": 4},
+		"name": "Laser Turret",
+		"branch": "POWER",
+		"cost": {"fe": 18, "cu": 10, "ti": 4},
 		"power": -10.0,
 		"req_drones": 2,
-		"size": Vector2i(1, 1),
+		"sec_w": 1,
+		"h_px": 32.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/tool_turret.png",
 		"sheet": "res://assets/sprites/defense_turret.png",
 		"frames": 1,
-		"desc": "Automated pulse laser protecting surface factories from raiders.",
-		"usage": "Place on surface rooftops to intercept Corrupted ships."
+		"desc": "Radial defense turret defending planet sectors from raiders."
 	},
 	"elevator": {
-		"name": "Space Elevator",
-		"category": "SPACE",
-		"hotkey": "",
-		"cost": {"fe": 140, "cu": 80, "si": 50, "ti": 40},
-		"power": -60.0,
+		"name": "Orbital Anchor",
+		"branch": "MEGA",
+		"cost": {"fe": 120, "cu": 70, "si": 45, "ti": 35},
+		"power": -55.0,
 		"req_drones": 6,
-		"size": Vector2i(3, 5),
+		"sec_w": 3,
+		"h_px": 135.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/icon_elevator.png",
 		"sheet": "res://assets/sprites/megastructure_elevator.png",
 		"frames": 1,
-		"desc": "Orbital tether tripling probe replication output and linking orbit.",
-		"usage": "Megastructure anchored on surface horizon."
+		"desc": "Player-built Space Elevator & Orbital Shipyard Hub anchor."
 	},
 	"dyson": {
 		"name": "Dyson Ring",
-		"category": "SPACE",
-		"hotkey": "",
-		"cost": {"fe": 220, "cu": 140, "si": 100, "ti": 70},
-		"power": 400.0,
+		"branch": "MEGA",
+		"cost": {"fe": 200, "cu": 130, "si": 90, "ti": 60},
+		"power": 420.0,
 		"req_drones": 7,
-		"size": Vector2i(5, 3),
+		"sec_w": 4,
+		"h_px": 95.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/icon_dyson.png",
 		"sheet": "res://assets/sprites/megastructure_dyson.png",
 		"frames": 1,
-		"desc": "Stellar collector beaming +400 kW and supercharging orbital swarm.",
-		"usage": "Megastructure boosting power & swarm speed."
+		"desc": "Planetary energy ring beaming +420 kW into swarm & grid."
 	},
 	"citadel": {
 		"name": "Plasma Citadel",
-		"category": "SPACE",
-		"hotkey": "",
-		"cost": {"fe": 200, "cu": 110, "si": 80, "ti": 90},
-		"power": -50.0,
+		"branch": "MEGA",
+		"cost": {"fe": 190, "cu": 100, "si": 75, "ti": 80},
+		"power": -45.0,
 		"req_drones": 7,
-		"size": Vector2i(4, 4),
+		"sec_w": 3,
+		"h_px": 110.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/icon_citadel.png",
 		"sheet": "res://assets/sprites/megastructure_citadel.png",
 		"frames": 1,
-		"desc": "Orbital fortress empowering Assault Doctrine firepower x2.",
-		"usage": "Megastructure built for final Corrupted Hub siege."
+		"desc": "Heavy orbital siege fortress doubling Swarm Assault damage."
 	},
 	"warpgate": {
 		"name": "Warp Gate",
-		"category": "SPACE",
-		"hotkey": "",
-		"cost": {"fe": 320, "cu": 200, "si": 160, "ti": 140},
-		"power": -120.0,
+		"branch": "MEGA",
+		"cost": {"fe": 300, "cu": 180, "si": 150, "ti": 130},
+		"power": -100.0,
 		"req_drones": 8,
-		"size": Vector2i(4, 4),
+		"sec_w": 4,
+		"h_px": 115.0,
 		"place": "SURFACE",
 		"icon": "res://assets/ui/icon_warpgate.png",
 		"sheet": "res://assets/sprites/megastructure_warpgate.png",
 		"frames": 1,
-		"desc": "Interstellar Seed Gate amplifying full Swarm Self-Replication.",
-		"usage": "Final Phase 4 Megastructure achieving total swarm transcendence."
+		"desc": "Interstellar Seed Gate amplifying full Swarm self-replication."
 	}
 }
 
 func reset_state() -> void:
+	player_hp = 100.0
+	player_shield = 50.0
 	fe = 0
 	cu = 0
 	si = 0
@@ -334,7 +315,7 @@ func reset_state() -> void:
 	printer_active = false
 	current_doctrine = Doctrine.HARVEST
 	selected_tool = "pick"
-	build_rotation = 0
+	build_rotation = 1
 	recent_ore_type = ""
 	recent_ore_amount = 0
 	recent_ore_timer = 0.0
@@ -349,22 +330,19 @@ func _process(delta: float) -> void:
 		if recent_ore_timer <= 0.0:
 			recent_ore_amount = 0
 			recent_ore_type = ""
+	# Passive shield recharge when grid power is healthy
+	if player_shield < player_max_shield and power_ratio >= 0.8:
+		player_shield = minf(player_max_shield, player_shield + 4.0 * delta)
 
 func get_drone_craft_cost() -> Dictionary:
-	# Progressive affordable scaling: first drone = 10 Fe!
 	if drones == 0:
 		return {"fe": 10}
 	elif drones == 1:
-		return {"fe": 18, "cu": 6}
+		return {"fe": 16, "cu": 6}
 	elif drones == 2:
-		return {"fe": 26, "cu": 12, "si": 6}
+		return {"fe": 24, "cu": 12, "si": 6}
 	else:
-		var scale = drones
-		return {
-			"fe": 16 + scale * 10,
-			"cu": 8 + scale * 6,
-			"si": 4 + scale * 4,
-		}
+		return {"fe": 16 + drones * 10, "cu": 8 + drones * 6, "si": 4 + drones * 4}
 
 func can_afford(cost: Dictionary) -> bool:
 	for k in cost.keys():
@@ -438,17 +416,8 @@ func try_craft_drone() -> bool:
 	drones += 1
 	emit_signal("drone_count_changed", drones)
 	emit_signal("state_updated")
-	emit_signal("log_event", "Docked Fabricator Drone #%d! Beams & Tier unlocked." % drones, "good")
+	emit_signal("log_event", "Docked Drone #%d! Tier unlocked." % drones, "good")
 	return true
-
-func get_current_phase() -> int:
-	if fleet_count >= 500 or megastructures["warpgate"]:
-		return 4
-	if fleet_count >= 1 or total_launches >= 1:
-		return 3
-	if drones >= 1:
-		return 2
-	return 1
 
 func set_tool(tool_id: String) -> void:
 	selected_tool = tool_id
@@ -458,11 +427,20 @@ func set_tool(tool_id: String) -> void:
 func set_doctrine(doc: int) -> void:
 	current_doctrine = doc
 	var names = ["HARVEST", "REPLICATE", "DEFEND", "ASSAULT"]
-	emit_signal("log_event", "Swarm Doctrine -> %s" % names[clampi(doc, 0, 3)], "info")
+	emit_signal("log_event", "Swarm -> %s" % names[clampi(doc, 0, 3)], "info")
 	emit_signal("state_updated")
 
 func add_fleet_units(count: int) -> void:
 	fleet_count = mini(max_fleet, fleet_count + count)
+	emit_signal("state_updated")
+
+func damage_player(dmg: float) -> void:
+	if player_shield > 0.0:
+		var absorbed = minf(player_shield, dmg)
+		player_shield -= absorbed
+		dmg -= absorbed
+	if dmg > 0.0:
+		player_hp = maxf(20.0, player_hp - dmg)
 	emit_signal("state_updated")
 
 func to_dict() -> Dictionary:

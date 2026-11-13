@@ -10,7 +10,19 @@ new_vp = '''<meta name="viewport" content="width=device-width, user-scalable=no,
 assert old_vp in html, "old_vp not found"
 html = html.replace(old_vp, new_vp)
 
-# 2. Touch gesture guard & screen wake lock
+# 2. Touch gesture & Android Chrome pull-to-refresh CSS guard + screen wake lock
+css_guard = '''<style>
+			html, body, #canvas {
+				touch-action: none !important;
+				overscroll-behavior: none !important;
+				user-select: none !important;
+				-webkit-user-select: none !important;
+			}
+		</style>
+	</head>'''
+if '</head>' in html and 'overscroll-behavior: none' not in html:
+    html = html.replace('</head>', css_guard)
+
 guard_script = '''
 		<script>
 			// Prevent accidental double-tap zoom & pinch-to-zoom on iOS/Android
