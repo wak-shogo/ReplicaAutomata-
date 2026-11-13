@@ -49,9 +49,9 @@ var boss_defeated: bool = false
 var game_won: bool = false
 
 const ENGINE_TIERS: Dictionary = {
-	1: {"name": "Thruster Engine Mk-I", "speed": 62.0, "cost": {"fe": 20, "cu": 10}, "desc": "Unlock flight (~58s atmospheric climb)."},
-	2: {"name": "Plasma Engine Mk-II", "speed": 190.0, "cost": {"fe": 30, "cu": 20, "si": 15}, "desc": "Upgrades flight & orbital cruise velocity (3x speed)."},
-	3: {"name": "Warp Core Mk-III", "speed": 520.0, "cost": {"fe": 70, "si": 35, "ti": 25, "circuit": 10}, "desc": "High-speed deep-space star-system propulsion."},
+	1: {"name": "Lander Struts Mk-I", "speed": 62.0, "thrust": 395.0, "cost": {"fe": 20, "cu": 10}, "desc": "Bolts Rocket Bell, RCS Jets & Lander Legs (~45s climb)."},
+	2: {"name": "Apollo Descent Mk-II", "speed": 190.0, "thrust": 760.0, "cost": {"fe": 30, "cu": 20, "si": 15}, "desc": "Mounts Gold Foil Hull, Cryo Tanks, Dish & Twin Verniers."},
+	3: {"name": "Warp Ascent Mk-III", "speed": 520.0, "thrust": 1450.0, "cost": {"fe": 70, "si": 35, "ti": 25, "circuit": 10}, "desc": "Crowns Command Cone, Twin Ion Bells & Solar Wings."},
 }
 
 # Energy Grid
@@ -422,6 +422,11 @@ func get_flight_speed() -> float:
 	if engine_tier <= 0:
 		return 0.0
 	return float(ENGINE_TIERS.get(clampi(engine_tier, 1, 3), {}).get("speed", 62.0))
+
+func get_engine_thrust() -> float:
+	if engine_tier <= 0:
+		return 0.0
+	return float(ENGINE_TIERS.get(clampi(engine_tier, 1, 3), {}).get("thrust", 340.0))
 
 func get_next_engine_info() -> Dictionary:
 	var nxt = engine_tier + 1

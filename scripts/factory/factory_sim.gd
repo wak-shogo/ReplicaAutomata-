@@ -475,11 +475,13 @@ func _process(delta: float) -> void:
 			if not occupied.has(_key(it["sec"], it["layer"])):
 				belt_items.remove_at(i)
 
-	# Launched projectiles flying radially outward to orbital altitude
+	# Launched projectiles flying outward under planetary gravity into orbit
 	for i in range(projectiles.size() - 1, -1, -1):
 		var pr = projectiles[i]
 		pr["trail"].append(pr["pos"])
 		if pr["trail"].size() > 14: pr["trail"].remove_at(0)
+		if world:
+			pr["vel"] += world.compute_gravity_at(pr["pos"]) * delta * 0.45
 		pr["pos"] += pr["vel"] * delta
 		if pr["pos"].length() >= pr["target_r"]:
 			var add_amt = 1

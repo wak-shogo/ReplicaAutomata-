@@ -191,6 +191,11 @@ func _process(delta: float) -> void:
 				"fe": GameState.fe, "cu": GameState.cu, "si": GameState.si, "ti": GameState.ti,
 				"plate_fe": GameState.plate_fe, "circuit": GameState.circuit, "probe_stock": GameState.probe_stock,
 				"eng": GameState.engine_tier, "spd": int(GameState.get_flight_speed()),
+				"vel": int(player_ref.velocity.length()),
+				"vx": int(player_ref.velocity.x), "vy": int(player_ref.velocity.y),
+				"grav": snappedf(player_ref.current_g_norm, 0.01),
+				"on_ground": player_ref.is_anchored_surface,
+				"rot": snappedf(player_ref.rotation, 0.02),
 				"drones": GameState.drones, "fleet": GameState.fleet_count, "launches": GameState.total_launches,
 				"doc": GameState.current_doctrine, "tool": GameState.selected_tool, "menu": menu_state,
 				"px": int(player_ref.position.x), "py": int(player_ref.position.y),
@@ -549,13 +554,15 @@ func _on_hud_draw() -> void:
 	hud_canvas.draw_string(font, Vector2(148, 87), "FLEET %d" % GameState.fleet_count, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, C_CYAN)
 	hud_canvas.draw_string(font, Vector2(246, 87), "PWR %d/%dkW" % [int(GameState.power_use), int(GameState.power_gen)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, pwr_col)
 
-	# Active Engine / Tool / Atmosphere Telemetry inside Cluster
+	# Active Module / Velocity / Gravity / Atmosphere Telemetry inside Cluster
 	var doc_names = ["HARVEST", "REPLICATE", "DEFEND", "ASSAULT"]
-	var eng_lbl = "GROUNDED" if GameState.engine_tier == 0 else "Mk-%d(%du/s)" % [GameState.engine_tier, int(GameState.get_flight_speed())]
+	var eng_lbl = "CAPSULE" if GameState.engine_tier == 0 else ("MK-1 LANDER" if GameState.engine_tier == 1 else ("MK-2 APOLLO" if GameState.engine_tier == 2 else "MK-3 WARP"))
 	var alt_m = int(maxf(0.0, player_ref.position.length() - PlanetWorld.R_SURFACE)) if player_ref else 0
+	var vel_live = int(player_ref.velocity.length()) if player_ref else 0
+	var g_live = player_ref.current_g_norm if player_ref else 0.92
 	var tname = "LASER" if GameState.selected_tool == "pick" else ("SALVAGE" if GameState.selected_tool == "demolish" else GameState.BUILDINGS.get(GameState.selected_tool, {}).get("name", "TOOL"))
 	var alt_str = ("ALT %d/3600m" % alt_m) if (player_ref and player_ref.position.length() > PlanetWorld.R_SURFACE + 28.0 and player_ref.position.length() <= PlanetWorld.R_ATMOS_OUTER) else ("SPACE" if (player_ref and player_ref.position.length() > PlanetWorld.R_ATMOS_OUTER) else doc_names[GameState.current_doctrine])
-	hud_canvas.draw_string(font, Vector2(26, 111), "%s | ENG:%s | %s" % [tname.to_upper(), eng_lbl, alt_str], HORIZONTAL_ALIGNMENT_LEFT, int(tl_w - 36), 11, C_MUTED)
+	hud_canvas.draw_string(font, Vector2(26, 111), "%s | %s | V:%d %.2fg | %s" % [tname.to_upper(), eng_lbl, vel_live, g_live, alt_str], HORIZONTAL_ALIGNMENT_LEFT, int(tl_w - 36), 11, C_MUTED)
 
 	# 2. TOP-RIGHT OPEN-WORLD RADAR MINIMAP
 	var rad_r = 40.0 if narrow else 46.0

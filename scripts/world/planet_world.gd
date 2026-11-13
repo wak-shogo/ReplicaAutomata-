@@ -16,6 +16,9 @@ const R_ATMOS_OUTER: float = R_SURFACE + 3600.0 # 10000.0 (3600px thick atmosphe
 const DA: float = TAU / float(SECTORS)
 const WORLD_LIMIT_R: float = 96000.0
 const SPAWN_SECTOR: int = 270 # Top (north pole, -PI/2 = 270 deg)
+const G_ORIGIN: float = 220.0
+const ORIGIN_SOI_INNER: float = 17500.0
+const ORIGIN_SOI_OUTER: float = 22500.0
 
 enum CellKind { EMPTY, SURFACE, ROCK, MAGMA }
 
@@ -75,15 +78,15 @@ func _init_open_world_cosmos() -> void:
 			"tint": Color(0.82, 0.90, 1.0) if rng.randf() < 0.7 else Color(1.0, 0.88, 0.68),
 		})
 
-	# Huge Open-World Celestial Bodies scaled for 10x universe (all reachable!)
+	# Huge Open-World Celestial Bodies with real Multi-Body Gravity & Landable Surfaces
 	celestials = [
-		{"tex": "moon", "pos": Vector2(12800.0, -9600.0), "r": 1100.0, "ore": "fe", "name": "LUNA-PRIME"},
-		{"tex": "planet_crystal", "pos": Vector2(-21500.0, -14200.0), "r": 1800.0, "ore": "si", "name": "CRYO-CRYSTAL"},
-		{"tex": "planet_volcanic", "pos": Vector2(24200.0, 13800.0), "r": 1850.0, "ore": "ti", "name": "IGNIS-IV"},
-		{"tex": "planet_large", "pos": Vector2(-19600.0, 21400.0), "r": 2500.0, "ore": "cu", "name": "GAIA-MAJOR"},
-		{"tex": "sun", "pos": Vector2(42000.0, -29500.0), "r": 3600.0, "ore": "", "name": "HELIOS-PRIME"},
-		{"tex": "pulsar", "pos": Vector2(-41000.0, -31000.0), "r": 1600.0, "ore": "ti", "name": "PULSAR-X"},
-		{"tex": "blackhole", "pos": Vector2(38000.0, 34500.0), "r": 2800.0, "ore": "", "name": "GARGANTUA-0"},
+		{"tex": "moon", "pos": Vector2(12800.0, -9600.0), "r": 1100.0, "ore": "fe", "name": "LUNA-PRIME", "g": 135.0, "solid": true},
+		{"tex": "planet_crystal", "pos": Vector2(-21500.0, -14200.0), "r": 1800.0, "ore": "si", "name": "CRYO-CRYSTAL", "g": 165.0, "solid": true},
+		{"tex": "planet_volcanic", "pos": Vector2(24200.0, 13800.0), "r": 1850.0, "ore": "ti", "name": "IGNIS-IV", "g": 175.0, "solid": true},
+		{"tex": "planet_large", "pos": Vector2(-19600.0, 21400.0), "r": 2500.0, "ore": "cu", "name": "GAIA-MAJOR", "g": 205.0, "solid": true},
+		{"tex": "sun", "pos": Vector2(42000.0, -29500.0), "r": 3600.0, "ore": "", "name": "HELIOS-PRIME", "g": 260.0, "solid": false},
+		{"tex": "pulsar", "pos": Vector2(-41000.0, -31000.0), "r": 1600.0, "ore": "ti", "name": "PULSAR-X", "g": 190.0, "solid": false},
+		{"tex": "blackhole", "pos": Vector2(38000.0, 34500.0), "r": 2800.0, "ore": "", "name": "GARGANTUA-0", "g": 340.0, "solid": false},
 	]
 
 func generate_world(seed_val: int = 42077) -> void:
@@ -313,7 +316,15 @@ func mine_asteroid_at(world_pos: Vector2, power: float, max_dist: float = 180.0)
 		ast["pos"] = Vector2(cos(ast["ang"]), sin(ast["ang"])) * ast["dist"]
 	return {"hit": true, "pos": ast["pos"], "ore": ore_name}
 
-func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0) -> Dictionary:
+func mine_celestial_body(bd: Dictionary, surf_pt: Vector2) -> void:
+	var ore_name: String = String(bd.get("ore", "fe"))
+	if ore_name == "":
+		ore_name = "fe"
+	GameState.add_res(ore_name, 3, true)
+	spawn_spark_burst(surf_pt, _ore_color(ore_name), 6)
+	spawn_world_popup(surf_pt, "+3 %s" % ore_name.to_upper(), _ore_color(ore_name))
+
+func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0, prefer_sideways: bool = false) -> Dictionary:
 	# First check orbital asteroids if above planet surface
 	if world_pos.length() > R_SURFACE + 120.0:
 		var best_ast = null
@@ -325,6 +336,12 @@ func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0) -> D
 				best_ast = a
 		if best_ast != null:
 			return {"type": "asteroid", "pos": best_ast["pos"]}
+		var cel_hit = get_celestial_collision(world_pos, 180.0)
+		if not cel_hit.is_empty():
+			var bd: Dictionary = cel_hit["body"]
+			if String(bd.get("ore", "")) != "":
+				var surf_pt = Vector2(bd["pos"]) + Vector2(cel_hit["normal"]) * float(bd["r"])
+				return {"type": "celestial", "body": bd, "pos": surf_pt}
 
 	# Radial sphere ore/rock search
 	var pcell = pos_to_cell(world_pos)
@@ -333,6 +350,8 @@ func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0) -> D
 	var best_rock_d = 999999.0
 	var best_rock_c = Vector2i(-1, -1)
 
+	var pos_up = world_pos.normalized() if world_pos.length() > 1.0 else Vector2.UP
+	var near_surf_band = prefer_sideways and world_pos.length() >= R_SURFACE - 320.0
 	for l in range(maxi(1, pcell.y - 3), mini(LAYERS, pcell.y + 3)):
 		for ds in range(-4, 5):
 			var s = wrap_sector(pcell.x + ds)
@@ -340,19 +359,63 @@ func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0) -> D
 			var cp = cell_center(s, l)
 			var d = cp.distance_to(world_pos)
 			if d > max_range: continue
+			var score_d = d
+			if near_surf_band and d > 1.0:
+				var to_c = (cp - world_pos) / d
+				if to_c.dot(pos_up) < -0.78:
+					score_d += 170.0
 			if get_ore(s, l) != "":
-				if d < best_ore_d:
-					best_ore_d = d
+				if score_d < best_ore_d:
+					best_ore_d = score_d
 					best_ore_c = Vector2i(s, l)
 			else:
-				if d < best_rock_d:
-					best_rock_d = d
+				if score_d < best_rock_d:
+					best_rock_d = score_d
 					best_rock_c = Vector2i(s, l)
 
 	if best_ore_c.x >= 0:
 		return {"type": "cell", "cell": best_ore_c, "pos": cell_center(best_ore_c.x, best_ore_c.y)}
 	if best_rock_c.x >= 0:
 		return {"type": "cell", "cell": best_rock_c, "pos": cell_center(best_rock_c.x, best_rock_c.y)}
+	return {}
+
+func compute_gravity_at(world_pos: Vector2) -> Vector2:
+	var g_total = Vector2.ZERO
+	var r = world_pos.length()
+	if r > 120.0 and r < ORIGIN_SOI_OUTER:
+		var fade = 1.0 if r <= ORIGIN_SOI_INNER else clampf((ORIGIN_SOI_OUTER - r) / (ORIGIN_SOI_OUTER - ORIGIN_SOI_INNER), 0.0, 1.0)
+		var g_origin = G_ORIGIN * pow(R_SURFACE / maxf(r, R_SURFACE * 0.72), 2.0) * fade
+		g_total += -world_pos.normalized() * g_origin
+	for b in celestials:
+		var bpos: Vector2 = b["pos"]
+		var br: float = float(b["r"])
+		var d_vec = bpos - world_pos
+		var d = d_vec.length()
+		var soi = br * 4.2
+		if d > 20.0 and d < soi:
+			var c_fade = 1.0 if d <= soi * 0.75 else clampf((soi - d) / (soi * 0.25), 0.0, 1.0)
+			var g_b = float(b.get("g", 140.0)) * pow(br / maxf(d, br * 0.75), 2.0) * c_fade
+			g_total += d_vec.normalized() * g_b
+	return g_total
+
+func get_atmosphere_density(world_pos: Vector2) -> float:
+	var r = world_pos.length()
+	if r >= R_ATMOS_OUTER:
+		return 0.0
+	if r <= R_SURFACE:
+		return 1.0
+	return clampf(1.0 - (r - R_SURFACE) / (R_ATMOS_OUTER - R_SURFACE), 0.0, 1.0)
+
+func get_celestial_collision(world_pos: Vector2, pad: float = 24.0) -> Dictionary:
+	for b in celestials:
+		if not bool(b.get("solid", false)):
+			continue
+		var d_vec = world_pos - Vector2(b["pos"])
+		var d = d_vec.length()
+		var surf_r = float(b["r"]) + pad
+		if d <= surf_r:
+			var n = d_vec.normalized() if d > 1.0 else Vector2.UP
+			return {"body": b, "normal": n, "dist": d, "surf_r": surf_r}
 	return {}
 
 func spawn_spark_burst(pos: Vector2, col: Color, count: int = 6) -> void:
@@ -405,6 +468,7 @@ func _process(delta: float) -> void:
 		a["pos"] = Vector2(cos(a["ang"]), sin(a["ang"])) * a["dist"]
 	for i in range(particles.size() - 1, -1, -1):
 		var p = particles[i]
+		p["vel"] += compute_gravity_at(p["pos"]) * delta * 0.45
 		p["pos"] += p["vel"] * delta
 		p["vel"] *= 0.94
 		p["life"] -= delta

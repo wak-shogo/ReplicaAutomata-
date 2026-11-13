@@ -138,13 +138,33 @@ func _run_automated_suite() -> void:
 	if GameState.engine_tier != 1 or not is_equal_approx(GameState.get_flight_speed(), 62.0):
 		failures.append("Onboard Printer Engine Mk-I craft failed")
 
-	# Open-world space pure uniform linear motion (> R_ATMOS_OUTER = 10000) capped by engine speed
+	# 1. Full Multi-Body Gravity pull check in Origin-Prime orbit + 2. Deep-Space Zero-G Inertial Cruise
 	player.position = Vector2(12800.0, -900.0)
+	player.velocity = Vector2(55.0, -15.0)
+	player.is_anchored_surface = false
+	player.hover_stabilize = false
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if player.velocity.x >= 55.0:
+		failures.append("Planetary inverse-square gravity pull missing in orbit")
+
+	# Deep-space outside SOI: Pure uniform linear motion + Axial Rocket Rotation Thrust
+	player.position = Vector2(28000.0, -900.0)
 	player.velocity = Vector2(55.0, -15.0)
 	await get_tree().physics_frame
 	await get_tree().physics_frame
 	if player.velocity.distance_to(Vector2(55.0, -15.0)) > 1.0:
-		failures.append("Open-space inertial flight drifted")
+		failures.append("Deep-space zero-G inertial cruise drifted")
+
+	# Rocket rotation + thrust test: turning stick rotates hull and accelerates along nose
+	player.rotation = 0.0 # Facing UP
+	hud.joy_vec = Vector2.RIGHT
+	for _rstep in range(18):
+		await get_tree().physics_frame
+	hud.joy_vec = Vector2.ZERO
+	player.set_virtual_input(Vector2.ZERO, false)
+	if absf(player.rotation) < 0.2 or player.velocity.x <= 55.0:
+		failures.append("Rocket RCS rotation + axial thruster propulsion failed")
 	player.reset_to_spawn()
 
 	# 2-click ABXY Build Tree verification (Click 1: X -> BUILD_TREE, Click 2: Y -> Drill -> FIELD)
