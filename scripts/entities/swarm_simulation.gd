@@ -56,7 +56,7 @@ func _init_multimeshes() -> void:
 	var f_mesh = MultiMesh.new()
 	f_mesh.transform_format = MultiMesh.TRANSFORM_2D
 	var fq = QuadMesh.new()
-	fq.size = Vector2(14.0, 14.0)
+	fq.size = Vector2(20.0, 20.0)
 	f_mesh.mesh = fq
 	f_mesh.instance_count = MAX_FRIENDLY
 	f_mesh.visible_instance_count = 0
@@ -64,12 +64,13 @@ func _init_multimeshes() -> void:
 	add_child(friendly_mm)
 
 	hostile_mm = MultiMeshInstance2D.new()
-	hostile_mm.texture = load("res://assets/sprites/hostile_fighter.png")
+	var c_tex_path = "res://assets/sprites/corrupted_fighter.png" if ResourceLoader.exists("res://assets/sprites/corrupted_fighter.png") else "res://assets/sprites/hostile_fighter.png"
+	hostile_mm.texture = load(c_tex_path)
 	hostile_mm.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	var h_mesh = MultiMesh.new()
 	h_mesh.transform_format = MultiMesh.TRANSFORM_2D
 	var hq = QuadMesh.new()
-	hq.size = Vector2(16.0, 16.0)
+	hq.size = Vector2(24.0, 24.0)
 	h_mesh.mesh = hq
 	h_mesh.instance_count = MAX_HOSTILE
 	h_mesh.visible_instance_count = 0
@@ -304,14 +305,31 @@ func _on_boss_defeated() -> void:
 func _draw() -> void:
 	var font = ThemeDB.fallback_font
 	if not GameState.boss_defeated:
+		# HD-2D Boss Glow Halo, Rotating Energy Ring & Escort Bombers/Cruisers
+		var pulse = 0.85 + 0.15 * sin(sim_time * 3.5)
+		draw_circle(boss_pos, 145.0 * pulse, Color(0.95, 0.14, 0.28, 0.18))
+		draw_arc(boss_pos, 118.0, sim_time * 0.7, sim_time * 0.7 + 2.4, 28, Color(1.0, 0.30, 0.36, 0.65), 3.0)
+		draw_arc(boss_pos, 118.0, sim_time * 0.7 + PI, sim_time * 0.7 + PI + 2.4, 28, Color(1.0, 0.30, 0.36, 0.65), 3.0)
+		for k in range(3):
+			var ka = sim_time * 0.55 + float(k) * (TAU / 3.0)
+			var kp = boss_pos + Vector2(cos(ka), sin(ka)) * 118.0
+			draw_circle(kp, 8.0, Color(1.0, 0.38, 0.38, 0.92))
 		if tex_boss:
-			var bsz = tex_boss.get_size() * 1.2
+			var bsz = tex_boss.get_size() * 1.35
 			draw_texture_rect(tex_boss, Rect2(boss_pos - bsz * 0.5, bsz), false)
 		if font:
-			draw_string(font, boss_pos + Vector2(-60, -82), "CORRUPTED CORE HUB", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.38, 0.32))
-			var br = Rect2(boss_pos + Vector2(-62, -72), Vector2(124, 8))
-			draw_rect(br, Color(0.1, 0.05, 0.08, 0.9))
-			draw_rect(Rect2(br.position, Vector2(br.size.x * clampf(GameState.boss_hp / GameState.boss_max_hp, 0.0, 1.0), 8)), Color(1.0, 0.25, 0.28))
+			draw_string(font, boss_pos + Vector2(-72, -108), "CORRUPTED CORE HUB", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1.0, 0.42, 0.36))
+			var br = Rect2(boss_pos + Vector2(-68, -94), Vector2(136, 10))
+			draw_rect(br, Color(0.1, 0.05, 0.08, 0.92))
+			draw_rect(Rect2(br.position, Vector2(br.size.x * clampf(GameState.boss_hp / GameState.boss_max_hp, 0.0, 1.0), 10)), Color(1.0, 0.25, 0.28))
+
+	# Friendly & Hostile Exhaust Contrails (HD-2D ship crispness)
+	for i in range(mini(f_active, 60)):
+		var tail = f_pos[i] - f_vel[i].normalized() * 12.0
+		draw_line(f_pos[i], tail, Color(0.28, 0.92, 1.0, 0.42), 2.0)
+	for i in range(mini(h_active, 40)):
+		var tail = h_pos[i] - h_vel[i].normalized() * 14.0
+		draw_line(h_pos[i], tail, Color(1.0, 0.30, 0.34, 0.45), 2.0)
 
 	for s in shot_fx:
 		var a = clampf(s["life"] / 0.12, 0.0, 1.0)

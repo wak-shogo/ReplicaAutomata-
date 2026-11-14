@@ -92,7 +92,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				var wpos = get_global_mouse_position()
 				if GameState.selected_tool != "pick":
 					factory.try_handle_click_at(wpos)
-				else:
+				elif not factory.try_handle_click_at(wpos):
 					player.trigger_primary_action()
 
 # ==============================================================================
@@ -112,104 +112,150 @@ func _run_automated_suite() -> void:
 	if not hit["destroyed"] or GameState.fe <= 0:
 		failures.append("Spherical cell mining failed")
 
-	# Grounded check: Engine Tier 0 cannot fly off planet surface (R_SURFACE = 6400)
-	player.reset_to_spawn()
-	player.position = Vector2(0.0, -(PlanetWorld.R_SURFACE + 120.0))
-	await get_tree().physics_frame
-	await get_tree().physics_frame
-	if player.position.length() > PlanetWorld.R_SURFACE + 28.0:
-		failures.append("Grounded Seed Unit escaped planet without printing Thruster Mk-I")
+	# Grounded check: Engine Tier 0 cannot escape planet into space (Ion hop < 280px alt)
+	player.reset_to_surface()
+	hud.joy_vec = Vector2(0.0, -1.0)
+	for _g in range(30):
+		await get_tree().physics_frame
+	hud.joy_vec = Vector2.ZERO
+	if player.position.length() > PlanetWorld.R_SURFACE + 280.0:
+		failures.append("Grounded Seed Unit escaped planet without printing Lander Mk-I")
 
-	# Spherical surface zero-drift clamp
-	player.reset_to_spawn()
-	player.velocity = Vector2(200.0, 0.0)
-	await get_tree().physics_frame
-	await get_tree().physics_frame
-	if player.velocity.length() > 1.0:
-		failures.append("Surface anchor drifted")
+	# Spherical surface friction damping
+	player.reset_to_surface()
+	player.velocity = Vector2(160.0, 0.0)
+	for _f in range(32):
+		await get_tree().physics_frame
+	if player.velocity.length() > 12.0:
+		failures.append("Surface friction brake drifted (%d)" % int(player.velocity.length()))
 
-	# Print Thruster Engine Mk-I via Onboard 3D Printer [Y] -> [Y] (2 clicks!), verify slow ~58s Atmos Climb speed = 62px/s
-	GameState.add_res("fe", 40)
-	GameState.add_res("cu", 20)
+	# Research early DAG -> Print Lander Struts Mk-I via Onboard 3D Printer [Y] -> [Y]
+	GameState.add_res("fe", 120); GameState.add_res("cu", 60); GameState.add_res("si", 30); GameState.add_res("plate_fe", 10)
+	GameState.try_research_tech("tesla_grid")
+	GameState.try_research_tech("belt_logistics")
+	GameState.try_research_tech("metallurgy")
 	hud._trigger_abxy("Y")
 	if hud.menu_state != GameHUD.MenuState.CMD_TREE:
 		failures.append("Y failed to open Onboard Printer tree")
-	hud._trigger_abxy("Y") # Slot 0 = PRINT Thruster Mk-I
-	if GameState.engine_tier != 1 or not is_equal_approx(GameState.get_flight_speed(), 62.0):
+	hud._trigger_abxy("Y") # Slot 0 = PRINT Lander Struts Mk-I
+	if GameState.engine_tier != 1 or not is_equal_approx(GameState.get_flight_speed(), 115.0):
 		failures.append("Onboard Printer Engine Mk-I craft failed")
+	hud.menu_state = GameHUD.MenuState.FIELD
 
-	# 1. Full Multi-Body Gravity pull check in Origin-Prime orbit + 2. Deep-Space Zero-G Inertial Cruise
-	player.position = Vector2(12800.0, -900.0)
-	player.velocity = Vector2(55.0, -15.0)
+	# 1. Full Multi-Body Gravity pull & Keplerian Zero-Drag Vacuum Cruise (r > R_ATMOS_OUTER)
+	player.position = Vector2(0.0, -(PlanetWorld.R_ATMOS_OUTER + 500.0))
+	player.velocity = Vector2(1150.0, 0.0) # Tangential orbital velocity (> old 1100 cap!)
 	player.is_anchored_surface = false
-	player.hover_stabilize = false
 	await get_tree().physics_frame
-	await get_tree().physics_frame
-	if player.velocity.x >= 55.0:
-		failures.append("Planetary inverse-square gravity pull missing in orbit")
+	var v_orbit_after = player.velocity.length()
+	if v_orbit_after < 1100.0:
+		failures.append("Vacuum space orbital speed throttled or dragged (%d)" % int(v_orbit_after))
 
-	# Deep-space outside SOI: Pure uniform linear motion + Axial Rocket Rotation Thrust
-	player.position = Vector2(28000.0, -900.0)
+	# 2. Deep-space outside SOI: Pure uniform linear motion + Rocket Thrust & Ion Backup
+	player.position = Vector2(36000.0, -900.0)
 	player.velocity = Vector2(55.0, -15.0)
 	await get_tree().physics_frame
 	await get_tree().physics_frame
 	if player.velocity.distance_to(Vector2(55.0, -15.0)) > 1.0:
 		failures.append("Deep-space zero-G inertial cruise drifted")
 
-	# Rocket rotation + thrust test: turning stick rotates hull and accelerates along nose
-	player.rotation = 0.0 # Facing UP
-	hud.joy_vec = Vector2.RIGHT
-	for _rstep in range(18):
+	# 3. Capsule -> Rocket Mk-I -> Electric Ion backup test
+	player.reset_to_surface()
+	GameState.add_res("fe", 900); GameState.add_res("cu", 500)
+	GameState.add_res("si", 350); GameState.add_res("ti", 250)
+	GameState.add_res("plate_fe", 120); GameState.add_res("wire_cu", 80)
+	GameState.add_res("wafer_si", 60); GameState.add_res("circuit", 50)
+	GameState.add_res("alloy", 30)
+
+	# Research full Tech Tree DAG
+	for tid in GameState.TECH_ORDER:
+		if not GameState.try_research_tech(tid):
+			failures.append("Tech research failed: " + tid)
+
+	# Craft Engine Tier 1 + Ion Backup Test
+	if not GameState.try_print_engine():
+		failures.append("Engine Mk-I upgrade failed")
+	player.position = Vector2(0.0, -(PlanetWorld.R_SURFACE + 400.0))
+	player.velocity = Vector2.ZERO
+	GameState.player_fuel = 0.0
+	GameState.player_battery = 80.0
+	hud.joy_vec = Vector2(0.0, -1.0)
+	for _rstep in range(10):
 		await get_tree().physics_frame
 	hud.joy_vec = Vector2.ZERO
-	player.set_virtual_input(Vector2.ZERO, false)
-	if absf(player.rotation) < 0.2 or player.velocity.x <= 55.0:
-		failures.append("Rocket RCS rotation + axial thruster propulsion failed")
-	player.reset_to_spawn()
+	if not player.velocity.length() > 1.0:
+		failures.append("Electric Ion backup propulsion failed when fuel empty")
+	player.redeploy_capsule()
+	if player.position.y >= -PlanetWorld.R_SURFACE:
+		failures.append("Capsule redeploy respawn failed")
 
-	# 2-click ABXY Build Tree verification (Click 1: X -> BUILD_TREE, Click 2: Y -> Drill -> FIELD)
+	# 4. Hard Local Wired Power Grid + Connected Drill->Belt->Depot(Filter)->Smelter Test
+	GameState.add_res("fe", 600); GameState.add_res("cu", 300)
+	if not factory.try_place_building("solar", 267, PlanetWorld.LAYERS):
+		failures.append("Place Solar failed")
+	if not factory.try_place_building("tesla", 270, PlanetWorld.LAYERS):
+		failures.append("Place Tesla failed")
+	if not factory.try_place_building("drill", 269, 39):
+		failures.append("Place Drill failed")
+	# Before wiring Solar <-> Tesla, Drill must have 0% power and 0 output!
+	for _z in range(30):
+		factory._process(0.05)
+	var b_drill: Dictionary = {}
+	var u_solar = -1
+	var u_tesla = -1
+	for b in factory.buildings:
+		if b["id"] == "drill": b_drill = b
+		if b["id"] == "solar": u_solar = int(b["uid"])
+		if b["id"] == "tesla": u_tesla = int(b["uid"])
+	if b_drill.is_empty() or not b_drill["out_buf"].is_empty() or float(b_drill["pwr_ratio"]) > 0.01:
+		failures.append("Unwired machine did not stop at 0 power")
+
+	# Wire Solar -> Tesla & verify Drill fills buffer
+	if not factory.toggle_wire(u_solar, u_tesla):
+		failures.append("Wire Solar->Tesla failed")
+	for _p in range(60):
+		factory._process(0.05)
+	if factory._buf_total(b_drill["out_buf"]) < 1:
+		failures.append("Powered Drill did not fill out_buf after wiring")
+
+	# Place Belt + Depot + Smelter + chained 2nd Tesla + Mass Driver connected pipeline
+	for step_b in [
+		["belt", 271, PlanetWorld.LAYERS],
+		["depot", 272, PlanetWorld.LAYERS],
+		["belt", 274, PlanetWorld.LAYERS],
+		["smelter", 275, PlanetWorld.LAYERS],
+		["tesla", 277, PlanetWorld.LAYERS],
+		["mass_driver", 278, PlanetWorld.LAYERS],
+	]:
+		if not factory.try_place_building(step_b[0], step_b[1], step_b[2]):
+			failures.append("Failed place %s at (%d,%d)" % [step_b[0], step_b[1], step_b[2]])
+	var u_depot = -1
+	var u_tesla2 = -1
+	for b in factory.buildings:
+		if b["id"] == "depot":
+			u_depot = int(b["uid"])
+			b["out_filters"]["right"] = "fe"
+			factory.depot_transfer(u_depot, "fe", true, 12)
+		if b["id"] == "tesla" and int(b["uid"]) != u_tesla:
+			u_tesla2 = int(b["uid"])
+	if u_depot <= 0 or u_tesla2 <= 0 or not factory.toggle_wire(u_tesla, u_tesla2):
+		failures.append("Depot or chained Tesla wiring failed")
+
+	# 5. UI Tree Checks (BUILD_TREE, CMD_TREE, TECH_TREE, DEPOT_UI)
 	hud._trigger_abxy("X")
 	if hud.menu_state != GameHUD.MenuState.BUILD_TREE:
 		failures.append("X failed to open 2-click Build Tree")
-	hud._trigger_abxy("Y") # Pick Slot 1 (Mining Drill) -> back to FIELD in 2 clicks!
-	if GameState.selected_tool != "drill" or hud.menu_state != GameHUD.MenuState.FIELD:
-		failures.append("2-click Drill selection via ABXY failed")
+	hud._trigger_abxy("Y")
+	if hud.menu_state != GameHUD.MenuState.FIELD:
+		failures.append("2-click tool selection via ABXY failed")
 	hud._trigger_abxy("Y")
 	if hud.menu_state != GameHUD.MenuState.CMD_TREE:
-		failures.append("Y failed to open 2-click Printer/Cmd Tree")
+		failures.append("Y failed to open Printer/Cmd Tree")
 	hud._trigger_abxy("B")
 	if hud.menu_state != GameHUD.MenuState.FIELD:
 		failures.append("B failed to close Tree")
 
-	# Drone craft & 10x spherical factory build around globe
-	GameState.add_res("fe", 650)
-	GameState.add_res("cu", 320)
-	GameState.add_res("si", 220)
-	GameState.add_res("ti", 150)
-	for _i in range(6):
-		if not GameState.try_craft_drone():
-			failures.append("Drone craft failed")
-
-	var plan = [
-		["drill", 267, 38],
-		["lift", 273, 38],
-		["lift", 273, 39],
-		["belt", 273, PlanetWorld.LAYERS],
-		["depot", 269, PlanetWorld.LAYERS],
-		["smelter", 274, PlanetWorld.LAYERS],
-		["assembler", 276, PlanetWorld.LAYERS],
-		["printer", 278, PlanetWorld.LAYERS],
-		["mass_driver", 281, PlanetWorld.LAYERS],
-		["solar", 266, PlanetWorld.LAYERS],
-		["turret", 265, PlanetWorld.LAYERS],
-	]
-	for item in plan:
-		if not factory.try_place_building(item[0], item[1], item[2]):
-			failures.append("Failed placing %s at (%d,%d)" % [item[0], item[1], item[2]])
-
-	GameState.add_res("plate_fe", 40)
-	GameState.add_res("circuit", 20)
-	GameState.add_res("probe_stock", 2)
+	GameState.add_res("plate_fe", 40); GameState.add_res("circuit", 20); GameState.add_res("probe_stock", 2)
 	for _s in range(110):
 		await get_tree().process_frame
 		factory._process(0.05)

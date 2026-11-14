@@ -17,8 +17,8 @@ const DA: float = TAU / float(SECTORS)
 const WORLD_LIMIT_R: float = 96000.0
 const SPAWN_SECTOR: int = 270 # Top (north pole, -PI/2 = 270 deg)
 const G_ORIGIN: float = 220.0
-const ORIGIN_SOI_INNER: float = 17500.0
-const ORIGIN_SOI_OUTER: float = 22500.0
+const ORIGIN_SOI_INNER: float = 22000.0
+const ORIGIN_SOI_OUTER: float = 29000.0
 
 enum CellKind { EMPTY, SURFACE, ROCK, MAGMA }
 
@@ -37,8 +37,11 @@ var particles: Array[Dictionary] = []
 var world_popups: Array[Dictionary] = []
 
 var tex_ores: Dictionary = {}
+var tex_tiles: Dictionary = {}
 var tex_celestials: Dictionary = {}
 var anim_time: float = 0.0
+var sun_angle: float = -PI * 0.50 # Bright North Pole noon at spawn, night on southern hemisphere
+var nebulae: Array[Dictionary] = []
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -52,6 +55,11 @@ func _load_textures() -> void:
 		"cu": load("res://assets/environment/ore_cu.png"),
 		"si": load("res://assets/environment/ore_si.png"),
 		"ti": load("res://assets/environment/ore_ti.png"),
+	}
+	tex_tiles = {
+		"surface": load("res://assets/environment/surface_tile.png"),
+		"rock": load("res://assets/environment/rock_tile.png"),
+		"magma": load("res://assets/environment/magma_tile.png"),
 	}
 	tex_celestials = {
 		"sun": load("res://assets/environment/celestial_sun.png"),
@@ -76,6 +84,17 @@ func _init_open_world_cosmos() -> void:
 			"size": 2.0 if rng.randf() < 0.72 else 4.0,
 			"phase": rng.randf_range(0.0, TAU),
 			"tint": Color(0.82, 0.90, 1.0) if rng.randf() < 0.7 else Color(1.0, 0.88, 0.68),
+		})
+
+	# Deep Space Nebula Clouds (multi-layered atmospheric richness)
+	nebulae.clear()
+	for _n in range(28):
+		var na = rng.randf_range(0.0, TAU)
+		var nd = rng.randf_range(12000.0, 56000.0)
+		nebulae.append({
+			"pos": Vector2(cos(na), sin(na)) * nd,
+			"r": rng.randf_range(2600.0, 6200.0),
+			"col": [Color(0.07, 0.16, 0.34, 0.14), Color(0.16, 0.08, 0.28, 0.13), Color(0.04, 0.22, 0.28, 0.12)][_n % 3],
 		})
 
 	# Huge Open-World Celestial Bodies with real Multi-Body Gravity & Landable Surfaces
@@ -117,10 +136,13 @@ func generate_world(seed_val: int = 42077) -> void:
 				cell_hp[idx] = depth_hp
 				cell_max_hp[idx] = depth_hp
 
-	# Carve large subterranean caverns around the 360-degree interior
+	# Carve large subterranean caverns around the 360-degree interior (keep North Pole sub-crust solid)
 	for ci in range(36):
 		var cs = posmod(ci * 10 + rng.randi_range(-3, 3), SECTORS)
 		var cl = rng.randi_range(6, LAYERS - 6)
+		var d_spawn = absi(posmod(cs - SPAWN_SECTOR + 180, SECTORS) - 180)
+		if d_spawn <= 14 and cl > 22:
+			cl = rng.randi_range(6, 22)
 		for dl in range(-2, 3):
 			for ds in range(-3, 4):
 				if abs(dl) + abs(ds) <= 4:
@@ -144,12 +166,12 @@ func generate_world(seed_val: int = 42077) -> void:
 	_paint_vein(rng, 270, 34, "si", 2, 1, 10)
 	_paint_vein(rng, 270, 28, "ti", 3, 2, 14)
 
-	# Embed exposed surface crust ores near spawn so Mk-I Engine Fe/Cu is immediately gatherable
-	for ds in [-3, -2, -1, 1, 2, 3]:
+	# Embed exposed surface crust ores near spawn so early Fe/Cu Progression is symmetrically gatherable
+	for ds in [-13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]:
 		var ws = wrap_sector(SPAWN_SECTOR + ds)
-		cell_ore[(LAYERS - 1) * SECTORS + ws] = "cu" if (ds == 1 or ds == -2 or ds == 3) else "fe"
-		cell_hp[(LAYERS - 1) * SECTORS + ws] = 9.0
-		cell_max_hp[(LAYERS - 1) * SECTORS + ws] = 9.0
+		cell_ore[(LAYERS - 1) * SECTORS + ws] = "cu" if (abs(ds) % 2 == 1) else "fe"
+		cell_hp[(LAYERS - 1) * SECTORS + ws] = 8.0
+		cell_max_hp[(LAYERS - 1) * SECTORS + ws] = 8.0
 
 	# Distributed planetary ore pockets across 360-degree 10x sphere
 	for _i in range(95):
@@ -321,8 +343,25 @@ func mine_celestial_body(bd: Dictionary, surf_pt: Vector2) -> void:
 	if ore_name == "":
 		ore_name = "fe"
 	GameState.add_res(ore_name, 3, true)
+	if String(bd.get("name", "")) in ["LUNA-PRIME", "CRYO-CRYSTAL"]:
+		GameState.add_res("ice", 2, false)
 	spawn_spark_burst(surf_pt, _ore_color(ore_name), 6)
 	spawn_world_popup(surf_pt, "+3 %s" % ore_name.to_upper(), _ore_color(ore_name))
+
+func get_sun_dir() -> Vector2:
+	return Vector2(cos(sun_angle), sin(sun_angle))
+
+func get_sunlight_at(world_pos: Vector2) -> float:
+	var r = world_pos.length()
+	if r < 1.0:
+		return 1.0
+	if r < R_SURFACE - 90.0:
+		var pc = pos_to_cell(world_pos + (world_pos / r) * 14.0)
+		for cl in range(maxi(0, pc.y), LAYERS):
+			if is_solid_cell(pc.x, cl):
+				return 0.0 # Underground cavern roof blocks sunlight
+	var d = (world_pos / r).dot(get_sun_dir())
+	return clampf((d + 0.22) / 0.58, 0.0, 1.0)
 
 func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0, prefer_sideways: bool = false) -> Dictionary:
 	# First check orbital asteroids if above planet surface
@@ -351,10 +390,14 @@ func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0, pref
 	var best_rock_c = Vector2i(-1, -1)
 
 	var pos_up = world_pos.normalized() if world_pos.length() > 1.0 else Vector2.UP
-	var near_surf_band = prefer_sideways and world_pos.length() >= R_SURFACE - 320.0
-	for l in range(maxi(1, pcell.y - 3), mini(LAYERS, pcell.y + 3)):
-		for ds in range(-4, 5):
+	var near_surf_band = prefer_sideways and world_pos.length() >= R_SURFACE - 180.0
+	for l in range(maxi(1, pcell.y - 4), mini(LAYERS, pcell.y + 3)):
+		if near_surf_band and l < LAYERS - 1:
+			continue
+		for ds in range(-6, 7):
 			var s = wrap_sector(pcell.x + ds)
+			if near_surf_band and ds == 0:
+				continue
 			if not is_solid_cell(s, l): continue
 			var cp = cell_center(s, l)
 			var d = cp.distance_to(world_pos)
@@ -362,8 +405,8 @@ func find_nearest_mine_target(world_pos: Vector2, max_range: float = 250.0, pref
 			var score_d = d
 			if near_surf_band and d > 1.0:
 				var to_c = (cp - world_pos) / d
-				if to_c.dot(pos_up) < -0.78:
-					score_d += 170.0
+				if to_c.dot(pos_up) < -0.68:
+					continue
 			if get_ore(s, l) != "":
 				if score_d < best_ore_d:
 					best_ore_d = score_d
@@ -459,10 +502,12 @@ func _ore_color(ore: String) -> Color:
 		"cu": return Color(1.0, 0.58, 0.22)
 		"si": return Color(0.75, 0.48, 1.0)
 		"ti": return Color(0.55, 1.0, 0.72)
+		"ice": return Color(0.55, 0.92, 1.0)
 	return Color(0.78, 0.84, 0.92)
 
 func _process(delta: float) -> void:
 	anim_time += delta
+	sun_angle = wrapf(sun_angle + 0.0018 * delta, -PI, PI)
 	for a in asteroids:
 		a["ang"] += a["orbit_spd"] * delta
 		a["pos"] = Vector2(cos(a["ang"]), sin(a["ang"])) * a["dist"]
@@ -492,8 +537,15 @@ func _draw() -> void:
 	var min_y = minf(tl.y, br.y) - 360.0
 	var max_y = maxf(tl.y, br.y) + 360.0
 
-	# 1. Deep Open Space Void
-	draw_rect(Rect2(min_x, min_y, max_x - min_x, max_y - min_y), Color(0.02, 0.032, 0.068, 1.0))
+	# 1. Deep Open Space Void & Layered Cosmic Nebulae
+	draw_rect(Rect2(min_x, min_y, max_x - min_x, max_y - min_y), Color(0.015, 0.024, 0.055, 1.0))
+	for nb in nebulae:
+		var np: Vector2 = nb["pos"]
+		var nr: float = nb["r"]
+		if np.x + nr < min_x or np.x - nr > max_x or np.y + nr < min_y or np.y - nr > max_y:
+			continue
+		draw_circle(np, nr, nb["col"])
+		draw_circle(np + Vector2(nr * 0.2, -nr * 0.15), nr * 0.55, Color(nb["col"].r, nb["col"].g, nb["col"].b, nb["col"].a * 0.7))
 
 	# 2. Starfield in visible open-world frustum
 	for st in stars:
@@ -505,15 +557,18 @@ func _draw() -> void:
 		c.a = 0.35 + 0.65 * tw
 		draw_rect(Rect2(sp, Vector2(st["size"], st["size"])), c)
 
-	# 3. Spherical Atmospheric Corona around Origin-Prime (0,0) (Thick 3600px atmosphere)
+	# 3. Spherical Atmospheric Corona & Rayleigh Horizon Rim around Origin-Prime
 	var view_c = (tl + br) * 0.5
 	var view_rad = tl.distance_to(br) * 0.5 + 320.0
 	var vc_len = view_c.length()
+	var s_dir = get_sun_dir()
 	if vc_len - view_rad <= R_ATMOS_OUTER + 400.0:
-		draw_circle(Vector2.ZERO, R_ATMOS_OUTER, Color(0.035, 0.085, 0.19, 0.28))
-		draw_circle(Vector2.ZERO, R_SURFACE + 1800.0, Color(0.06, 0.14, 0.30, 0.32))
-		draw_circle(Vector2.ZERO, R_SURFACE + 520.0, Color(0.10, 0.24, 0.48, 0.40))
-		draw_arc(Vector2.ZERO, R_ATMOS_OUTER, 0.0, TAU, 128, Color(0.22, 0.65, 0.95, 0.24), 4.0)
+		draw_circle(Vector2.ZERO, R_ATMOS_OUTER, Color(0.03, 0.08, 0.18, 0.26))
+		draw_circle(Vector2.ZERO, R_SURFACE + 1900.0, Color(0.05, 0.13, 0.29, 0.30))
+		draw_circle(Vector2.ZERO, R_SURFACE + 560.0, Color(0.11, 0.28, 0.54, 0.44))
+		var sun_a = s_dir.angle()
+		draw_arc(Vector2.ZERO, R_SURFACE + 90.0, sun_a - PI * 0.55, sun_a + PI * 0.55, 72, Color(0.32, 0.78, 1.0, 0.32), 26.0)
+		draw_arc(Vector2.ZERO, R_ATMOS_OUTER, 0.0, TAU, 128, Color(0.24, 0.68, 0.98, 0.26), 4.0)
 
 	# 4. Distant Open-World Planets & Stars
 	var font = ThemeDB.fallback_font
@@ -567,6 +622,11 @@ func _draw() -> void:
 			for ds in range(-sec_span, sec_span + 1):
 				s_list.append(wrap_sector(center_s + ds))
 
+		var uvs = PackedVector2Array([Vector2(0, 1), Vector2(0, 0), Vector2(1, 0), Vector2(1, 1)])
+		var tex_surf: Texture2D = tex_tiles.get("surface", null)
+		var tex_rock: Texture2D = tex_tiles.get("rock", null)
+		var tex_magma: Texture2D = tex_tiles.get("magma", null)
+
 		for l in range(l_min, l_max + 1):
 			var r0 = layer_inner_r(l)
 			var r1 = layer_outer_r(l)
@@ -583,22 +643,34 @@ func _draw() -> void:
 					Vector2(cos(a1) * r1, sin(a1) * r1),
 					Vector2(cos(a1) * r0, sin(a1) * r0),
 				])
-				var grain = float((s * 17 + l * 31) % 7) * 0.014
-				var base_col = Color(0.22 + grain, 0.23 + grain, 0.31 + grain, 1.0)
+				var mid_a = (a0 + a1) * 0.5
+				var sun_f = clampf((Vector2(cos(mid_a), sin(mid_a)).dot(s_dir) + 0.22) / 0.58, 0.0, 1.0)
+				var grain = float((s * 17 + l * 31) % 7) * 0.025
+				var cell_tex: Texture2D = tex_rock
+				var base_col = Color(0.68 + grain, 0.70 + grain, 0.82 + grain, 1.0)
 				if k == CellKind.SURFACE:
-					base_col = Color(0.28 + grain, 0.36 + grain, 0.47 + grain, 1.0)
+					cell_tex = tex_surf
+					var dl = 0.45 + 0.55 * sun_f
+					base_col = Color((0.68 + grain) * dl, (0.80 + grain) * dl, (0.95 + grain) * dl, 1.0)
 				elif k == CellKind.ROCK:
-					var sh = 0.76 + 0.28 * (float(l) / float(LAYERS)) + grain
-					base_col = Color(0.22 * sh, 0.22 * sh, 0.30 * sh, 1.0)
+					var sh = 0.48 + 0.42 * (float(l) / float(LAYERS)) + grain
+					base_col = Color(0.65 * sh, 0.68 * sh, 0.82 * sh, 1.0)
 				elif k == CellKind.MAGMA:
-					base_col = Color(0.90, (0.34 + grain) * core_pulse, 0.09, 1.0)
-				draw_colored_polygon(pts, base_col)
+					cell_tex = tex_magma
+					base_col = Color(1.0, (0.68 + grain) * core_pulse, 0.45, 1.0)
+
+				if cell_tex:
+					var cols = PackedColorArray([base_col, base_col, base_col, base_col])
+					draw_polygon(pts, cols, uvs, cell_tex)
+				else:
+					draw_colored_polygon(pts, base_col)
 
 				if k == CellKind.SURFACE:
-					draw_line(pts[1], pts[2], Color(0.45, 0.88, 1.0, 0.90), 2.8)
+					var rim_col = Color(0.32 + 0.35 * sun_f, 0.72 + 0.24 * sun_f, 1.0, 0.92)
+					draw_line(pts[1], pts[2], rim_col, 3.0)
 					draw_line(pts[0], pts[3], Color(0.18, 0.24, 0.34, 0.70), 1.4)
 				else:
-					draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2]]), Color(0.08, 0.10, 0.16, 0.50), 1.2)
+					draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2]]), Color(0.06, 0.08, 0.14, 0.52), 1.2)
 					if not is_solid_cell(s, l + 1):
 						draw_line(pts[1], pts[2], Color(0.46, 0.54, 0.72, 0.85), 2.2)
 					if not is_solid_cell(s - 1, l):

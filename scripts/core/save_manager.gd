@@ -20,7 +20,7 @@ func save_game(world: Node, factory: Node, player: Node2D) -> bool:
 	f.store_string(JSON.stringify(data))
 	f.close()
 	GameState.emit_signal("log_event", "Colony saved cleanly.", "good")
-	AudioSynth.play_synth("save")
+	AudioSynth.play_synth("select")
 	return true
 
 func load_game(factory: Node, player: Node2D) -> bool:
