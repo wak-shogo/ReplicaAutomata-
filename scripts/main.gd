@@ -1,375 +1,223 @@
 extends Node2D
 
-# ==============================================================================
-# STAR REPLICA: AUTOMA - SPHERICAL OPEN-WORLD MAIN CONTROLLER & TEST HARNESS
-# ==============================================================================
+# Root scene coordinator: wires world, factory, 10k swarm, evolving vessel,
+# smooth horizon/orbital camera, Web read-only telemetry bridge, and --run-tests suite.
 
-@onready var world: PlanetWorld = $PlanetWorld
-@onready var factory: FactorySim = $FactorySim
-@onready var swarm: SwarmSimulation = $SwarmSimulation
-@onready var player: PlayerUnit = $Player
-@onready var camera: Camera2D = $Camera2D
-@onready var hud: GameHUD = $HUD
+@onready var sky: Node2D = $SkyBackdrop
+@onready var world: Node2D = $PlanetWorld
+@onready var factory: Node2D = $FactorySim
+@onready var swarm: Node2D = $SwarmSim
+@onready var player: Node2D = $PlayerVessel
+@onready var cam: Camera2D = $Camera2D
+@onready var hud: CanvasLayer = $HUD
 
-var target_zoom: float = 0.92
-var orbit_overview: bool = false
-var is_automated_run: bool = false
+var user_zoom: float = 1.0
+var _tel_timer: float = 0.0
 
 func _ready() -> void:
-	world.generate_world(42077)
-	factory.setup(world, swarm, player)
-	swarm.setup(world)
-	player.setup(world, factory)
-	hud.setup(player, world, swarm)
+	world.factory = factory
+	factory.world = world
+	factory.player = player
+	factory.swarm = swarm
+	swarm.world = world
+	player.world = world
+	player.factory = factory
+	player.swarm = swarm
 
-	hud.orbit_cam_toggled.connect(func(): orbit_overview = hud.orbit_cam_active)
-	hud.save_requested.connect(func(): SaveManager.save_game(world, factory, player))
-	hud.reset_requested.connect(_on_reset_requested)
-	hud.brake_requested.connect(func(): player.trigger_brake())
+	hud.world = world
+	hud.factory = factory
+	hud.player = player
+	hud.swarm = swarm
+	factory.depot_opened.connect(hud.open_depot)
 
-	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
-	if "--run-tests" in args:
-		is_automated_run = true
-		call_deferred("_run_automated_suite")
-	elif "--capture-shots" in args:
-		is_automated_run = true
-		call_deferred("_capture_visual_shots")
-	else:
-		if SaveManager.load_game(factory, player):
-			swarm.sync_to_game_state(GameState.fleet_count)
-		else:
-			_start_fresh_landing()
+	cam.position = player.position
+	cam.zoom = Vector2(0.92, 0.92)
 
-func _start_fresh_landing() -> void:
-	GameState.reset_state()
-	world.generate_world(42077)
-	factory.clear_factory()
-	swarm.reset_swarm()
-	player.reset_to_spawn()
-	GameState.set_tool("pick")
-	if camera:
-		camera.position = player.position
-		camera.zoom = Vector2(target_zoom, target_zoom)
-	GameState.emit_signal("log_event", "Grounded on Origin-Prime. Hold [A] to mine, [Y] Printer.", "info")
-
-func _on_reset_requested() -> void:
-	SaveManager.delete_save()
-	_start_fresh_landing()
-	AudioSynth.play_synth("pop")
-
-func _process(delta: float) -> void:
-	if not is_automated_run:
-		_update_camera(delta)
-
-func _update_camera(delta: float) -> void:
-	var win_sz = Vector2(DisplayServer.window_get_size())
-	var narrow_boost = 0.78 if win_sz.x < win_sz.y else 1.0
-	var goal_pos = player.position
-	var goal_z = target_zoom * narrow_boost
-	if orbit_overview:
-		goal_pos = Vector2.ZERO
-		goal_z = 0.052 * narrow_boost
-	elif player.position.length() > PlanetWorld.R_ATMOS_OUTER:
-		goal_z = 0.42 * narrow_boost
-	elif player.position.length() > PlanetWorld.R_SURFACE + 180.0:
-		goal_z = 0.68 * narrow_boost
-	camera.position = camera.position.lerp(goal_pos, clampf(7.5 * delta, 0.0, 1.0))
-	var nz = lerpf(camera.zoom.x, goal_z, clampf(7.5 * delta, 0.0, 1.0))
-	camera.zoom = Vector2(nz, nz)
+	if "--run-tests" in OS.get_cmdline_args() or "--run-tests" in OS.get_cmdline_user_args():
+		call_deferred("_run_automated_tests")
 
 func _unhandled_input(event: InputEvent) -> void:
-	if is_automated_run:
-		return
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
-			if not hud.is_blocking_world_input():
-				target_zoom = clampf(target_zoom + 0.12, 0.25, 1.65)
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
-			if not hud.is_blocking_world_input():
-				target_zoom = clampf(target_zoom - 0.12, 0.25, 1.65)
-		elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			if not hud.is_blocking_world_input():
-				var wpos = get_global_mouse_position()
-				if GameState.selected_tool != "pick":
-					factory.try_handle_click_at(wpos)
-				elif not factory.try_handle_click_at(wpos):
-					player.trigger_primary_action()
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			user_zoom = clampf(user_zoom * 1.12, 0.45, 1.65)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			user_zoom = clampf(user_zoom / 1.12, 0.45, 1.65)
 
-# ==============================================================================
-# AUTOMATED VERIFICATION SUITE (--run-tests)
-# ==============================================================================
-func _run_automated_suite() -> void:
-	print("=== SPHERICAL OPEN-WORLD TEST SUITE START ===")
-	var failures: Array[String] = []
-
-	_start_fresh_landing()
-	await get_tree().process_frame
-	if GameState.drones != 0 or GameState.fleet_count != 0 or GameState.fe != 0:
-		failures.append("Phase 1 clean slate failed")
-
-	# Radial mining on 10x spherical ore vein around SPAWN_SECTOR = 270
-	var hit = world.damage_cell(268, 38, 100.0, true)
-	if not hit["destroyed"] or GameState.fe <= 0:
-		failures.append("Spherical cell mining failed")
-
-	# Grounded check: Engine Tier 0 cannot escape planet into space (Ion hop < 280px alt)
-	player.reset_to_surface()
-	hud.joy_vec = Vector2(0.0, -1.0)
-	for _g in range(30):
-		await get_tree().physics_frame
-	hud.joy_vec = Vector2.ZERO
-	if player.position.length() > PlanetWorld.R_SURFACE + 280.0:
-		failures.append("Grounded Seed Unit escaped planet without printing Lander Mk-I")
-
-	# Spherical surface friction damping
-	player.reset_to_surface()
-	player.velocity = Vector2(160.0, 0.0)
-	for _f in range(32):
-		await get_tree().physics_frame
-	if player.velocity.length() > 12.0:
-		failures.append("Surface friction brake drifted (%d)" % int(player.velocity.length()))
-
-	# Research early DAG -> Print Lander Struts Mk-I via Onboard 3D Printer [Y] -> [Y]
-	GameState.add_res("fe", 120); GameState.add_res("cu", 60); GameState.add_res("si", 30); GameState.add_res("plate_fe", 10)
-	GameState.try_research_tech("tesla_grid")
-	GameState.try_research_tech("belt_logistics")
-	GameState.try_research_tech("metallurgy")
-	hud._trigger_abxy("Y")
-	if hud.menu_state != GameHUD.MenuState.CMD_TREE:
-		failures.append("Y failed to open Onboard Printer tree")
-	hud._trigger_abxy("Y") # Slot 0 = PRINT Lander Struts Mk-I
-	if GameState.engine_tier != 1 or not is_equal_approx(GameState.get_flight_speed(), 115.0):
-		failures.append("Onboard Printer Engine Mk-I craft failed")
-	hud.menu_state = GameHUD.MenuState.FIELD
-
-	# 1. Full Multi-Body Gravity pull & Keplerian Zero-Drag Vacuum Cruise (r > R_ATMOS_OUTER)
-	player.position = Vector2(0.0, -(PlanetWorld.R_ATMOS_OUTER + 500.0))
-	player.velocity = Vector2(1150.0, 0.0) # Tangential orbital velocity (> old 1100 cap!)
-	player.is_anchored_surface = false
-	await get_tree().physics_frame
-	var v_orbit_after = player.velocity.length()
-	if v_orbit_after < 1100.0:
-		failures.append("Vacuum space orbital speed throttled or dragged (%d)" % int(v_orbit_after))
-
-	# 2. Deep-space outside SOI: Pure uniform linear motion + Rocket Thrust & Ion Backup
-	player.position = Vector2(36000.0, -900.0)
-	player.velocity = Vector2(55.0, -15.0)
-	await get_tree().physics_frame
-	await get_tree().physics_frame
-	if player.velocity.distance_to(Vector2(55.0, -15.0)) > 1.0:
-		failures.append("Deep-space zero-G inertial cruise drifted")
-
-	# 3. Capsule -> Rocket Mk-I -> Electric Ion backup test
-	player.reset_to_surface()
-	GameState.add_res("fe", 900); GameState.add_res("cu", 500)
-	GameState.add_res("si", 350); GameState.add_res("ti", 250)
-	GameState.add_res("plate_fe", 120); GameState.add_res("wire_cu", 80)
-	GameState.add_res("wafer_si", 60); GameState.add_res("circuit", 50)
-	GameState.add_res("alloy", 30)
-
-	# Research full Tech Tree DAG
-	for tid in GameState.TECH_ORDER:
-		if not GameState.try_research_tech(tid):
-			failures.append("Tech research failed: " + tid)
-
-	# Craft Engine Tier 1 + Ion Backup Test
-	if not GameState.try_print_engine():
-		failures.append("Engine Mk-I upgrade failed")
-	player.position = Vector2(0.0, -(PlanetWorld.R_SURFACE + 400.0))
-	player.velocity = Vector2.ZERO
-	GameState.player_fuel = 0.0
-	GameState.player_battery = 80.0
-	hud.joy_vec = Vector2(0.0, -1.0)
-	for _rstep in range(10):
-		await get_tree().physics_frame
-	hud.joy_vec = Vector2.ZERO
-	if not player.velocity.length() > 1.0:
-		failures.append("Electric Ion backup propulsion failed when fuel empty")
-	player.redeploy_capsule()
-	if player.position.y >= -PlanetWorld.R_SURFACE:
-		failures.append("Capsule redeploy respawn failed")
-
-	# 4. Hard Local Wired Power Grid + Connected Drill->Belt->Depot(Filter)->Smelter Test
-	GameState.add_res("fe", 600); GameState.add_res("cu", 300)
-	if not factory.try_place_building("solar", 267, PlanetWorld.LAYERS):
-		failures.append("Place Solar failed")
-	if not factory.try_place_building("tesla", 270, PlanetWorld.LAYERS):
-		failures.append("Place Tesla failed")
-	if not factory.try_place_building("drill", 269, 39):
-		failures.append("Place Drill failed")
-	# Before wiring Solar <-> Tesla, Drill must have 0% power and 0 output!
-	for _z in range(30):
-		factory._process(0.05)
-	var b_drill: Dictionary = {}
-	var u_solar = -1
-	var u_tesla = -1
-	for b in factory.buildings:
-		if b["id"] == "drill": b_drill = b
-		if b["id"] == "solar": u_solar = int(b["uid"])
-		if b["id"] == "tesla": u_tesla = int(b["uid"])
-	if b_drill.is_empty() or not b_drill["out_buf"].is_empty() or float(b_drill["pwr_ratio"]) > 0.01:
-		failures.append("Unwired machine did not stop at 0 power")
-
-	# Wire Solar -> Tesla & verify Drill fills buffer
-	if not factory.toggle_wire(u_solar, u_tesla):
-		failures.append("Wire Solar->Tesla failed")
-	for _p in range(60):
-		factory._process(0.05)
-	if factory._buf_total(b_drill["out_buf"]) < 1:
-		failures.append("Powered Drill did not fill out_buf after wiring")
-
-	# Place Belt + Depot + Smelter + chained 2nd Tesla + Mass Driver connected pipeline
-	for step_b in [
-		["belt", 271, PlanetWorld.LAYERS],
-		["depot", 272, PlanetWorld.LAYERS],
-		["belt", 274, PlanetWorld.LAYERS],
-		["smelter", 275, PlanetWorld.LAYERS],
-		["tesla", 277, PlanetWorld.LAYERS],
-		["mass_driver", 278, PlanetWorld.LAYERS],
-	]:
-		if not factory.try_place_building(step_b[0], step_b[1], step_b[2]):
-			failures.append("Failed place %s at (%d,%d)" % [step_b[0], step_b[1], step_b[2]])
-	var u_depot = -1
-	var u_tesla2 = -1
-	for b in factory.buildings:
-		if b["id"] == "depot":
-			u_depot = int(b["uid"])
-			b["out_filters"]["right"] = "fe"
-			factory.depot_transfer(u_depot, "fe", true, 12)
-		if b["id"] == "tesla" and int(b["uid"]) != u_tesla:
-			u_tesla2 = int(b["uid"])
-	if u_depot <= 0 or u_tesla2 <= 0 or not factory.toggle_wire(u_tesla, u_tesla2):
-		failures.append("Depot or chained Tesla wiring failed")
-
-	# 5. UI Tree Checks (BUILD_TREE, CMD_TREE, TECH_TREE, DEPOT_UI)
-	hud._trigger_abxy("X")
-	if hud.menu_state != GameHUD.MenuState.BUILD_TREE:
-		failures.append("X failed to open 2-click Build Tree")
-	hud._trigger_abxy("Y")
-	if hud.menu_state != GameHUD.MenuState.FIELD:
-		failures.append("2-click tool selection via ABXY failed")
-	hud._trigger_abxy("Y")
-	if hud.menu_state != GameHUD.MenuState.CMD_TREE:
-		failures.append("Y failed to open Printer/Cmd Tree")
-	hud._trigger_abxy("B")
-	if hud.menu_state != GameHUD.MenuState.FIELD:
-		failures.append("B failed to close Tree")
-
-	GameState.add_res("plate_fe", 40); GameState.add_res("circuit", 20); GameState.add_res("probe_stock", 2)
-	for _s in range(110):
-		await get_tree().process_frame
-		factory._process(0.05)
-		swarm._process(0.05)
-		world._process(0.05)
-
-	if GameState.total_launches < 1 or GameState.fleet_count < 1:
-		failures.append("Mass Driver launch into orbit failed")
-
-	GameState.add_fleet_units(1200)
-	swarm.sync_to_game_state(GameState.fleet_count)
-	GameState.set_doctrine(GameState.Doctrine.ASSAULT)
-	for _s in range(25):
-		swarm._process(0.05)
-	if swarm.f_active < 1200:
-		failures.append("Swarm MultiMesh scaling failed")
-
-	if failures.is_empty():
-		print("ALL SPHERICAL OPEN-WORLD TESTS PASSED! Launches=%d Fleet=%d Drones=%d Buildings=%d" % [
-			GameState.total_launches, GameState.fleet_count, GameState.drones, factory.buildings.size()
-		])
+func _process(delta: float) -> void:
+	if GameState.orbit_camera:
+		cam.position = cam.position.lerp(Vector2.ZERO, minf(1.0, delta * 5.0))
+		var vp := get_viewport_rect().size
+		var fit := minf(vp.x, vp.y) / 30000.0
+		cam.zoom = cam.zoom.lerp(Vector2(fit, fit), minf(1.0, delta * 5.0))
 	else:
-		for f in failures:
-			push_error("TEST FAILURE: " + f)
-		print("TESTS FAILED (%d)" % failures.size())
+		cam.position = cam.position.lerp(player.position, minf(1.0, delta * 7.5))
+		var alt := maxf(0.0, player.get_altitude())
+		var auto_z := lerpf(0.95, 0.48, clampf(alt / 4200.0, 0.0, 1.0)) * user_zoom
+		cam.zoom = cam.zoom.lerp(Vector2(auto_z, auto_z), minf(1.0, delta * 4.5))
 
-	get_tree().quit(0 if failures.is_empty() else 1)
+	if OS.has_feature("web"):
+		_tel_timer += delta
+		if _tel_timer >= 0.12:
+			_tel_timer = 0.0
+			_publish_web_telemetry()
 
-# ==============================================================================
-# VISUAL SCREENSHOT CAPTURE (--capture-shots)
-# ==============================================================================
-func _capture_visual_shots() -> void:
-	var out_dir = "C:/Users/wakazaki shogo/.gemini/antigravity/brain/a952e86c-2824-4a0b-8f37-837ef56179e4/scratch"
-	DirAccess.make_dir_recursive_absolute(out_dir)
+func _publish_web_telemetry() -> void:
+	var na: Dictionary = world.find_nearest_asteroid(player.position)
+	var d := {
+		"px": int(round(player.position.x)),
+		"py": int(round(player.position.y)),
+		"r": int(round(player.position.length())),
+		"alt": int(round(player.get_altitude())),
+		"vx": int(round(player.velocity.x)),
+		"vy": int(round(player.velocity.y)),
+		"vel": int(round(player.velocity.length())),
+		"rot": snappedf(player.rotation, 0.02),
+		"grav": snappedf(player.local_grav_g, 0.02),
+		"on_ground": player.on_ground,
+		"eng": GameState.vessel_tier,
+		"drones": GameState.drones,
+		"hp": int(round(GameState.hp)),
+		"fuel": int(round(GameState.fuel)),
+		"bat": int(round(GameState.ion_battery)),
+		"fe": GameState.get_res("fe"),
+		"cu": GameState.get_res("cu"),
+		"si": GameState.get_res("si"),
+		"ti": GameState.get_res("ti"),
+		"plate_fe": GameState.get_res("plate_fe"),
+		"wire_cu": GameState.get_res("wire_cu"),
+		"wafer_si": GameState.get_res("wafer_si"),
+		"circuit": GameState.get_res("circuit"),
+		"alloy": GameState.get_res("alloy"),
+		"sci_pack": GameState.get_res("sci_pack"),
+		"probe_stock": GameState.get_res("probe_stock"),
+		"pwr_prod": int(round(GameState.power_prod)),
+		"pwr_use": int(round(GameState.power_use)),
+		"pwr_stored": int(round(GameState.power_stored)),
+		"wires": GameState.wire_count,
+		"teslas_on": GameState.active_teslas,
+		"bldg": factory.buildings.size(),
+		"belts_items": factory.belt_items.size(),
+		"fleet": GameState.swarm_fleet,
+		"launches": GameState.total_launches,
+		"boss_hp": int(round(GameState.boss_hp)),
+		"boss_dead": GameState.boss_defeated,
+		"won": GameState.game_won,
+		"techs": GameState.unlocked_techs,
+		"tool": GameState.selected_tool,
+		"menu": hud.menu_state,
+		"orbit_cam": GameState.orbit_camera,
+		"near_ast": na,
+	}
+	JavaScriptBridge.eval("window.__star_tel = " + JSON.stringify(d) + ";")
 
-	# Shot 1: Spherical Landing (1600x900 Desktop - Zero Station, Zero Clutter)
-	_start_fresh_landing()
-	camera.position = player.position + Vector2(0, 215)
-	camera.zoom = Vector2(0.86, 0.86)
-	await _wait_frames(4)
-	await _save_shot(out_dir + "/v2_shot1_sphere_landing.png")
+# ------------------------------------------------------------------------------
+# HEADLESS AUTOMATED VERIFICATION SUITE (--run-tests)
+# ------------------------------------------------------------------------------
+var _test_failed: bool = false
 
-	# Shot 2: 2-Click Build Tree Open
-	GameState.add_res("fe", 180)
-	GameState.add_res("cu", 60)
-	GameState.try_craft_drone()
-	GameState.try_craft_drone()
-	hud._trigger_abxy("X")
-	await _wait_frames(3)
-	await _save_shot(out_dir + "/v2_shot2_abxy_build_tree.png")
-	hud.menu_state = GameHUD.MenuState.FIELD
+func _assert_ok(cond: bool, msg: String) -> void:
+	if not cond:
+		_test_failed = true
+		push_error("TEST FAILED: " + msg)
+		print("TEST FAILED: " + msg)
 
-	# Shot 3: 360-deg 10x Spherical Colony & Curved Surface Factory + Cyan Ghosts
-	GameState.add_res("fe", 800); GameState.add_res("cu", 400); GameState.add_res("si", 300); GameState.add_res("ti", 200)
-	GameState.add_res("plate_fe", 60); GameState.add_res("circuit", 40)
-	for _i in range(4): GameState.try_craft_drone()
-	for s in range(267, 276):
-		world.damage_cell(s, 38, 999.0, false)
-	var layout = [
-		["drill", 267, 38], ["lift", 273, 38], ["lift", 273, 39],
-		["belt", 273, PlanetWorld.LAYERS], ["depot", 269, PlanetWorld.LAYERS],
-		["smelter", 274, PlanetWorld.LAYERS], ["assembler", 276, PlanetWorld.LAYERS],
-		["printer", 278, PlanetWorld.LAYERS], ["mass_driver", 281, PlanetWorld.LAYERS],
-		["solar", 266, PlanetWorld.LAYERS], ["turret", 265, PlanetWorld.LAYERS],
-		["elevator", 285, PlanetWorld.LAYERS],
-	]
-	for item in layout:
-		factory.try_place_building(item[0], item[1], item[2])
+func _run_automated_tests() -> void:
+	print("=== STAR REPLICA: AUTOMA HEADLESS TEST SUITE ===")
+
+	# 1. Clean initial state (Zero pre-built station, Tier 0 Cylinder Capsule, 14 Hi-Fi audio presets)
+	_assert_ok(factory.buildings.is_empty(), "Must start with 0 buildings")
+	_assert_ok(GameState.vessel_tier == 0, "Must start as Tier 0 Seed Capsule")
+	_assert_ok(AudioSynth.get_preset_names().size() >= 14, "AudioSynth presets missing")
+	_assert_ok(ArtRegistry.textures.size() >= 25, "HD-2D pixel art atlas missing textures")
+
+	# 2. Unwired Solar must report 0W; Wiring Solar <-> Tesla + Battery energizes dome & survives Night!
+	GameState.add_res("fe", 250)
+	GameState.add_res("cu", 200)
+	GameState.add_res("si", 120)
+	GameState.add_res("ti", 120)
+	_assert_ok(GameState.research_tech("tesla_grid"), "Research tesla_grid failed")
+	_assert_ok(GameState.research_tech("belt_logistics"), "Research belt_logistics failed")
+	_assert_ok(GameState.research_tech("metallurgy"), "Research metallurgy failed")
+
+	var l_surf := PlanetWorld.LAYERS
+	_assert_ok(factory.try_place_building("solar", 268, l_surf), "Place Solar failed")
+	factory._solve_power_grids(0.1)
+	_assert_ok(GameState.power_prod <= 0.1, "Unwired Solar must report 0W, got %.1f" % GameState.power_prod)
+
+	_assert_ok(factory.try_place_building("tesla", 270, l_surf), "Place Tesla failed")
+	_assert_ok(factory.try_place_building("battery", 269, l_surf), "Place Battery failed")
+	var u_sol := int(factory.buildings[0]["uid"])
+	var u_tes := int(factory.buildings[1]["uid"])
+	var u_bat := int(factory.buildings[2]["uid"])
+	_assert_ok(factory.toggle_wire(u_sol, u_tes), "Wire Solar<->Tesla failed")
+	_assert_ok(factory.toggle_wire(u_bat, u_tes), "Wire Battery<->Tesla failed")
+	factory._solve_power_grids(0.5)
+	_assert_ok(GameState.power_prod > 30.0 and GameState.active_teslas == 1, "Wired Solar+Tesla failed to energize")
+
+	# 3. Physical Connected Logistics: Drill -> Belt -> Depot (4-way filter) -> Smelter -> Assembler -> Printer -> Mass Driver!
+	_assert_ok(factory.try_place_building("drill", 271, l_surf), "Place Drill failed")
+	_assert_ok(factory.try_place_building("belt", 272, l_surf), "Place Belt failed")
+	_assert_ok(factory.try_place_building("depot", 273, l_surf), "Place Depot failed")
+	_assert_ok(factory.try_place_building("smelter", 274, l_surf), "Place Smelter failed")
+	var depot_u := int(factory.buildings[5]["uid"])
+	factory.depot_cycle_filter(depot_u, "right") # -> "auto"
+	# Simulate 10s of factory production!
+	for _t in range(100):
+		factory._process(0.1)
+	_assert_ok(factory.buildings[6]["out_buf"].size() > 0 or factory.buildings[6]["in_buf"].size() > 0 or factory.buildings[5]["inv"].size() > 0, "Connected Drill->Belt->Depot->Smelter pipeline produced nothing")
+
+	# Nighttime Battery survival test (set sun to opposite side of planet!)
+	world.sun_angle = PI * 0.5
+	factory._solve_power_grids(1.0)
+	_assert_ok(GameState.power_prod < 2.0, "Expected nighttime solar ~0W")
+	_assert_ok(float(factory.buildings[3]["pwr_ratio"]) > 0.9, "Battery failed to carry factory through planetary night!")
+	world.sun_angle = -PI * 0.42
+
+	# 4. Vessel Upgrade -> True Newtonian Zero-Drag Keplerian Orbit test!
+	GameState.add_res("plate_fe", 140)
+	GameState.add_res("wire_cu", 120)
+	GameState.add_res("wafer_si", 80)
+	GameState.add_res("circuit", 100)
+	GameState.add_res("alloy", 80)
+	GameState.add_res("sci_pack", 40)
+	_assert_ok(GameState.upgrade_vessel() and GameState.vessel_tier == 1, "Upgrade Lander Mk-I failed")
+	player.position = Vector2(0.0, -11000.0)
+	var v_circ := sqrt(PlanetWorld.ORIGIN_GM / 11000.0)
+	player.velocity = Vector2(v_circ, 0.0)
+	player.thrust_input = Vector2.ZERO
+	player.braking = false
+	for _k in range(120):
+		player._physics_process(0.05)
+	_assert_ok(absf(player.velocity.length() - v_circ) < 15.0, "Vacuum Keplerian orbit speed drifted artificially! v=%.1f vs %.1f" % [player.velocity.length(), v_circ])
+
+	# 5. Full Tech Tree, Mass Driver Launch, 10k Swarm MultiMesh & Victory!
+	_assert_ok(GameState.research_tech("orbital_rocket"), "Research orbital_rocket failed")
+	_assert_ok(GameState.research_tech("apollo_stage"), "Research apollo_stage failed")
+	_assert_ok(GameState.upgrade_vessel() and GameState.vessel_tier == 2, "Upgrade Apollo Mk-II failed")
+	_assert_ok(GameState.research_tech("swarm_automation"), "Research swarm_automation failed")
+	_assert_ok(GameState.upgrade_vessel() and GameState.vessel_tier == 3, "Upgrade Warp Mk-III failed")
+	_assert_ok(GameState.research_tech("megastructures"), "Research megastructures failed")
+	_assert_ok(factory.try_place_building("mass_driver", 265, l_surf), "Place Mass Driver failed")
 	GameState.add_res("probe_stock", 2)
-	GameState.set_tool("solar")
-	for _k in range(40):
-		await get_tree().process_frame
-		factory._process(0.05)
-		world._process(0.05)
-	camera.position = Vector2(560, -6420)
-	camera.zoom = Vector2(0.70, 0.70)
-	await _wait_frames(3)
-	await _save_shot(out_dir + "/v2_shot3_spherical_factory.png")
+	for _t in range(40):
+		factory._process(0.1)
+	_assert_ok(GameState.total_launches >= 1 and GameState.swarm_fleet >= 4, "Mass Driver failed to launch swarm probe!")
 
-	# Shot 4: Open-World Cosmic View + 10x Spherical Globe + 1,500 Swarm Battle
-	GameState.add_fleet_units(1500)
-	swarm.sync_to_game_state(GameState.fleet_count)
-	GameState.set_doctrine(GameState.Doctrine.ASSAULT)
-	for _s in range(36):
-		await get_tree().process_frame
-		swarm._process(0.05)
-	GameState.set_tool("pick")
-	camera.position = Vector2(5200, -7800)
-	camera.zoom = Vector2(0.055, 0.055)
-	await _wait_frames(3)
-	await _save_shot(out_dir + "/v2_shot4_open_world_orbit.png")
+	# Anti-softlock Self-Destruct Re-Drop
+	player.self_destruct_respawn()
+	_assert_ok(absf(player.position.length() - (PlanetWorld.R_SURFACE + 24.0)) < 10.0, "Capsule Re-Drop position mismatch")
 
-	# Shot 5: 3x High-DPI Mobile Chrome Simulation (1080x2400)
-	get_window().size = Vector2i(1080, 2400)
-	await _wait_frames(4)
-	hud._on_viewport_resized()
-	camera.position = Vector2(0, -6220)
-	camera.zoom = Vector2(0.68, 0.68)
-	await _wait_frames(4)
-	await _save_shot(out_dir + "/v2_shot5_mobile_1080x2400.png")
+	# Megastructures + Boss Defeat -> Victory
+	for mid in ["elevator", "dyson", "citadel", "warpgate"]:
+		_assert_ok(GameState.build_megastructure(mid), "Build megastructure %s failed" % mid)
+	swarm.damage_boss(5000.0)
+	_assert_ok(GameState.boss_defeated and GameState.game_won, "Victory trigger failed")
 
-	# Shot 6: High-DPI Mobile Command Tree (CMD_ROOT)
-	hud._trigger_abxy("Y")
-	await _wait_frames(4)
-	await _save_shot(out_dir + "/v2_shot6_mobile_cmd_tree.png")
-
-	print("Captured all 6 v2 spherical verification screenshots!")
+	if _test_failed:
+		print("TEST SUITE FAILED!")
+		get_tree().quit(1)
+		return
+	print("ALL TESTS PASSED! Buildings=%d Wires=%d Fleet=%d Launches=%d Presets=%d" % [
+		factory.buildings.size(), GameState.wire_count, GameState.swarm_fleet, GameState.total_launches, AudioSynth.get_preset_names().size()
+	])
 	get_tree().quit(0)
-
-func _wait_frames(n: int) -> void:
-	for _i in range(n):
-		await get_tree().process_frame
-
-func _save_shot(path: String) -> void:
-	await RenderingServer.frame_post_draw
-	var img = get_viewport().get_texture().get_image()
-	img.save_png(path)

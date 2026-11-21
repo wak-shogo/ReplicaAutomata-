@@ -1,277 +1,264 @@
 extends Node2D
-class_name FactorySim
 
-# ==============================================================================
-# STAR REPLICA: AUTOMA - CONNECTED SPHERICAL POWER GRID & LOGISTICS ENGINE
-#   - Hard Local Power Grid: Solar/Geo -> Wire Link -> Tesla Coil Dome (0% outside)
-#   - Buffered Physical Logistics: Drill (cap 6) -> Arc Belt -> Player Magnet /
-#     Cargo Depot (4-way directional filter) -> Smelter -> Assembler -> Printer / Launch
-#   - Visual clarity: Copper Tesla coils, glowing power cables & domes, item pips,
-#     status indicators (NO PWR / FULL / RECIPE), & ship refueling pads.
-# ==============================================================================
+# Hard Local Wired Power Grid + Battery Storage, Physical Connected Logistics
+# (Drill -> Belt/Lift -> Cargo Depot 4-way Filter -> Smelter -> Assembler -> Macro Printer -> Mass Driver),
+# and HD-2D Pixel-Art Rendering along the curved spherical planet.
 
 signal depot_opened(uid: int)
-signal grid_status_changed
 
-const WIRE_RANGE: float = 900.0
-const TESLA_DOME_R: float = 560.0
-const BUFFER_CAP_DRILL: int = 6
-const BUFFER_CAP_IN: int = 12
-const BUFFER_CAP_OUT: int = 12
+const POWER_NODES: Array[String] = ["solar", "geothermal", "tesla", "battery"]
+const WIRE_RANGE: float = 920.0
+const TESLA_DOME_R: float = 580.0
 const BATTERY_CAP_KJ: float = 18000.0
-const DEPOT_CAP: int = 400
-const POWER_NODE_IDS: Array[String] = ["solar", "geothermal", "tesla", "battery"]
+const DRILL_BUF_CAP: int = 6
+const MACHINE_IN_CAP: int = 12
+const MACHINE_OUT_CAP: int = 8
+const DEPOT_CAP: int = 240
 const ASSEMBLER_RECIPES: Array[String] = ["circuit", "alloy", "sci_pack"]
 
-var world: PlanetWorld
-var swarm_sim: Node2D
-var player: Node2D
+var world: Node2D = null
+var player: Node2D = null
+var swarm: Node2D = null
 
-var next_uid: int = 1
 var buildings: Array[Dictionary] = []
-var occupied: Dictionary = {} # "s,l" -> bldg idx
-var wires: Array = []         # [[uid_a, uid_b], ...]
-
-# Moving items on belts & lifts: {sec: int, layer: int, t: float, item: String, dir: int, is_lift: bool}
+var occupied: Dictionary = {} # "sec:layer" -> building index
+var wires: Array[Array] = []  # [uid1, uid2]
 var belt_items: Array[Dictionary] = []
-var projectiles: Array[Dictionary] = []
-var laser_beams: Array[Dictionary] = []
+var launch_trails: Array[Dictionary] = []
+var turret_beams: Array[Dictionary] = []
 
-# Blueprint Ghost Slots
 var blueprint_slots: Array[Dictionary] = []
-var active_ghost_idx: int = -1
-
-# Interactive selection state
+var active_slot_idx: int = -1
 var wire_pick_uid: int = -1
 var selected_depot_uid: int = -1
-
-var sprite_textures: Dictionary = {}
-var item_icons: Dictionary = {}
-var tex_orbital_hub: Texture2D
-var anim_time: float = 0.0
-var grid_summary: Dictionary = {"prod": 0.0, "use": 0.0, "stored": 0.0, "cap": 0.0, "teslas_on": 0, "wires": 0}
+var next_uid: int = 1
+var anim_t: float = 0.0
 
 func _ready() -> void:
-	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_load_assets()
-	if not GameState.blueprint_selected.is_connected(_on_tool_changed):
-		GameState.blueprint_selected.connect(_on_tool_changed)
+	z_index = 10
 
-func setup(p_world: PlanetWorld, p_swarm: Node2D, p_player: Node2D) -> void:
-	world = p_world
-	swarm_sim = p_swarm
-	player = p_player
-	refresh_blueprint_slots()
-
-func _load_assets() -> void:
-	for bid in GameState.BUILDINGS.keys():
-		var sp_path: String = GameState.BUILDINGS[bid].get("sheet", "")
-		if sp_path != "" and ResourceLoader.exists(sp_path):
-			sprite_textures[bid] = load(sp_path)
-	tex_orbital_hub = load("res://assets/sprites/orbital_hub.png")
-	item_icons = {
-		"fe": load("res://assets/ui/fe.png"),
-		"cu": load("res://assets/ui/cu.png"),
-		"si": load("res://assets/ui/si.png"),
-		"ti": load("res://assets/ui/ti.png"),
-		"ice": load("res://assets/ui/si.png"),
-		"plate_fe": load("res://assets/ui/item_plate_fe.png"),
-		"wire_cu": load("res://assets/ui/item_wire_cu.png"),
-		"wafer_si": load("res://assets/ui/item_silicon_wafer.png"),
-		"circuit": load("res://assets/ui/item_circuit.png"),
-		"alloy": load("res://assets/ui/item_alloy.png"),
-		"sci_pack": load("res://assets/ui/item_circuit.png"),
-		"probe": load("res://assets/ui/item_drone_unit.png"),
-	}
-
-func _on_tool_changed(_id: String) -> void:
-	if GameState.selected_tool != "wire":
-		wire_pick_uid = -1
-	refresh_blueprint_slots()
-	queue_redraw()
-
-func clear_factory() -> void:
+func clear_all() -> void:
 	buildings.clear()
 	occupied.clear()
 	wires.clear()
 	belt_items.clear()
-	projectiles.clear()
-	laser_beams.clear()
-	next_uid = 1
+	launch_trails.clear()
+	turret_beams.clear()
+	blueprint_slots.clear()
 	wire_pick_uid = -1
 	selected_depot_uid = -1
-	_recompute_local_grids(0.0)
-	refresh_blueprint_slots()
-	queue_redraw()
+	next_uid = 1
 
-func _key(s: int, l: int) -> String:
-	return "%d,%d" % [posmod(s, PlanetWorld.SECTORS), l]
+func _k(s: int, l: int) -> String:
+	return "%d:%d" % [PlanetWorld.wrap_sector(s), l]
 
-func is_span_free(sec: int, layer: int, sec_w: int) -> bool:
-	for ds in range(sec_w):
-		if occupied.has(_key(sec + ds, layer)):
-			return false
-	return true
+func is_occupied(s: int, l: int) -> bool:
+	return occupied.has(_k(s, l))
 
-func can_place_building(bid: String, sec: int, layer: int) -> bool:
-	if not world or not GameState.BUILDINGS.has(bid):
-		return false
-	var info = GameState.BUILDINGS[bid]
-	var sec_w = int(info.get("sec_w", 1))
-	var rule: String = info["place"]
-	var ws = world.wrap_sector(sec)
-
-	if not is_span_free(ws, layer, sec_w):
-		return false
-
-	match rule:
-		"SURFACE":
-			if layer < PlanetWorld.LAYERS - 3 or layer > PlanetWorld.LAYERS:
-				return false
-			var has_anchor = false
-			for ds in range(sec_w):
-				if layer < PlanetWorld.LAYERS and world.is_solid_cell(ws + ds, layer):
-					return false
-				if world.is_solid_cell(ws + ds, layer - 1):
-					has_anchor = true
-				elif layer < 2 or not world.is_solid_cell(ws + ds, layer - 2):
-					return false
-			return has_anchor
-		"UNDERGROUND":
-			if layer < 1 or layer >= PlanetWorld.LAYERS:
-				return false
-			if bid == "drill":
-				return world.is_solid_cell(ws, layer)
-			return true
-		"ANY_SPHERE":
-			if layer == PlanetWorld.LAYERS:
-				return world.is_solid_cell(ws, PlanetWorld.LAYERS - 1)
-			return layer >= 1 and layer < PlanetWorld.LAYERS
-		"DEEP_ROCK":
-			return layer >= 1 and layer <= 3
-	return false
-
-func _slot_world_pose(sec: int, layer: int, sec_w: int) -> Dictionary:
-	var ws = world.wrap_sector(sec)
-	var mid_ang = (float(ws) + float(sec_w) * 0.5) * PlanetWorld.DA
-	var base_r = PlanetWorld.R_SURFACE if layer >= PlanetWorld.LAYERS else PlanetWorld.layer_inner_r(layer)
-	var arc_w = maxf(26.0, float(sec_w) * PlanetWorld.DA * base_r)
-	return {
-		"pos": Vector2(cos(mid_ang), sin(mid_ang)) * base_r,
-		"rot": mid_ang + PI * 0.5,
-		"w_px": arc_w,
-		"ang": mid_ang,
-		"r": base_r,
-	}
-
-func refresh_blueprint_slots() -> void:
-	blueprint_slots.clear()
-	active_ghost_idx = -1
-	if not world:
-		return
-	var bid = GameState.selected_tool
-	if not GameState.BUILDINGS.has(bid):
-		return
-	var info = GameState.BUILDINGS[bid]
-	var sec_w = int(info.get("sec_w", 1))
-	var h_px = float(info.get("h_px", 40.0))
-	var rule: String = info["place"]
-
-	var pcell = world.pos_to_cell(player.position) if player else Vector2i(PlanetWorld.SPAWN_SECTOR, PlanetWorld.LAYERS)
-	var base_sec = pcell.x
-
-	if rule == "SURFACE":
-		for l in range(PlanetWorld.LAYERS - 3, PlanetWorld.LAYERS + 1):
-			for offset in range(-8, 9):
-				var s = world.wrap_sector(base_sec + offset)
-				if can_place_building(bid, s, l):
-					var pose = _slot_world_pose(s, l, sec_w)
-					blueprint_slots.append({
-						"sec": s, "layer": l, "sec_w": sec_w,
-						"pos": pose["pos"], "rot": pose["rot"],
-						"w_px": pose["w_px"], "h_px": h_px,
-					})
-	elif rule == "UNDERGROUND":
-		for l in range(maxi(1, pcell.y - 3), mini(PlanetWorld.LAYERS, pcell.y + 3)):
-			for offset in range(-7, 8):
-				var s = world.wrap_sector(base_sec + offset)
-				if can_place_building(bid, s, l):
-					var pose = _slot_world_pose(s, l, sec_w)
-					blueprint_slots.append({
-						"sec": s, "layer": l, "sec_w": sec_w,
-						"pos": pose["pos"], "rot": pose["rot"],
-						"w_px": pose["w_px"], "h_px": h_px,
-					})
-	elif rule == "ANY_SPHERE":
-		for offset in range(-18, 19):
-			var s = world.wrap_sector(base_sec + offset)
-			if can_place_building(bid, s, PlanetWorld.LAYERS):
-				var pose = _slot_world_pose(s, PlanetWorld.LAYERS, sec_w)
-				blueprint_slots.append({
-					"sec": s, "layer": PlanetWorld.LAYERS, "sec_w": sec_w,
-					"pos": pose["pos"], "rot": pose["rot"],
-					"w_px": pose["w_px"], "h_px": h_px,
-				})
-		if pcell.y < PlanetWorld.LAYERS:
-			for l in range(maxi(1, pcell.y - 2), mini(PlanetWorld.LAYERS, pcell.y + 3)):
-				for offset in range(-6, 7):
-					var su = world.wrap_sector(base_sec + offset)
-					if can_place_building(bid, su, l):
-						var pose_u = _slot_world_pose(su, l, sec_w)
-						blueprint_slots.append({
-							"sec": su, "layer": l, "sec_w": sec_w,
-							"pos": pose_u["pos"], "rot": pose_u["rot"],
-							"w_px": pose_u["w_px"], "h_px": h_px,
-						})
-	elif rule == "DEEP_ROCK":
-		for l in [1, 2, 3]:
-			for offset in range(-12, 13):
-				var s = world.wrap_sector(base_sec + offset)
-				if can_place_building(bid, s, l):
-					var pose = _slot_world_pose(s, l, sec_w)
-					blueprint_slots.append({
-						"sec": s, "layer": l, "sec_w": sec_w,
-						"pos": pose["pos"], "rot": pose["rot"],
-						"w_px": pose["w_px"], "h_px": h_px,
-					})
-
-	if player and blueprint_slots.size() > 0:
-		var best_d = 999999.0
-		for i in range(blueprint_slots.size()):
-			var d = blueprint_slots[i]["pos"].distance_to(player.position)
-			if d < best_d:
-				best_d = d
-				active_ghost_idx = i
-
-func _get_building_by_uid(uid: int) -> Dictionary:
+func _by_uid(uid: int) -> Dictionary:
 	for b in buildings:
-		if int(b.get("uid", -1)) == uid:
+		if int(b["uid"]) == uid:
 			return b
 	return {}
 
-func _get_building_at(sec: int, layer: int) -> Dictionary:
-	var k = _key(sec, layer)
-	if not occupied.has(k):
+func _at(s: int, l: int) -> Dictionary:
+	var key := _k(s, l)
+	if not occupied.has(key):
 		return {}
-	var idx = int(occupied[k])
+	var idx := int(occupied[key])
 	if idx < 0 or idx >= buildings.size():
 		return {}
 	return buildings[idx]
 
-func find_nearest_building(world_pos: Vector2, max_dist: float = 90.0, filter_ids: Array = []) -> Dictionary:
+func _buf_total(d: Dictionary) -> int:
+	var t := 0
+	for v in d.values():
+		t += int(v)
+	return t
+
+func _buf_add(d: Dictionary, item: String, qty: int) -> void:
+	d[item] = int(d.get(item, 0)) + qty
+
+func _buf_take(d: Dictionary, want: String = "auto") -> String:
+	if d.is_empty():
+		return ""
+	if want == "auto":
+		var k := String(d.keys()[0])
+		var v := int(d[k]) - 1
+		if v <= 0: d.erase(k)
+		else: d[k] = v
+		return k
+	if int(d.get(want, 0)) > 0:
+		var v := int(d[want]) - 1
+		if v <= 0: d.erase(want)
+		else: d[want] = v
+		return want
+	return ""
+
+# ------------------------------------------------------------------------------
+# BLUEPRINT SLOTS & BUILDING PLACEMENT
+# ------------------------------------------------------------------------------
+func refresh_blueprints() -> void:
+	blueprint_slots.clear()
+	active_slot_idx = -1
+	if not world or not player:
+		return
+	var tool := GameState.selected_tool
+	if not GameState.BUILDINGS.has(tool):
+		return
+	var info: Dictionary = GameState.BUILDINGS[tool]
+	var sw := int(info.get("sec_w", 1))
+	var pc: Vector2i = world.world_to_cell(player.position)
+	var underground := player.position.length() < PlanetWorld.R_SURFACE - 140.0
+
+	var best_d := 1e9
+	for ds in range(-4, 5):
+		var ws := PlanetWorld.wrap_sector(pc.x + ds)
+		var l: int = pc.y if (underground and (tool == "lift" or tool == "belt" or tool == "drill")) else (int(world.get_surface_layer(ws)) + 1)
+		if l < 1 or l > PlanetWorld.LAYERS:
+			continue
+		var free := true
+		for w_i in range(sw):
+			if occupied.has(_k(ws + w_i, l)):
+				free = false
+				break
+		if not free:
+			continue
+		var pose: Dictionary = world.get_surface_pose(ws, l, 0.0)
+		var slot := {"sec": ws, "layer": l, "pos": pose["pos"], "rot": pose["rot"], "normal": pose["normal"]}
+		var d := Vector2(pose["pos"]).distance_to(player.position)
+		if d < best_d:
+			best_d = d
+			active_slot_idx = blueprint_slots.size()
+		blueprint_slots.append(slot)
+
+func try_place_active_blueprint() -> bool:
+	refresh_blueprints()
+	if active_slot_idx < 0 or active_slot_idx >= blueprint_slots.size():
+		AudioSynth.play_sfx("error")
+		GameState.add_log("No open build slot nearby.", "warn")
+		return false
+	var sl := blueprint_slots[active_slot_idx]
+	return try_place_building(GameState.selected_tool, int(sl["sec"]), int(sl["layer"]))
+
+func try_place_building(bid: String, sec: int, layer: int) -> bool:
+	if not world or not GameState.BUILDINGS.has(bid):
+		return false
+	if not GameState.is_building_unlocked(bid):
+		AudioSynth.play_sfx("error")
+		GameState.add_log("Research required for %s." % GameState.BUILDINGS[bid]["name"], "warn")
+		return false
+	var info: Dictionary = GameState.BUILDINGS[bid]
+	var sw := int(info.get("sec_w", 1))
+	var ws := PlanetWorld.wrap_sector(sec)
+	for w_i in range(sw):
+		if occupied.has(_k(ws + w_i, layer)):
+			AudioSynth.play_sfx("error")
+			return false
+	if not GameState.spend(info["cost"]):
+		AudioSynth.play_sfx("error")
+		GameState.add_log("Insufficient resources for %s." % info["name"], "warn")
+		return false
+
+	var pose: Dictionary = world.get_surface_pose(ws, layer, 0.0)
+	var ore_t := _find_drill_ore(ws, layer) if bid == "drill" else ""
+	var b := {
+		"uid": next_uid,
+		"id": bid,
+		"sec": ws,
+		"layer": layer,
+		"sec_w": sw,
+		"pos": pose["pos"],
+		"normal": pose["normal"],
+		"rot": pose["rot"],
+		"dir": GameState.build_dir,
+		"pwr_ratio": 0.0,
+		"wired": false,
+		"timer": 0.0,
+		"push_t": 0.0,
+		"smoke_t": 0.0,
+		"blocked": false,
+		"ore_target": ore_t,
+		"recipe": "circuit",
+		"in_buf": {},
+		"out_buf": {},
+		"inv": {},
+		"out_filters": {"left": "none", "right": "none", "up": "none", "down": "none"},
+		"battery_kj": (BATTERY_CAP_KJ * 0.25) if bid == "battery" else 0.0,
+	}
+	next_uid += 1
+	var idx := buildings.size()
+	buildings.append(b)
+	for w_i in range(sw):
+		occupied[_k(ws + w_i, layer)] = idx
+	world.spawn_spark_burst(pose["pos"], Color(0.38, 0.92, 1.0), 10)
+	_solve_power_grids(0.0)
+	refresh_blueprints()
+	AudioSynth.play_sfx("build")
+	GameState.add_log("Built %s%s" % [
+		info["name"],
+		" (wire Solar/Battery <-> Tesla)" if (bid in POWER_NODES) else ""
+	], "good")
+	return true
+
+func _find_drill_ore(sec: int, layer: int) -> String:
+	for dl in range(0, 4):
+		var l := layer - 1 - dl
+		if l >= 1 and l < PlanetWorld.LAYERS:
+			var o: String = world.get_ore(sec, l)
+			if o != "": return o
+	for ds in [-1, 1]:
+		for dl in range(0, 3):
+			var l := layer - 1 - dl
+			if l >= 1 and l < PlanetWorld.LAYERS:
+				var o: String = world.get_ore(sec + ds, l)
+				if o != "": return o
+	return "fe"
+
+func try_demolish_near(pos: Vector2) -> bool:
+	var best_i := -1
+	var best_d := 110.0
+	for i in range(buildings.size()):
+		var d := Vector2(buildings[i]["pos"]).distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best_i = i
+	if best_i < 0:
+		return false
+	var b := buildings[best_i]
+	var dead_uid := int(b["uid"])
+	var info: Dictionary = GameState.BUILDINGS[b["id"]]
+	for r_id in info["cost"].keys():
+		GameState.add_res(String(r_id), maxi(1, int(info["cost"][r_id]) / 2))
+	for wi in range(wires.size() - 1, -1, -1):
+		if int(wires[wi][0]) == dead_uid or int(wires[wi][1]) == dead_uid:
+			wires.remove_at(wi)
+	if wire_pick_uid == dead_uid: wire_pick_uid = -1
+	if selected_depot_uid == dead_uid: selected_depot_uid = -1
+	buildings.remove_at(best_i)
+	occupied.clear()
+	for i in range(buildings.size()):
+		for w_i in range(int(buildings[i]["sec_w"])):
+			occupied[_k(int(buildings[i]["sec"]) + w_i, int(buildings[i]["layer"]))] = i
+	_solve_power_grids(0.0)
+	AudioSynth.play_sfx("pop")
+	GameState.add_log("Salvaged %s." % info["name"], "info")
+	return true
+
+# ------------------------------------------------------------------------------
+# POWER WIRING & INTERACTIONS
+# ------------------------------------------------------------------------------
+func find_nearest_building(pos: Vector2, max_d: float = 130.0, filter_ids: Array = []) -> Dictionary:
 	var best: Dictionary = {}
-	var best_d = max_dist
+	var bd := max_d
 	for b in buildings:
 		if not filter_ids.is_empty() and not (b["id"] in filter_ids):
 			continue
-		var d = Vector2(b["pos"]).distance_to(world_pos)
-		if d < best_d:
-			best_d = d
+		var d := Vector2(b["pos"]).distance_to(pos)
+		if d < bd:
+			bd = d
 			best = b
 	return best
-
-func _is_power_node(bid: String) -> bool:
-	return bid in POWER_NODE_IDS
 
 func _are_wired(u1: int, u2: int) -> bool:
 	for w in wires:
@@ -282,777 +269,232 @@ func _are_wired(u1: int, u2: int) -> bool:
 func toggle_wire(u1: int, u2: int) -> bool:
 	if u1 <= 0 or u2 <= 0 or u1 == u2:
 		return false
-	var b1 = _get_building_by_uid(u1)
-	var b2 = _get_building_by_uid(u2)
+	var b1 := _by_uid(u1)
+	var b2 := _by_uid(u2)
 	if b1.is_empty() or b2.is_empty():
 		return false
-	if not _is_power_node(b1["id"]) or not _is_power_node(b2["id"]):
+	if not (b1["id"] in POWER_NODES) or not (b2["id"] in POWER_NODES):
 		return false
 	for i in range(wires.size()):
-		var w = wires[i]
+		var w := wires[i]
 		if (int(w[0]) == u1 and int(w[1]) == u2) or (int(w[0]) == u2 and int(w[1]) == u1):
 			wires.remove_at(i)
-			_recompute_local_grids(0.0)
-			AudioSynth.play_synth("pop")
-			GameState.add_log("Power line disconnected.", "info")
+			_solve_power_grids(0.0)
+			AudioSynth.play_sfx("pop")
+			GameState.add_log("Power cable disconnected.", "info")
 			return true
-	var d = Vector2(b1["pos"]).distance_to(Vector2(b2["pos"]))
+	var d := Vector2(b1["pos"]).distance_to(Vector2(b2["pos"]))
 	if d > WIRE_RANGE:
-		AudioSynth.play_synth("error")
-		GameState.add_log("Wire out of range (%dpx > %dpx)." % [int(d), int(WIRE_RANGE)], "warn")
+		AudioSynth.play_sfx("error")
+		GameState.add_log("Power cable out of range (%dpx > %dpx)." % [int(d), int(WIRE_RANGE)], "warn")
 		return false
 	wires.append([u1, u2])
 	if world:
-		world.spawn_spark_burst((Vector2(b1["pos"]) + Vector2(b2["pos"])) * 0.5, Color(0.35, 0.95, 1.0), 8)
-	_recompute_local_grids(0.0)
-	AudioSynth.play_synth("select")
-	GameState.add_log("POWER GRID WIRED: %s <-> %s" % [GameState.BUILDINGS[b1["id"]]["name"], GameState.BUILDINGS[b2["id"]]["name"]], "good")
-	queue_redraw()
+		world.spawn_spark_burst((Vector2(b1["pos"]) + Vector2(b2["pos"])) * 0.5, Color(0.32, 0.94, 1.0), 10)
+	_solve_power_grids(0.0)
+	AudioSynth.play_sfx("wire")
+	GameState.add_log("WIRED: %s <-> %s" % [GameState.BUILDINGS[b1["id"]]["name"], GameState.BUILDINGS[b2["id"]]["name"]], "good")
 	return true
 
-func try_wire_nearest(ref_pos: Vector2) -> bool:
-	var near = find_nearest_building(ref_pos, 180.0, POWER_NODE_IDS)
+func try_wire_near(pos: Vector2) -> bool:
+	var near := find_nearest_building(pos, 190.0, POWER_NODES)
 	if near.is_empty():
-		GameState.add_log("Stand near a Solar/Geo/Tesla node to wire.", "warn")
+		GameState.add_log("Move near a Solar, Battery, Geo, or Tesla node to wire.", "warn")
 		return false
-	var u1 = int(near["uid"])
+	var u1 := int(near["uid"])
 	if wire_pick_uid == -1:
 		wire_pick_uid = u1
-		AudioSynth.play_synth("click")
-		GameState.add_log("WIRE SOURCE: %s. Tap target or press [A] at target." % GameState.BUILDINGS[near["id"]]["name"], "info")
+		AudioSynth.play_sfx("click")
+		GameState.add_log("WIRE START: %s. Tap target or press [A] again to auto-link." % GameState.BUILDINGS[near["id"]]["name"], "info")
 		return true
 	elif wire_pick_uid == u1:
-		# Smart convenience: strongly prefer complementary power role (Solar/Geo <-> Tesla) over same-type
-		var best_u = -1
-		var best_score = 1e9
-		var near_is_gen = near["id"] in ["solar", "geothermal"]
+		# Auto-link to nearest unwired complementary power node within WIRE_RANGE!
+		var best_u := -1
+		var best_s := 1e9
+		var is_gen: bool = String(near["id"]) in ["solar", "geothermal"]
 		for b in buildings:
-			var bu = int(b["uid"])
-			if bu == u1 or not _is_power_node(b["id"]) or _are_wired(u1, bu):
+			var bu := int(b["uid"])
+			if bu == u1 or not (b["id"] in POWER_NODES) or _are_wired(u1, bu):
 				continue
-			var d = Vector2(near["pos"]).distance_to(Vector2(b["pos"]))
+			var d := Vector2(near["pos"]).distance_to(Vector2(b["pos"]))
 			if d <= WIRE_RANGE:
-				var b_is_gen = b["id"] in ["solar", "geothermal"]
-				var score = d - (1200.0 if (near_is_gen != b_is_gen) else 0.0)
-				if score < best_score:
-					best_score = score
+				var b_gen: bool = String(b["id"]) in ["solar", "geothermal"]
+				var sc := d - (1200.0 if (is_gen != b_gen) else 0.0)
+				if sc < best_s:
+					best_s = sc
 					best_u = bu
 		wire_pick_uid = -1
 		if best_u > 0:
 			return toggle_wire(u1, best_u)
-		GameState.add_log("Wire selection cleared.", "info")
+		GameState.add_log("Wire pick cleared.", "info")
 		return true
 	else:
-		var prev = wire_pick_uid
+		var u0 := wire_pick_uid
 		wire_pick_uid = -1
-		return toggle_wire(prev, u1)
+		return toggle_wire(u0, u1)
 
-func _collect_building_out_buf(b: Dictionary) -> int:
-	if not b.has("out_buf"):
-		return 0
-	var out: Dictionary = b["out_buf"]
-	var got = 0
-	for k in out.keys().duplicate():
-		var cnt = int(out[k])
-		if cnt > 0:
-			GameState.add_res(k, cnt, false)
-			out.erase(k)
-			got += cnt
-			if world:
-				world.spawn_world_popup(Vector2(b["pos"]) + Vector2(0, -18), "+%d %s" % [cnt, String(k).to_upper()], Color(0.45, 0.95, 1.0))
-	if got > 0:
-		AudioSynth.play_synth("pop")
-	return got
-
-func try_handle_click_at(world_pos: Vector2) -> bool:
-	var tool = GameState.selected_tool
-
-	# 1. Explicit Wire Mode: tap power nodes to connect Solar/Geo <-> Tesla
+func try_world_tap(world_pos: Vector2) -> bool:
+	var tool := GameState.selected_tool
 	if tool == "wire":
-		var pnode = find_nearest_building(world_pos, 130.0, POWER_NODE_IDS)
-		if not pnode.is_empty():
-			var uid = int(pnode["uid"])
+		var pn := find_nearest_building(world_pos, 130.0, POWER_NODES)
+		if not pn.is_empty():
+			var uid := int(pn["uid"])
 			if wire_pick_uid == -1:
 				wire_pick_uid = uid
-				AudioSynth.play_synth("click")
-				GameState.add_log("WIRE PICKED: %s -> Tap Tesla/Generator" % GameState.BUILDINGS[pnode["id"]]["name"], "info")
+				AudioSynth.play_sfx("click")
+				GameState.add_log("WIRE PICK: %s -> Tap target node" % GameState.BUILDINGS[pn["id"]]["name"], "info")
 			elif wire_pick_uid == uid:
 				wire_pick_uid = -1
-				GameState.add_log("Wire pick cleared.", "info")
 			else:
-				var u0 = wire_pick_uid
+				var u0 := wire_pick_uid
 				wire_pick_uid = -1
 				toggle_wire(u0, uid)
 			return true
 		wire_pick_uid = -1
 		return true
-
-	# 2. Demolish Mode
 	if tool == "demolish":
-		return try_demolish_at(world_pos)
-
-	# 3. Direct Blueprint Placement when a building tool is selected
-	if GameState.BUILDINGS.has(tool) and not blueprint_slots.is_empty():
-		var best_i = -1
-		var best_d = 120.0
+		return try_demolish_near(world_pos)
+	if GameState.BUILDINGS.has(tool):
+		refresh_blueprints()
+		var best_i := -1
+		var best_d := 125.0
 		for i in range(blueprint_slots.size()):
-			var d = blueprint_slots[i]["pos"].distance_to(world_pos)
+			var d := Vector2(blueprint_slots[i]["pos"]).distance_to(world_pos)
 			if d < best_d:
 				best_d = d
 				best_i = i
 		if best_i >= 0:
-			active_ghost_idx = best_i
-			var sl = blueprint_slots[best_i]
-			if try_place_building(tool, sl["sec"], sl["layer"]):
-				return true
+			var sl := blueprint_slots[best_i]
+			return try_place_building(tool, int(sl["sec"]), int(sl["layer"]))
 
-	# 4. World Structure Interactions (Power wire tap, Depot UI, Belt flip, Assembler recipe, Drill unload)
-	var b = find_nearest_building(world_pos, 115.0)
-	if not b.is_empty():
-		var bid: String = b["id"]
-		if _is_power_node(bid):
-			var uid = int(b["uid"])
-			if wire_pick_uid == -1:
-				wire_pick_uid = uid
-				AudioSynth.play_synth("click")
-				GameState.add_log("WIRE SOURCE: %s. Tap target Solar/Tesla!" % GameState.BUILDINGS[bid]["name"], "info")
-			elif wire_pick_uid == uid:
-				wire_pick_uid = -1
-				GameState.add_log("Wire pick cleared.", "info")
-			else:
-				var u0 = wire_pick_uid
-				wire_pick_uid = -1
-				if not _are_wired(u0, uid):
-					toggle_wire(u0, uid)
-				else:
-					GameState.add_log("Already wired (use Power Wire tool to unplug).", "info")
-			return true
-		elif bid == "depot":
-			selected_depot_uid = int(b["uid"])
-			AudioSynth.play_synth("select")
-			depot_opened.emit(selected_depot_uid)
-			return true
-		elif bid == "belt" or bid == "lift":
-			b["dir"] = -int(b.get("dir", 1))
-			AudioSynth.play_synth("click")
-			GameState.add_log("%s direction flipped." % GameState.BUILDINGS[bid]["name"], "info")
-			queue_redraw()
-			return true
-		elif bid == "assembler":
-			var cur = String(b.get("recipe", "circuit"))
-			var ri = (ASSEMBLER_RECIPES.find(cur) + 1) % ASSEMBLER_RECIPES.size()
-			b["recipe"] = ASSEMBLER_RECIPES[ri]
-			_collect_building_out_buf(b)
-			AudioSynth.play_synth("select")
-			GameState.add_log("Assembler Recipe: %s" % String(b["recipe"]).to_upper(), "info")
-			queue_redraw()
-			return true
-		elif bid == "drill" or bid == "smelter":
-			if _collect_building_out_buf(b) == 0 and bid == "smelter":
-				_hand_feed_machine(b)
-			return true
-
-	wire_pick_uid = -1
-	return false
-
-func try_interact_nearest(world_pos: Vector2, id_filter: Array = []) -> bool:
-	if GameState.selected_tool == "wire":
-		return try_wire_nearest(world_pos)
-	var b = find_nearest_building(world_pos, 190.0, id_filter)
-	if id_filter.is_empty() and not b.is_empty() and (_is_power_node(b["id"]) or b["id"] == "belt"):
-		# Inside a factory cluster, prioritize functional machines over passive belts/wired power poles
-		var functional = find_nearest_building(world_pos, 195.0, ["depot", "smelter", "assembler", "drill"])
-		if not functional.is_empty():
-			b = functional
+	# Tap existing building directly
+	var b := find_nearest_building(world_pos, 115.0)
 	if b.is_empty():
+		wire_pick_uid = -1
 		return false
-	var bid: String = b["id"]
-	if bid == "depot":
+	var bid := String(b["id"])
+	if bid in POWER_NODES:
+		var uid := int(b["uid"])
+		if wire_pick_uid == -1:
+			wire_pick_uid = uid
+			AudioSynth.play_sfx("click")
+			GameState.add_log("WIRE PICK: %s -> Tap Tesla/Solar/Battery" % GameState.BUILDINGS[bid]["name"], "info")
+		elif wire_pick_uid == uid:
+			wire_pick_uid = -1
+		else:
+			var u0 := wire_pick_uid
+			wire_pick_uid = -1
+			if not _are_wired(u0, uid):
+				toggle_wire(u0, uid)
+		return true
+	elif bid == "depot":
 		selected_depot_uid = int(b["uid"])
-		AudioSynth.play_synth("select")
+		AudioSynth.play_sfx("select")
 		depot_opened.emit(selected_depot_uid)
 		return true
-	if _is_power_node(bid):
-		if not b.get("wired", false):
-			return try_wire_nearest(world_pos)
-		GameState.add_log("%s online in wired grid (+%dW prod)." % [GameState.BUILDINGS[bid]["name"], int(grid_summary.get("prod", 0))], "info")
-		return false
-	if bid == "drill" or bid == "smelter" or bid == "assembler":
-		var got = _collect_building_out_buf(b)
-		if bid == "smelter" or bid == "assembler":
-			var fed = _hand_feed_machine(b)
-			return got > 0 or fed
-		return got > 0
+	elif bid == "belt" or bid == "lift":
+		b["dir"] = -int(b["dir"])
+		AudioSynth.play_sfx("click")
+		GameState.add_log("%s direction flipped." % GameState.BUILDINGS[bid]["name"], "info")
+		return true
+	elif bid == "assembler":
+		var cur := String(b["recipe"])
+		var ri := (ASSEMBLER_RECIPES.find(cur) + 1) % ASSEMBLER_RECIPES.size()
+		b["recipe"] = ASSEMBLER_RECIPES[ri]
+		_collect_out(b)
+		AudioSynth.play_sfx("select")
+		GameState.add_log("Assembler recipe -> %s" % String(b["recipe"]).to_upper(), "info")
+		return true
+	elif bid in ["drill", "smelter", "printer"]:
+		if _collect_out(b) == 0:
+			_hand_feed(b)
+		return true
 	return false
 
-func _hand_feed_machine(b: Dictionary) -> bool:
-	var bid: String = b["id"]
-	var fed = false
+func try_interact_near(pos: Vector2) -> bool:
+	if GameState.selected_tool == "wire":
+		return try_wire_near(pos)
+	var b := find_nearest_building(pos, 180.0)
+	if not b.is_empty() and (b["id"] in POWER_NODES or b["id"] == "belt"):
+		var func_b := find_nearest_building(pos, 180.0, ["depot", "smelter", "assembler", "printer", "drill"])
+		if not func_b.is_empty():
+			b = func_b
+	if b.is_empty():
+		return false
+	var bid := String(b["id"])
+	if bid == "depot":
+		selected_depot_uid = int(b["uid"])
+		AudioSynth.play_sfx("select")
+		depot_opened.emit(selected_depot_uid)
+		return true
+	if bid in POWER_NODES:
+		if not bool(b["wired"]):
+			return try_wire_near(pos)
+		return false
+	if bid in ["drill", "smelter", "assembler", "printer"]:
+		var got := _collect_out(b)
+		var fed := _hand_feed(b) if bid != "drill" else false
+		return got > 0 or fed
+	return false
+
+func _collect_out(b: Dictionary) -> int:
+	var out: Dictionary = b["out_buf"]
+	var got := 0
+	for k in out.keys().duplicate():
+		var cnt := int(out[k])
+		if cnt > 0:
+			GameState.add_res(String(k), cnt)
+			out.erase(k)
+			got += cnt
+			if world:
+				world.spawn_popup(Vector2(b["pos"]), "+%d %s" % [cnt, String(k).to_upper()], Color(0.42, 0.94, 1.0))
+	if got > 0:
+		AudioSynth.play_sfx("pop")
+	return got
+
+func _hand_feed(b: Dictionary) -> bool:
+	var bid := String(b["id"])
+	var fed := false
 	if bid == "smelter":
-		var ore_to_prod = {"fe": "plate_fe", "cu": "wire_cu", "si": "wafer_si"}
+		var o2p := {"fe": "plate_fe", "cu": "wire_cu", "si": "wafer_si"}
 		var ores: Array[String] = ["fe", "cu", "si"]
 		ores.sort_custom(func(a: String, c: String) -> bool:
-			var qa = float(GameState.get_res(ore_to_prod[a])) + float(b["in_buf"].get(a, 0)) * 0.5
-			var qc = float(GameState.get_res(ore_to_prod[c])) + float(b["in_buf"].get(c, 0)) * 0.5
-			if a == "fe" and GameState.get_res("plate_fe") < 4: qa -= 4.0
-			if c == "fe" and GameState.get_res("plate_fe") < 4: qc -= 4.0
+			var qa := float(GameState.get_res(o2p[a])) + float(b["in_buf"].get(a, 0)) * 0.5
+			var qc := float(GameState.get_res(o2p[c])) + float(b["in_buf"].get(c, 0)) * 0.5
 			return qa < qc
 		)
 		for ore in ores:
-			if GameState.get_res(ore) >= 2 and _buf_total(b["in_buf"]) < BUFFER_CAP_IN:
-				var give = mini(4, mini(GameState.get_res(ore), BUFFER_CAP_IN - _buf_total(b["in_buf"])))
+			if GameState.get_res(ore) >= 2 and _buf_total(b["in_buf"]) < MACHINE_IN_CAP:
+				var give := mini(4, mini(GameState.get_res(ore), MACHINE_IN_CAP - _buf_total(b["in_buf"])))
 				GameState.add_res(ore, -give)
 				_buf_add(b["in_buf"], ore, give)
 				fed = true
 				break
 	elif bid == "assembler":
-		var rec = String(b.get("recipe", "circuit"))
-		var wants: Array[String] = ["plate_fe", "wire_cu", "wafer_si"] if rec == "circuit" else (["plate_fe", "ti"] if rec == "alloy" else ["plate_fe", "wire_cu", "circuit"])
+		var rec := String(b["recipe"])
+		var wants: Array[String] = ["plate_fe", "wire_cu"] if rec == "circuit" else (["plate_fe", "ti"] if rec == "alloy" else ["plate_fe", "circuit"])
 		for w in wants:
-			if GameState.get_res(w) >= 1 and _buf_total(b["in_buf"]) < BUFFER_CAP_IN:
-				var give = mini(2, mini(GameState.get_res(w), BUFFER_CAP_IN - _buf_total(b["in_buf"])))
+			if GameState.get_res(w) >= 1 and _buf_total(b["in_buf"]) < MACHINE_IN_CAP:
+				var give := mini(2, mini(GameState.get_res(w), MACHINE_IN_CAP - _buf_total(b["in_buf"])))
+				GameState.add_res(w, -give)
+				_buf_add(b["in_buf"], w, give)
+				fed = true
+	elif bid == "printer":
+		for w in ["plate_fe", "circuit"]:
+			if GameState.get_res(w) >= 1 and _buf_total(b["in_buf"]) < MACHINE_IN_CAP:
+				var give := mini(2, mini(GameState.get_res(w), MACHINE_IN_CAP - _buf_total(b["in_buf"])))
 				GameState.add_res(w, -give)
 				_buf_add(b["in_buf"], w, give)
 				fed = true
 	if fed:
-		AudioSynth.play_synth("pop")
-		GameState.add_log("Loaded items into %s." % GameState.BUILDINGS[bid]["name"], "good")
+		AudioSynth.play_sfx("pop")
 	return fed
 
-func try_build_nearest_ghost() -> bool:
-	var tool = GameState.selected_tool
-	if tool == "wire":
-		return try_wire_nearest(player.position if player else Vector2.ZERO)
-	if not GameState.BUILDINGS.has(tool):
-		return false
-	if blueprint_slots.is_empty():
-		refresh_blueprint_slots()
-	if active_ghost_idx < 0 or active_ghost_idx >= blueprint_slots.size():
-		GameState.add_log("No valid spherical slot nearby.", "warn")
-		AudioSynth.play_synth("error")
-		return false
-	var sl = blueprint_slots[active_ghost_idx]
-	return try_place_building(tool, sl["sec"], sl["layer"])
-
-func try_place_building(bid: String, sec: int, layer: int) -> bool:
-	if not world or not GameState.BUILDINGS.has(bid):
-		return false
-	if not GameState.is_building_unlocked(bid):
-		var req_t: String = String(GameState.BUILDINGS[bid].get("req_tech", ""))
-		var t_name: String = String(GameState.TECH_TREE.get(req_t, {}).get("name", req_t))
-		GameState.add_log("Locked: Research [%s] in Tech Tree!" % t_name, "warn")
-		AudioSynth.play_synth("error")
-		return false
-	var ws = world.wrap_sector(sec)
-	if not can_place_building(bid, ws, layer):
-		AudioSynth.play_synth("error")
-		GameState.add_log("Cannot place here (occupied or needs rock crust).", "warn")
-		return false
-	var info = GameState.BUILDINGS[bid]
-	var cost: Dictionary = info["cost"]
-	if not GameState.can_afford(cost):
-		AudioSynth.play_synth("error")
-		var miss_txt: Array[String] = []
-		for r_id in cost.keys():
-			var have = GameState.get_res(r_id)
-			var need = int(cost[r_id])
-			if have < need:
-				miss_txt.append("%s %d/%d" % [String(r_id).to_upper(), have, need])
-		GameState.add_log("Need resources: %s" % ", ".join(miss_txt), "warn")
-		return false
-
-	GameState.spend_cost(cost)
-	if GameState.megastructures.has(bid):
-		GameState.megastructures[bid] = true
-		if GameState.megastructures.get("warpgate", false) and GameState.boss_defeated:
-			GameState.game_won = true
-			GameState.add_log("COLONY VICTORY: WARP GATE & CORE HUB LIBERATED!", "good")
-	var sec_w = int(info.get("sec_w", 1))
-	var pose = _slot_world_pose(ws, layer, sec_w)
-	var default_dir = 1
-	if player and bid == "belt":
-		var p_ang = player.position.angle()
-		var tang = Vector2(-sin(p_ang), cos(p_ang))
-		if player.velocity.length() > 15.0 and player.velocity.dot(tang) < 0.0:
-			default_dir = -1
-
-	var ore_t = _find_drill_ore(ws, layer)
-	var b: Dictionary = {
-		"uid": next_uid,
-		"id": bid,
-		"sec": ws,
-		"layer": layer,
-		"sec_w": sec_w,
-		"dir": default_dir,
-		"pos": pose["pos"],
-		"rot": pose["rot"],
-		"w_px": pose["w_px"],
-		"timer": 0.0,
-		"push_t": 0.0,
-		"smoke_t": 0.0,
-		"charge_t": 0.0,
-		"frame": 0,
-		"ore_target": ore_t,
-		"in_buf": {},
-		"out_buf": {},
-		"inv": {},
-		"out_filters": {"left": "auto", "right": "auto", "up": "none", "down": "none"},
-		"recipe": "circuit",
-		"battery_kj": (BATTERY_CAP_KJ * 0.25) if bid == "battery" else 0.0,
-		"pwr_ratio": 0.0,
-		"wired": false,
-		"blocked": false,
-	}
-	next_uid += 1
-
-	var idx = buildings.size()
-	buildings.append(b)
-	for ds in range(sec_w):
-		occupied[_key(ws + ds, layer)] = idx
-
-	if world:
-		world.spawn_spark_burst(pose["pos"], Color(0.35, 0.92, 1.0), 8)
-	_recompute_local_grids(0.0)
-	refresh_blueprint_slots()
-	AudioSynth.play_synth("build")
-	GameState.add_log("Built %s!%s" % [
-		info["name"],
-		" Wire Solar <-> Tesla to energize." if (bid == "tesla" or bid == "solar") else ""
-	], "good")
-	queue_redraw()
-	return true
-
-func _find_drill_ore(sec: int, layer: int) -> String:
-	if not world:
-		return "fe"
-	for dl in range(0, 4):
-		var l = layer - 1 - dl
-		if l >= 1 and l < PlanetWorld.LAYERS:
-			var o = world.get_ore(sec, l)
-			if o != "":
-				return o
-	for ds in [-1, 1]:
-		for dl in range(0, 3):
-			var l = layer - 1 - dl
-			if l >= 1 and l < PlanetWorld.LAYERS:
-				var o = world.get_ore(sec + ds, l)
-				if o != "":
-					return o
-	return "fe"
-
-func try_demolish_at(world_pos: Vector2) -> bool:
-	var best_idx = -1
-	var best_d = 95.0
-	for i in range(buildings.size()):
-		var d = buildings[i]["pos"].distance_to(world_pos)
-		if d < best_d:
-			best_d = d
-			best_idx = i
-	if best_idx == -1:
-		return false
-	var b = buildings[best_idx]
-	var dead_uid = int(b["uid"])
-	var info = GameState.BUILDINGS[b["id"]]
-	for r_id in info["cost"].keys():
-		GameState.add_res(r_id, maxi(1, int(info["cost"][r_id]) / 2), false)
-	for wi in range(wires.size() - 1, -1, -1):
-		if int(wires[wi][0]) == dead_uid or int(wires[wi][1]) == dead_uid:
-			wires.remove_at(wi)
-	if wire_pick_uid == dead_uid:
-		wire_pick_uid = -1
-	if selected_depot_uid == dead_uid:
-		selected_depot_uid = -1
-	buildings.remove_at(best_idx)
-	occupied.clear()
-	for i in range(buildings.size()):
-		for ds in range(buildings[i]["sec_w"]):
-			occupied[_key(buildings[i]["sec"] + ds, buildings[i]["layer"])] = i
-	_recompute_local_grids(0.0)
-	refresh_blueprint_slots()
-	AudioSynth.play_synth("pop")
-	GameState.add_log("Salvaged %s." % info["name"], "info")
-	queue_redraw()
-	return true
-
 # ------------------------------------------------------------------------------
-# LOCAL WIRED POWER GRID SOLVER (ZERO GLOBAL POOL - HARD LOCAL GRID)
+# DEPOT ROUTING INTERFACE (4-WAY OUTPUT FILTERS)
 # ------------------------------------------------------------------------------
-func _recompute_local_grids(delta: float) -> void:
-	var uid_to_idx: Dictionary = {}
-	for i in range(buildings.size()):
-		uid_to_idx[int(buildings[i]["uid"])] = i
-		buildings[i]["pwr_ratio"] = 0.0
-		buildings[i]["wired"] = false
-
-	# Prune stale wires & build adjacency
-	var adj: Dictionary = {}
-	for i in range(wires.size() - 1, -1, -1):
-		var u1 = int(wires[i][0])
-		var u2 = int(wires[i][1])
-		if not uid_to_idx.has(u1) or not uid_to_idx.has(u2):
-			wires.remove_at(i)
-			continue
-		if not adj.has(u1): adj[u1] = []
-		if not adj.has(u2): adj[u2] = []
-		adj[u1].append(u2)
-		adj[u2].append(u1)
-
-	# Find connected wired components
-	var visited: Dictionary = {}
-	var comp_id_of_b: Dictionary = {}
-	var comps: Array[Dictionary] = []
-
-	for b in buildings:
-		var uid = int(b["uid"])
-		if not _is_power_node(b["id"]) or visited.has(uid):
-			continue
-		var q: Array[int] = [uid]
-		visited[uid] = true
-		var nodes: Array[int] = []
-		var gen_kw: float = 0.0
-		var bat_indices: Array[int] = []
-		var has_tesla = false
-		var has_gen = false
-		while not q.is_empty():
-			var cur_u: int = q.pop_front()
-			var bi = int(uid_to_idx[cur_u])
-			nodes.append(bi)
-			var cb = buildings[bi]
-			if adj.has(cur_u) and adj[cur_u].size() > 0:
-				cb["wired"] = true
-			if cb["id"] == "solar":
-				has_gen = true
-				var sun = world.get_sunlight_at(cb["pos"]) if world else 1.0
-				gen_kw += 38.0 * sun
-			elif cb["id"] == "geothermal":
-				has_gen = true
-				gen_kw += 135.0
-			elif cb["id"] == "tesla":
-				has_tesla = true
-			elif cb["id"] == "battery":
-				bat_indices.append(bi)
-			if adj.has(cur_u):
-				for nxt in adj[cur_u]:
-					if not visited.has(nxt):
-						visited[nxt] = true
-						q.append(nxt)
-
-		# Megastructure Dyson Swarm wireless beam feeds any wired Tesla grid
-		var dyson_kw = float(GameState.megastructures.get("dyson", 0)) * 450.0
-		if has_tesla and dyson_kw > 0.0:
-			gen_kw += dyson_kw
-			has_gen = true
-
-		var cid = comps.size()
-		for bi in nodes:
-			comp_id_of_b[bi] = cid
-		comps.append({
-			"nodes": nodes,
-			"gen": gen_kw,
-			"use": 0.0,
-			"bat_indices": bat_indices,
-			"has_tesla": has_tesla,
-			"has_gen": has_gen,
-			"ratio": 0.0,
-		})
-
-	# Map every consumer machine inside radius of an active Tesla coil to its Tesla's component
-	var machine_comp: Dictionary = {} # b_idx -> cid
-	for i in range(buildings.size()):
-		var b = buildings[i]
-		if _is_power_node(b["id"]):
-			continue
-		var pwr = float(GameState.BUILDINGS[b["id"]].get("power", 0))
-		if pwr >= 0.0:
-			# Passive structures (Depot / Elevator)
-			b["pwr_ratio"] = 1.0
-			continue
-		var best_cid = -1
-		var best_d = TESLA_DOME_R
-		for c_idx in range(comps.size()):
-			var comp = comps[c_idx]
-			if not comp["has_gen"] and comp["bat_indices"].is_empty():
-				continue
-			for ni in comp["nodes"]:
-				if buildings[ni]["id"] == "tesla":
-					var d = Vector2(buildings[ni]["pos"]).distance_to(Vector2(b["pos"]))
-					if d <= best_d:
-						best_d = d
-						best_cid = c_idx
-		if best_cid >= 0:
-			machine_comp[i] = best_cid
-			comps[best_cid]["use"] += -pwr
-
-	# Solve energy balance + battery charge/discharge per local grid component
-	var tot_prod = 0.0
-	var tot_use = 0.0
-	var tot_stored = 0.0
-	var tot_cap = 0.0
-	var teslas_on = 0
-
-	for cid in range(comps.size()):
-		var c = comps[cid]
-		var gen = float(c["gen"])
-		var use = float(c["use"])
-		var bat_list: Array = c["bat_indices"]
-		var stored_sum = 0.0
-		var cap_sum = float(bat_list.size()) * BATTERY_CAP_KJ
-		for bi in bat_list:
-			stored_sum += float(buildings[bi].get("battery_kj", 0.0))
-
-		var net = gen - use
-		if delta > 0.0 and not bat_list.is_empty():
-			if net >= 0.0:
-				var charge = minf(net * delta, cap_sum - stored_sum)
-				if charge > 0.0:
-					var each = charge / float(bat_list.size())
-					for bi in bat_list:
-						buildings[bi]["battery_kj"] = minf(BATTERY_CAP_KJ, float(buildings[bi].get("battery_kj", 0.0)) + each)
-					stored_sum += charge
-				c["ratio"] = 1.0 if (gen > 0.0 or use == 0.0) else 0.0
-			else:
-				var need_kj = (-net) * delta
-				if stored_sum >= need_kj:
-					var take_each = need_kj / float(bat_list.size())
-					for bi in bat_list:
-						buildings[bi]["battery_kj"] = maxf(0.0, float(buildings[bi].get("battery_kj", 0.0)) - take_each)
-					stored_sum -= need_kj
-					c["ratio"] = 1.0
-				else:
-					for bi in bat_list:
-						buildings[bi]["battery_kj"] = 0.0
-					stored_sum = 0.0
-					c["ratio"] = clampf(gen / maxf(1.0, use), 0.0, 1.0)
-		else:
-			if use <= 0.0:
-				c["ratio"] = 1.0 if (gen > 0.0 or stored_sum > 0.5) else 0.0
-			elif gen >= use or stored_sum > 0.5:
-				c["ratio"] = 1.0
-			elif gen > 0.0:
-				var r = gen / use
-				c["ratio"] = r if r >= 0.15 else 0.0
-			else:
-				c["ratio"] = 0.0
-
-		for ni in c["nodes"]:
-			buildings[ni]["pwr_ratio"] = c["ratio"]
-			if buildings[ni]["id"] == "tesla" and c["ratio"] > 0.05:
-				teslas_on += 1
-
-		if c["has_tesla"] or not bat_list.is_empty():
-			tot_prod += gen
-		tot_use += use
-		tot_stored += stored_sum
-		tot_cap += cap_sum
-
-	# Assign solved power ratio to consumers inside active Tesla domes
-	for bi in machine_comp.keys():
-		var cid = int(machine_comp[bi])
-		buildings[bi]["pwr_ratio"] = comps[cid]["ratio"]
-
-	GameState.power_gen = tot_prod
-	GameState.power_use = tot_use
-	GameState.power_stored = tot_stored
-	GameState.power_cap = tot_cap
-	GameState.power_ratio = (tot_prod / tot_use) if tot_use > 0.0 else (1.0 if tot_prod > 0.0 else 0.0)
-	grid_summary = {
-		"prod": int(tot_prod), "use": int(tot_use),
-		"stored": int(tot_stored), "cap": int(tot_cap),
-		"teslas_on": teslas_on, "wires": wires.size(),
-	}
-	grid_status_changed.emit()
-
-# ------------------------------------------------------------------------------
-# BUFFER & LOGISTICS HELPERS
-# ------------------------------------------------------------------------------
-func _buf_total(buf: Dictionary) -> int:
-	var s = 0
-	for k in buf.keys():
-		s += int(buf[k])
-	return s
-
-func _buf_add(buf: Dictionary, item: String, qty: int) -> void:
-	if item == "" or qty <= 0:
-		return
-	buf[item] = int(buf.get(item, 0)) + qty
-
-func _buf_take_one(buf: Dictionary, filter_item: String = "auto") -> String:
-	if filter_item == "none" or buf.is_empty():
-		return ""
-	if filter_item != "" and filter_item != "auto":
-		var cnt = int(buf.get(filter_item, 0))
-		if cnt > 0:
-			if cnt == 1: buf.erase(filter_item)
-			else: buf[filter_item] = cnt - 1
-			return filter_item
-		return ""
-	for k in buf.keys():
-		var cnt = int(buf[k])
-		if cnt > 0:
-			if cnt == 1: buf.erase(k)
-			else: buf[k] = cnt - 1
-			return String(k)
-	return ""
-
-func _can_accept_into_machine(b: Dictionary, item: String) -> bool:
-	var bid: String = b["id"]
-	if bid == "depot":
-		return _buf_total(b["inv"]) < DEPOT_CAP
-	if bid == "smelter":
-		return (item in ["fe", "cu", "si"]) and _buf_total(b["in_buf"]) < BUFFER_CAP_IN
-	if bid == "assembler":
-		return (item in ["plate_fe", "wire_cu", "wafer_si", "ti", "circuit"]) and _buf_total(b["in_buf"]) < BUFFER_CAP_IN
-	if bid == "printer":
-		return item in ["fe", "cu", "si", "ti", "plate_fe", "wire_cu", "wafer_si", "circuit", "alloy"]
-	if bid == "replicator":
-		return (item in ["circuit", "plate_fe", "alloy"]) and _buf_total(b["in_buf"]) < BUFFER_CAP_IN
-	if bid == "mass_driver":
-		return (item in ["plate_fe", "alloy", "circuit", "probe"]) and _buf_total(b["in_buf"]) < BUFFER_CAP_IN
-	return false
-
-func _deliver_to_target(b: Dictionary, item: String) -> bool:
-	if not _can_accept_into_machine(b, item):
-		return false
-	var bid: String = b["id"]
-	if bid == "depot":
-		_buf_add(b["inv"], item, 1)
-		return true
-	if bid == "printer":
-		GameState.add_res(item, 1, false)
-		return true
-	_buf_add(b["in_buf"], item, 1)
-	return true
-
-func _count_belt_items_at(sec: int, layer: int, t_limit: float = 0.40) -> int:
-	var ws = world.wrap_sector(sec) if world else sec
-	var c = 0
-	for it in belt_items:
-		if int(it["sec"]) == ws and int(it["layer"]) == layer and float(it["t"]) <= t_limit:
-			c += 1
-	return c
-
-func _spawn_item_on_belt(sec: int, layer: int, item: String, dir_hint: int = 1) -> bool:
-	if belt_items.size() > 360:
-		return false
-	var target_b = _get_building_at(sec, layer)
-	if target_b.is_empty():
-		return false
-	var tbid: String = target_b["id"]
-	if tbid == "belt" or tbid == "lift":
-		if _count_belt_items_at(sec, layer, 0.35) >= 2:
-			return false
-		belt_items.append({
-			"sec": world.wrap_sector(sec),
-			"layer": layer,
-			"t": 0.06,
-			"item": item,
-			"dir": int(target_b.get("dir", dir_hint)),
-			"is_lift": (tbid == "lift"),
-		})
-		return true
-	return _deliver_to_target(target_b, item)
-
-func _try_push_item_adjacent(src_b: Dictionary, buf: Dictionary) -> void:
-	if buf.is_empty():
-		return
-	var ws: int = src_b["sec"]
-	var sw: int = src_b["sec_w"]
-	var l: int = src_b["layer"]
-	var probes: Array[Array] = [
-		[ws + sw, l, 1],
-		[ws - 1, l, -1],
-		[ws, l + 1, 1],
-	]
-	for p in probes:
-		var tb = _get_building_at(int(p[0]), int(p[1]))
-		if tb.is_empty():
-			continue
-		var item = _buf_take_one(buf, "auto")
-		if item == "":
-			return
-		var did_send = false
-		if tb["id"] == "belt" or tb["id"] == "lift":
-			did_send = _spawn_item_on_belt(tb["sec"], tb["layer"], item, int(p[2]))
-		else:
-			did_send = _deliver_to_target(tb, item)
-		if not did_send:
-			_buf_add(buf, item, 1)
-		else:
-			return
-
-func _push_depot_outputs(depot: Dictionary) -> void:
-	var inv: Dictionary = depot["inv"]
-	if inv.is_empty():
-		return
-	var filters: Dictionary = depot.get("out_filters", {})
-	var ws: int = depot["sec"]
-	var sw: int = depot["sec_w"]
-	var l: int = depot["layer"]
-	var ports: Array[Dictionary] = [
-		{"key": "right", "sec": ws + sw, "layer": l, "dir": 1},
-		{"key": "left",  "sec": ws - 1,  "layer": l, "dir": -1},
-		{"key": "up",    "sec": ws,      "layer": l + 1, "dir": 1},
-		{"key": "down",  "sec": ws,      "layer": l - 1, "dir": -1},
-	]
-	for p in ports:
-		var f_item: String = String(filters.get(p["key"], "none"))
-		if f_item == "none":
-			continue
-		var tb = _get_building_at(int(p["sec"]), int(p["layer"]))
-		if tb.is_empty():
-			continue
-		var picked = _buf_take_one(inv, f_item)
-		if picked == "":
-			continue
-		var ok = false
-		if tb["id"] == "belt" or tb["id"] == "lift":
-			ok = _spawn_item_on_belt(tb["sec"], tb["layer"], picked, int(p["dir"]))
-		else:
-			ok = _deliver_to_target(tb, picked)
-		if not ok:
-			_buf_add(inv, picked, 1)
-
-# ------------------------------------------------------------------------------
-# PLAYER LOGISTICS INTERFACE (MAGNET PICKUP, DEPOT UI, SHIP SERVICE PAD)
-# ------------------------------------------------------------------------------
-func collect_nearby_items(pos: Vector2, radius: float = 95.0) -> int:
-	var got = 0
-	if world:
-		for i in range(belt_items.size() - 1, -1, -1):
-			var ip = _belt_item_world_pos(belt_items[i])
-			if ip.distance_to(pos) <= radius:
-				GameState.add_res(belt_items[i]["item"], 1, true)
-				belt_items.remove_at(i)
-				got += 1
-	# Also allow player walking/flying right over a standalone Drill (no adjacent belt) to loot out_buf
-	for b in buildings:
-		if b["id"] == "drill" or b["id"] == "smelter" or b["id"] == "assembler":
-			if Vector2(b["pos"]).distance_to(pos) <= 72.0 and not b["out_buf"].is_empty():
-				got += _collect_building_out_buf(b)
-	if got > 0:
-		AudioSynth.play_synth("pop")
-	return got
-
-func service_player(pos: Vector2, delta: float) -> void:
-	var near_powered_pad = false
-	for b in buildings:
-		if (b["id"] in ["solar", "geothermal", "tesla", "battery", "depot"]) and float(b.get("pwr_ratio", 0.0)) > 0.2:
-			if Vector2(b["pos"]).distance_to(pos) <= 260.0:
-				near_powered_pad = true
-				break
-	if near_powered_pad:
-		GameState.player_battery = minf(GameState.player_max_battery, GameState.player_battery + 30.0 * delta)
-		GameState.player_fuel = minf(GameState.player_max_fuel, GameState.player_fuel + 18.0 * delta)
-		GameState.player_hp = minf(GameState.player_max_hp, GameState.player_hp + 6.0 * delta)
-	elif world and pos.length() <= PlanetWorld.R_ATMOS_OUTER:
-		var sun = world.get_sunlight_at(pos)
-		if sun > 0.15:
-			GameState.player_battery = minf(GameState.player_max_battery, GameState.player_battery + 8.0 * sun * delta)
-		else:
-			GameState.player_battery = minf(GameState.player_max_battery, GameState.player_battery + 3.5 * delta)
-
 func get_depot_snapshot(uid: int) -> Dictionary:
-	var d = _get_building_by_uid(uid)
+	var d := _by_uid(uid)
 	if d.is_empty():
 		return {}
 	return {
@@ -1064,137 +506,366 @@ func get_depot_snapshot(uid: int) -> Dictionary:
 	}
 
 func depot_transfer(uid: int, item: String, to_depot: bool, qty: int = 5) -> bool:
-	var d = _get_building_by_uid(uid)
+	var d := _by_uid(uid)
 	if d.is_empty():
 		return false
 	var inv: Dictionary = d["inv"]
 	if to_depot:
-		var have = GameState.get_res(item)
-		var room = maxi(0, DEPOT_CAP - _buf_total(inv))
-		var move = mini(qty, mini(have, room))
-		if move <= 0:
-			return false
-		GameState.add_res(item, -move)
-		_buf_add(inv, item, move)
+		var have := GameState.get_res(item)
+		var room := maxi(0, DEPOT_CAP - _buf_total(inv))
+		var mv := mini(qty, mini(have, room))
+		if mv <= 0: return false
+		GameState.add_res(item, -mv)
+		_buf_add(inv, item, mv)
 	else:
-		var have_d = int(inv.get(item, 0))
-		var move = mini(qty, have_d)
-		if move <= 0:
-			return false
-		if have_d == move: inv.erase(item)
-		else: inv[item] = have_d - move
-		GameState.add_res(item, move, false)
-	AudioSynth.play_synth("pop")
+		var have_d := int(inv.get(item, 0))
+		var mv := mini(qty, have_d)
+		if mv <= 0: return false
+		if have_d == mv: inv.erase(item)
+		else: inv[item] = have_d - mv
+		GameState.add_res(item, mv)
+	AudioSynth.play_sfx("pop")
 	return true
 
-func depot_deposit_all_ores(uid: int) -> int:
-	var moved = 0
+func depot_deposit_all(uid: int) -> int:
+	var moved := 0
 	for r in ["fe", "cu", "si", "ti", "ice"]:
-		var amt = GameState.get_res(r)
+		var amt := GameState.get_res(r)
 		if amt > 0 and depot_transfer(uid, r, true, amt):
 			moved += amt
 	return moved
 
 func depot_cycle_filter(uid: int, dir_key: String) -> String:
-	var d = _get_building_by_uid(uid)
+	var d := _by_uid(uid)
 	if d.is_empty():
 		return "none"
-	var cycle: Array[String] = ["none", "auto", "fe", "cu", "si", "ti", "plate_fe", "wire_cu", "wafer_si", "circuit", "alloy", "sci_pack"]
-	var cur = String(d["out_filters"].get(dir_key, "none"))
-	var nxt = cycle[(cycle.find(cur) + 1) % cycle.size()]
+	var cycle: Array[String] = ["none", "auto", "fe", "cu", "si", "ti", "plate_fe", "wire_cu", "wafer_si", "circuit", "alloy", "sci_pack", "probe_stock"]
+	var cur := String(d["out_filters"].get(dir_key, "none"))
+	var nxt := cycle[(cycle.find(cur) + 1) % cycle.size()]
 	d["out_filters"][dir_key] = nxt
-	AudioSynth.play_synth("click")
+	AudioSynth.play_sfx("click")
 	return nxt
 
-func _belt_item_world_pos(it: Dictionary) -> Vector2:
-	if not world:
-		return Vector2.ZERO
-	if it.get("is_lift", false):
-		var a = PlanetWorld.sector_center_angle(it["sec"])
-		var r0 = PlanetWorld.layer_inner_r(it["layer"])
-		var t = float(it["t"]) if int(it["dir"]) >= 0 else (1.0 - float(it["t"]))
-		return world.polar_to_world(a, r0 + t * PlanetWorld.LAYER_THICK)
-	var base_s = float(it["sec"])
-	var frac = float(it["t"]) if int(it["dir"]) >= 0 else (1.0 - float(it["t"]))
-	var ang = (base_s + frac) * PlanetWorld.DA
-	var r = PlanetWorld.R_SURFACE + 14.0 if int(it["layer"]) >= PlanetWorld.LAYERS else PlanetWorld.layer_inner_r(it["layer"]) + 14.0
+# ------------------------------------------------------------------------------
+# HARD LOCAL WIRED POWER GRID SOLVER (ZERO FREE GLOBAL POWER!)
+# ------------------------------------------------------------------------------
+func _solve_power_grids(delta: float) -> void:
+	for b in buildings:
+		b["pwr_ratio"] = 0.0
+		b["wired"] = false
+
+	# Adjacency graph of power nodes connected by physical wires
+	var adj: Dictionary = {}
+	for b in buildings:
+		if b["id"] in POWER_NODES:
+			adj[int(b["uid"])] = []
+	for w in wires:
+		var u1 := int(w[0]); var u2 := int(w[1])
+		if adj.has(u1) and adj.has(u2):
+			adj[u1].append(u2)
+			adj[u2].append(u1)
+			var b1 := _by_uid(u1); var b2 := _by_uid(u2)
+			if not b1.is_empty(): b1["wired"] = true
+			if not b2.is_empty(): b2["wired"] = true
+
+	var visited: Dictionary = {}
+	var tot_prod := 0.0
+	var tot_use := 0.0
+	var tot_stored := 0.0
+	var tot_cap := 0.0
+	var teslas_on := 0
+
+	# Dyson Ring megastructure beams 240W to any wired Tesla grid
+	var dyson_bonus := 240.0 if bool(GameState.megastructures.get("dyson", false)) else 0.0
+
+	for uid in adj.keys():
+		if visited.has(uid):
+			continue
+		var comp_uids: Array[int] = []
+		var queue: Array[int] = [uid]
+		visited[uid] = true
+		while not queue.is_empty():
+			var cur: int = int(queue.pop_front())
+			comp_uids.append(cur)
+			for nb in adj[cur]:
+				if not visited.has(nb):
+					visited[nb] = true
+					queue.append(nb)
+
+		var gen := 0.0
+		var teslas: Array[Dictionary] = []
+		var bats: Array[Dictionary] = []
+		for cu in comp_uids:
+			var nb := _by_uid(cu)
+			if nb.is_empty(): continue
+			var bid := String(nb["id"])
+			if bid == "solar":
+				var sun: float = world.get_sunlight_at(nb["pos"]) if world else 1.0
+				gen += float(GameState.BUILDINGS["solar"]["pwr_gen"]) * sun
+			elif bid == "geothermal":
+				gen += float(GameState.BUILDINGS["geothermal"]["pwr_gen"])
+			elif bid == "tesla":
+				teslas.append(nb)
+			elif bid == "battery":
+				bats.append(nb)
+
+		if not teslas.is_empty():
+			gen += dyson_bonus
+
+		# Collect unique powered consumers inside any Tesla dome in this wired component
+		var consumers: Array[Dictionary] = []
+		var seen_c: Dictionary = {}
+		var demand := 0.0
+		for ts in teslas:
+			var tpos: Vector2 = ts["pos"]
+			for b in buildings:
+				var bu := int(b["uid"])
+				if seen_c.has(bu) or (b["id"] in POWER_NODES):
+					continue
+				if Vector2(b["pos"]).distance_to(tpos) <= TESLA_DOME_R:
+					seen_c[bu] = true
+					consumers.append(b)
+					demand += float(GameState.BUILDINGS[b["id"]]["pwr_use"])
+
+		# Battery charge / discharge across daytime and planetary dusk/night
+		var stored := 0.0
+		var cap := float(bats.size()) * BATTERY_CAP_KJ
+		for bt in bats:
+			stored += float(bt["battery_kj"])
+
+		var supply := gen
+		if delta > 0.0 and not bats.is_empty():
+			if gen >= demand:
+				var surplus := (gen - demand) * delta
+				for bt in bats:
+					var room := BATTERY_CAP_KJ - float(bt["battery_kj"])
+					var add_e := minf(room, surplus / float(bats.size()))
+					bt["battery_kj"] = float(bt["battery_kj"]) + add_e
+			else:
+				var deficit := (demand - gen) * delta
+				var drawn := 0.0
+				for bt in bats:
+					var take := minf(float(bt["battery_kj"]), deficit / float(bats.size()))
+					bt["battery_kj"] = float(bt["battery_kj"]) - take
+					drawn += take
+				supply = gen + (drawn / maxf(0.0001, delta))
+			stored = 0.0
+			for bt in bats:
+				stored += float(bt["battery_kj"])
+
+		var ratio := 0.0
+		if not teslas.is_empty():
+			if demand <= 0.01:
+				ratio = 1.0 if (supply > 0.5 or stored > 1.0) else 0.0
+			else:
+				ratio = clampf(supply / demand, 0.0, 1.0)
+
+		for cu in comp_uids:
+			var nb := _by_uid(cu)
+			if not nb.is_empty():
+				nb["pwr_ratio"] = ratio if (not teslas.is_empty() or not bats.is_empty()) else 0.0
+		if ratio > 0.15:
+			teslas_on += teslas.size()
+		for c in consumers:
+			c["pwr_ratio"] = maxf(float(c["pwr_ratio"]), ratio)
+
+		# Only count generation connected to a Tesla or Battery grid (unwired Solars report 0W!)
+		if not teslas.is_empty() or not bats.is_empty():
+			tot_prod += gen
+		tot_use += demand
+		tot_stored += stored
+		tot_cap += cap
+
+	GameState.power_prod = tot_prod
+	GameState.power_use = tot_use
+	GameState.power_stored = tot_stored
+	GameState.power_cap = tot_cap
+	GameState.wire_count = wires.size()
+	GameState.active_teslas = teslas_on
+
+# ------------------------------------------------------------------------------
+# PHYSICAL ITEM-FLOW & PRODUCTION TICK
+# ------------------------------------------------------------------------------
+func _spawn_on_belt(sec: int, layer: int, item: String, dir: int) -> bool:
+	var ws := PlanetWorld.wrap_sector(sec)
+	var cnt := 0
+	for it in belt_items:
+		if int(it["sec"]) == ws and int(it["layer"]) == layer and float(it["t"]) < 0.4:
+			cnt += 1
+	if cnt >= 2:
+		return false
+	var b := _at(ws, layer)
+	if b.is_empty() or (b["id"] != "belt" and b["id"] != "lift"):
+		return false
+	belt_items.append({"sec": ws, "layer": layer, "item": item, "t": 0.06, "dir": dir, "is_lift": b["id"] == "lift"})
+	return true
+
+func _deliver_to(target: Dictionary, item: String) -> bool:
+	var bid := String(target["id"])
+	if bid == "depot":
+		if _buf_total(target["inv"]) >= DEPOT_CAP: return false
+		_buf_add(target["inv"], item, 1)
+		return true
+	elif bid == "smelter":
+		if not (item in ["fe", "cu", "si"]) or _buf_total(target["in_buf"]) >= MACHINE_IN_CAP: return false
+		_buf_add(target["in_buf"], item, 1)
+		return true
+	elif bid == "assembler":
+		if not (item in ["plate_fe", "wire_cu", "wafer_si", "ti", "circuit"]) or _buf_total(target["in_buf"]) >= MACHINE_IN_CAP: return false
+		_buf_add(target["in_buf"], item, 1)
+		return true
+	elif bid == "printer":
+		if not (item in ["plate_fe", "circuit"]) or _buf_total(target["in_buf"]) >= MACHINE_IN_CAP: return false
+		_buf_add(target["in_buf"], item, 1)
+		return true
+	elif bid == "mass_driver":
+		if item == "probe_stock":
+			_buf_add(target["in_buf"], item, 1)
+			return true
+	return false
+
+func _push_adjacent(b: Dictionary, buf: Dictionary) -> void:
+	if buf.is_empty(): return
+	var ws := int(b["sec"]); var sw := int(b["sec_w"]); var l := int(b["layer"])
+	var ports := [
+		[ws + sw, l, 1],
+		[ws - 1, l, -1],
+		[ws, l + 1, 1],
+		[ws, l - 1, -1],
+	]
+	for p in ports:
+		var tb := _at(int(p[0]), int(p[1]))
+		if tb.is_empty(): continue
+		var it := _buf_take(buf, "auto")
+		if it == "": return
+		var ok := _spawn_on_belt(int(tb["sec"]), int(tb["layer"]), it, int(p[2])) if (tb["id"] == "belt" or tb["id"] == "lift") else _deliver_to(tb, it)
+		if ok: return
+		_buf_add(buf, it, 1)
+
+func _push_depot(b: Dictionary) -> void:
+	var inv: Dictionary = b["inv"]
+	if inv.is_empty(): return
+	var filters: Dictionary = b["out_filters"]
+	var ws := int(b["sec"]); var sw := int(b["sec_w"]); var l := int(b["layer"])
+	var ports := [
+		{"k": "right", "s": ws + sw, "l": l, "d": 1},
+		{"k": "left",  "s": ws - 1,  "l": l, "d": -1},
+		{"k": "up",    "s": ws,      "l": l + 1, "d": 1},
+		{"k": "down",  "s": ws,      "l": l - 1, "d": -1},
+	]
+	for p in ports:
+		var flt := String(filters.get(p["k"], "none"))
+		if flt == "none": continue
+		var tb := _at(int(p["s"]), int(p["l"]))
+		if tb.is_empty(): continue
+		var it := _buf_take(inv, flt)
+		if it == "": continue
+		var ok := _spawn_on_belt(int(tb["sec"]), int(tb["layer"]), it, int(p["d"])) if (tb["id"] == "belt" or tb["id"] == "lift") else _deliver_to(tb, it)
+		if not ok:
+			_buf_add(inv, it, 1)
+
+func _belt_item_pos(it: Dictionary) -> Vector2:
+	if not world: return Vector2.ZERO
+	if bool(it["is_lift"]):
+		var a := PlanetWorld.sector_center_angle(int(it["sec"]))
+		var r0 := PlanetWorld.layer_inner_r(int(it["layer"]))
+		var frac := float(it["t"]) if int(it["dir"]) >= 0 else (1.0 - float(it["t"]))
+		return world.polar_to_world(a, r0 + frac * PlanetWorld.LAYER_THICK)
+	var frac := float(it["t"]) if int(it["dir"]) >= 0 else (1.0 - float(it["t"]))
+	var ang := (float(it["sec"]) + frac) * PlanetWorld.DA
+	var r := PlanetWorld.layer_inner_r(int(it["layer"])) + 12.0
 	return world.polar_to_world(ang, r)
 
-# ------------------------------------------------------------------------------
-# MAIN SIMULATION STEP
-# ------------------------------------------------------------------------------
-func _process(delta: float) -> void:
-	anim_time += delta
-	_recompute_local_grids(delta)
+func collect_nearby_items(pos: Vector2, rad: float = 95.0) -> int:
+	var got := 0
+	for i in range(belt_items.size() - 1, -1, -1):
+		if _belt_item_pos(belt_items[i]).distance_to(pos) <= rad:
+			GameState.add_res(String(belt_items[i]["item"]), 1)
+			belt_items.remove_at(i)
+			got += 1
+	for b in buildings:
+		if b["id"] in ["drill", "smelter", "assembler", "printer"] and not b["out_buf"].is_empty():
+			if Vector2(b["pos"]).distance_to(pos) <= 72.0:
+				got += _collect_out(b)
+	if got > 0:
+		AudioSynth.play_sfx("pop")
+	return got
 
-	var spd_bonus = 1.0 + float(GameState.drones) * 0.18
+func service_player(pos: Vector2, delta: float) -> void:
+	var near_pad := false
+	for b in buildings:
+		if (b["id"] in POWER_NODES or b["id"] == "depot") and float(b["pwr_ratio"]) > 0.15:
+			if Vector2(b["pos"]).distance_to(pos) <= 280.0:
+				near_pad = true
+				break
+	if near_pad:
+		GameState.ion_battery = minf(GameState.max_ion_battery, GameState.ion_battery + 35.0 * delta)
+		GameState.fuel = minf(GameState.max_fuel, GameState.fuel + 24.0 * delta)
+		GameState.hp = minf(GameState.max_hp, GameState.hp + 10.0 * delta)
+	else:
+		# Passive capsule micro-solar recharge so player can NEVER softlock on Ion backup!
+		var sun: float = world.get_sunlight_at(pos) if world else 0.5
+		GameState.ion_battery = minf(GameState.max_ion_battery, GameState.ion_battery + (4.5 + 8.5 * sun) * delta)
+
+func _process(delta: float) -> void:
+	anim_t += delta
+	_solve_power_grids(delta)
+	var spd := 1.0 + float(GameState.drones) * 0.16
 
 	for b in buildings:
-		var bid: String = b["id"]
-		var pwr = float(b.get("pwr_ratio", 0.0))
+		var bid := String(b["id"])
+		var pwr := float(b["pwr_ratio"])
 		b["blocked"] = false
-
 		if pwr > 0.05:
-			b["timer"] += delta * spd_bonus * pwr
-			b["smoke_t"] += delta * pwr
-
-		b["push_t"] += delta
-		if b["push_t"] >= 0.42:
+			b["timer"] = float(b["timer"]) + delta * spd * pwr
+			b["smoke_t"] = float(b["smoke_t"]) + delta * pwr
+		b["push_t"] = float(b["push_t"]) + delta
+		if float(b["push_t"]) >= 0.42:
 			b["push_t"] = 0.0
-			if bid == "depot":
-				_push_depot_outputs(b)
-			elif bid in ["drill", "smelter", "assembler"]:
-				_try_push_item_adjacent(b, b["out_buf"])
+			if bid == "depot": _push_depot(b)
+			elif bid in ["drill", "smelter", "assembler", "printer"]: _push_adjacent(b, b["out_buf"])
 
 		match bid:
 			"drill":
-				if pwr <= 0.05:
-					continue
-				if _buf_total(b["out_buf"]) >= BUFFER_CAP_DRILL:
+				if pwr <= 0.05: continue
+				if _buf_total(b["out_buf"]) >= DRILL_BUF_CAP:
 					b["blocked"] = true
 					continue
-				if b["timer"] >= 1.15:
+				if float(b["timer"]) >= 1.25:
 					b["timer"] = 0.0
-					b["frame"] = (b["frame"] + 1) % 4
-					var ore: String = b["ore_target"]
-					_buf_add(b["out_buf"], ore, 1)
-					if world and b["smoke_t"] >= 0.9:
+					_buf_add(b["out_buf"], String(b["ore_target"]), 1)
+					if world and float(b["smoke_t"]) >= 1.0:
 						b["smoke_t"] = 0.0
-						world.spawn_smoke_puff(b["pos"] + b["pos"].normalized() * 34.0, b["pos"].normalized())
-
+						world.spawn_smoke(Vector2(b["pos"]) + Vector2(b["normal"]) * 36.0, b["normal"])
 			"smelter":
-				if pwr <= 0.05:
-					continue
-				if _buf_total(b["out_buf"]) >= BUFFER_CAP_OUT:
+				if pwr <= 0.05: continue
+				if _buf_total(b["out_buf"]) >= MACHINE_OUT_CAP:
 					b["blocked"] = true
 					continue
-				var inb: Dictionary = b["in_buf"]
-				if b["timer"] >= 2.0:
+				if world and float(b["smoke_t"]) >= 0.65 and not b["in_buf"].is_empty():
+					b["smoke_t"] = 0.0
+					world.spawn_smoke(Vector2(b["pos"]) + Vector2(b["normal"]) * 56.0, b["normal"], Color(0.72, 0.76, 0.84, 0.42))
+				if float(b["timer"]) >= 1.9:
 					b["timer"] = 0.0
-					if int(inb.get("fe", 0)) >= 2:
-						inb["fe"] -= 2
-						if inb["fe"] <= 0: inb.erase("fe")
+					var ib: Dictionary = b["in_buf"]
+					if int(ib.get("fe", 0)) >= 2:
+						ib["fe"] -= 2; if ib["fe"] <= 0: ib.erase("fe")
 						_buf_add(b["out_buf"], "plate_fe", 1)
-					elif int(inb.get("cu", 0)) >= 2:
-						inb["cu"] -= 2
-						if inb["cu"] <= 0: inb.erase("cu")
+					elif int(ib.get("cu", 0)) >= 2:
+						ib["cu"] -= 2; if ib["cu"] <= 0: ib.erase("cu")
 						_buf_add(b["out_buf"], "wire_cu", 1)
-					elif int(inb.get("si", 0)) >= 2:
-						inb["si"] -= 2
-						if inb["si"] <= 0: inb.erase("si")
+					elif int(ib.get("si", 0)) >= 2:
+						ib["si"] -= 2; if ib["si"] <= 0: ib.erase("si")
 						_buf_add(b["out_buf"], "wafer_si", 1)
-					b["frame"] = (b["frame"] + 1) % 3
-
 			"assembler":
-				if pwr <= 0.05:
-					continue
-				if _buf_total(b["out_buf"]) >= BUFFER_CAP_OUT:
+				if pwr <= 0.05: continue
+				if _buf_total(b["out_buf"]) >= MACHINE_OUT_CAP:
 					b["blocked"] = true
 					continue
-				var rec: String = String(b.get("recipe", "circuit"))
-				var ib: Dictionary = b["in_buf"]
-				if b["timer"] >= 2.4:
+				if float(b["timer"]) >= 2.2:
 					b["timer"] = 0.0
+					var ib: Dictionary = b["in_buf"]
+					var rec := String(b["recipe"])
 					if rec == "circuit" and int(ib.get("plate_fe", 0)) >= 1 and int(ib.get("wire_cu", 0)) >= 1:
 						ib["plate_fe"] -= 1; ib["wire_cu"] -= 1
 						if ib["plate_fe"] <= 0: ib.erase("plate_fe")
@@ -1210,307 +881,242 @@ func _process(delta: float) -> void:
 						if ib["plate_fe"] <= 0: ib.erase("plate_fe")
 						if ib["circuit"] <= 0: ib.erase("circuit")
 						_buf_add(b["out_buf"], "sci_pack", 1)
-						GameState.add_res("sci_pack", 1, false)
-					b["frame"] = (b["frame"] + 1) % 4
-
 			"printer":
-				if pwr <= 0.05:
+				if pwr <= 0.05: continue
+				if _buf_total(b["out_buf"]) >= MACHINE_OUT_CAP:
+					b["blocked"] = true
 					continue
-				if b["timer"] >= 4.0:
+				if float(b["timer"]) >= 2.8:
 					b["timer"] = 0.0
-					if int(b["in_buf"].get("circuit", 0)) >= 1 and int(b["in_buf"].get("plate_fe", 0)) >= 2:
-						b["in_buf"]["circuit"] -= 1; b["in_buf"]["plate_fe"] -= 2
-						if b["in_buf"]["circuit"] <= 0: b["in_buf"].erase("circuit")
-						if b["in_buf"]["plate_fe"] <= 0: b["in_buf"].erase("plate_fe")
+					var ib: Dictionary = b["in_buf"]
+					if int(ib.get("plate_fe", 0)) >= 2 and int(ib.get("circuit", 0)) >= 1:
+						ib["plate_fe"] -= 2; ib["circuit"] -= 1
+						if ib["plate_fe"] <= 0: ib.erase("plate_fe")
+						if ib["circuit"] <= 0: ib.erase("circuit")
 						_buf_add(b["out_buf"], "probe_stock", 1)
-					elif GameState.can_afford({"circuit": 1, "plate_fe": 2}):
-						GameState.spend_cost({"circuit": 1, "plate_fe": 2})
-						GameState.add_res("probe_stock", 1, false)
-					b["frame"] = (b["frame"] + 1) % 4
-
+					elif GameState.get_res("plate_fe") >= 2 and GameState.get_res("circuit") >= 1:
+						GameState.add_res("plate_fe", -2)
+						GameState.add_res("circuit", -1)
+						_buf_add(b["out_buf"], "probe_stock", 1)
 			"mass_driver":
-				if pwr <= 0.05:
-					continue
-				if b["timer"] >= 3.2:
-					b["timer"] = 0.0
-					var used_buf = false
-					if not b["in_buf"].is_empty():
-						var _pi = _buf_take_one(b["in_buf"], "auto")
-						used_buf = (_pi != "")
-					elif GameState.probe_stock > 0:
-						GameState.add_res("probe_stock", -1)
-						used_buf = true
-					elif GameState.can_afford({"plate_fe": 2, "circuit": 1}):
-						GameState.spend_cost({"plate_fe": 2, "circuit": 1})
-						used_buf = true
-					if used_buf:
-						b["charge_t"] = 1.0
-						GameState.total_launches += 1
-						GameState.add_fleet_units(1)
-						var dir_out = Vector2(b["pos"]).normalized()
-						projectiles.append({"pos": b["pos"] + dir_out * 64.0, "vel": dir_out * 920.0, "life": 6.0})
-						AudioSynth.play_synth("launch")
-
+				if pwr <= 0.05: continue
+				if float(b["timer"]) >= 2.6:
+					var has_probe := int(b["in_buf"].get("probe_stock", 0)) > 0
+					var from_global := (not has_probe) and GameState.get_res("probe_stock") > 0
+					if has_probe or from_global:
+						b["timer"] = 0.0
+						if has_probe:
+							_buf_take(b["in_buf"], "probe_stock")
+						else:
+							GameState.add_res("probe_stock", -1)
+						_fire_mass_driver(b)
 			"turret":
-				if pwr <= 0.05:
-					continue
-				if b["timer"] >= 0.72 and swarm_sim and swarm_sim.has_method("find_nearest_hostile"):
-					var tgt: Vector2 = swarm_sim.find_nearest_hostile(b["pos"], 1150.0)
+				if pwr <= 0.05 or not swarm: continue
+				if float(b["timer"]) >= 0.70 and swarm.has_method("find_nearest_raider"):
+					var tgt: Vector2 = swarm.find_nearest_raider(b["pos"], 1200.0)
 					if tgt != Vector2.ZERO:
 						b["timer"] = 0.0
-						swarm_sim.damage_hostile_near(tgt, 26.0)
-						laser_beams.append({"a": b["pos"] + b["pos"].normalized() * 26.0, "b": tgt, "life": 0.14})
-						AudioSynth.play_synth("laser")
+						swarm.damage_raider_near(tgt, 28.0)
+						turret_beams.append({"a": Vector2(b["pos"]) + Vector2(b["normal"]) * 28.0, "b": tgt, "life": 0.14})
+						AudioSynth.play_sfx("laser")
 
-	# Move physical items along Powered Belts & Lifts (STOP when belt unpowered or dead-ended!)
+	# Move physical items along powered belts & lifts
 	for i in range(belt_items.size() - 1, -1, -1):
-		var it = belt_items[i]
-		var cur_b = _get_building_at(it["sec"], it["layer"])
-		if cur_b.is_empty() or (cur_b["id"] != "belt" and cur_b["id"] != "lift"):
+		var it := belt_items[i]
+		var cb := _at(int(it["sec"]), int(it["layer"]))
+		if cb.is_empty() or (cb["id"] != "belt" and cb["id"] != "lift"):
 			belt_items.remove_at(i)
 			continue
-		it["dir"] = int(cur_b.get("dir", 1))
-		var b_pwr = float(cur_b.get("pwr_ratio", 0.0))
-		if b_pwr <= 0.05:
-			continue
-		it["t"] = minf(1.02, float(it["t"]) + delta * 1.15 * b_pwr)
+		it["dir"] = int(cb["dir"])
+		var bp := float(cb["pwr_ratio"])
+		if bp <= 0.05: continue
+		it["t"] = minf(1.02, float(it["t"]) + delta * 1.15 * bp)
 		if float(it["t"]) >= 1.0:
-			var ns = world.wrap_sector(it["sec"] + it["dir"]) if not it["is_lift"] else it["sec"]
-			var nl = it["layer"] if not it["is_lift"] else (it["layer"] + it["dir"])
-			var nxt_b = _get_building_at(ns, nl)
-			if not nxt_b.is_empty():
-				var nbid: String = nxt_b["id"]
-				if nbid == "belt" or nbid == "lift":
-					if _count_belt_items_at(ns, nl, 0.35) < 2:
-						it["sec"] = ns
-						it["layer"] = nl
-						it["t"] = 0.04
-						it["is_lift"] = (nbid == "lift")
-					else:
-						it["t"] = 0.96
-				elif _deliver_to_target(nxt_b, it["item"]):
+			var ns := PlanetWorld.wrap_sector(int(it["sec"]) + int(it["dir"])) if not bool(it["is_lift"]) else int(it["sec"])
+			var nl := int(it["layer"]) if not bool(it["is_lift"]) else (int(it["layer"]) + int(it["dir"]))
+			var nb := _at(ns, nl)
+			if not nb.is_empty():
+				if nb["id"] == "belt" or nb["id"] == "lift":
+					it["sec"] = ns; it["layer"] = nl; it["t"] = 0.05; it["is_lift"] = (nb["id"] == "lift")
+				elif _deliver_to(nb, String(it["item"])):
 					belt_items.remove_at(i)
 				else:
 					it["t"] = 0.96
 			else:
-				it["t"] = 0.96 # Hold safely at belt end (never vanishes!)
+				it["t"] = 0.96
 
-	# Mass driver projectiles
-	for i in range(projectiles.size() - 1, -1, -1):
-		var pr = projectiles[i]
+	# Mass Driver ballistic launch trails
+	for i in range(launch_trails.size() - 1, -1, -1):
+		var tr := launch_trails[i]
+		tr["pos"] += tr["vel"] * delta
 		if world:
-			pr["vel"] += world.compute_gravity_at(pr["pos"]) * delta * 0.35
-		pr["pos"] += pr["vel"] * delta
-		pr["life"] -= delta
-		if pr["life"] <= 0.0:
-			projectiles.remove_at(i)
+			tr["vel"] += world.compute_gravity_at(tr["pos"]) * delta * 0.25
+		tr["life"] -= delta
+		if float(tr["life"]) <= 0.0:
+			launch_trails.remove_at(i)
 
-	for i in range(laser_beams.size() - 1, -1, -1):
-		laser_beams[i]["life"] -= delta
-		if laser_beams[i]["life"] <= 0.0:
-			laser_beams.remove_at(i)
+	for i in range(turret_beams.size() - 1, -1, -1):
+		turret_beams[i]["life"] -= delta
+		if float(turret_beams[i]["life"]) <= 0.0:
+			turret_beams.remove_at(i)
 
-	if GameState.selected_tool != "" and GameState.BUILDINGS.has(GameState.selected_tool):
-		refresh_blueprint_slots()
+	if GameState.BUILDINGS.has(GameState.selected_tool):
+		refresh_blueprints()
 	queue_redraw()
 
+func _fire_mass_driver(b: Dictionary) -> void:
+	var p: Vector2 = b["pos"]
+	var n: Vector2 = b["normal"]
+	var tang := Vector2(-n.y, n.x)
+	var launch_dir := (n * 0.72 + tang * 0.69).normalized()
+	var muzzle := p + n * 58.0 + tang * 28.0
+	launch_trails.append({"pos": muzzle, "vel": launch_dir * 980.0, "life": 2.4})
+	if world:
+		world.spawn_spark_burst(muzzle, Color(1.0, 0.86, 0.42), 14)
+		world.spawn_smoke(muzzle, launch_dir, Color(0.95, 0.88, 0.72, 0.45))
+	GameState.total_launches += 1
+	var batch := 8 if GameState.swarm_fleet >= 24 else 4
+	GameState.swarm_fleet = mini(GameState.SWARM_MAX, GameState.swarm_fleet + batch)
+	if swarm and swarm.has_method("spawn_launched_units"):
+		swarm.spawn_launched_units(muzzle, launch_dir, batch)
+	AudioSynth.play_sfx("launch")
+
 # ------------------------------------------------------------------------------
-# SPHERICAL RENDERING + POWER WIRES / TESLA DOMES / LOGISTICS OVERLAY
+# HD-2D PIXEL-ART FACTORY RENDERING
 # ------------------------------------------------------------------------------
 func _draw() -> void:
-	if not world:
-		return
+	if not world: return
+	var cam := get_viewport().get_camera_2d()
+	var cpos := cam.global_position if cam else Vector2.ZERO
+	var vp := get_viewport_rect().size
+	var z := cam.zoom.x if cam else 1.0
+	var max_d := maxf(vp.x, vp.y) * 0.75 / maxf(0.02, z) + 950.0
+	var glow := ArtRegistry.get_tex("glow_soft")
+	var font := ThemeDB.fallback_font
 
-	var cam = get_viewport().get_camera_2d()
-	var cpos = cam.global_position if cam else Vector2.ZERO
-	var vrect = get_viewport_rect()
-	var z_f = (1.0 / cam.zoom.x) if cam else 1.0
-	var max_view_d = maxf(vrect.size.x, vrect.size.y) * 0.75 * z_f + 900.0
-
-	# 1. Holographic Blueprint Ghost Slots
+	# 1. Holographic Blueprint Slots
 	if GameState.BUILDINGS.has(GameState.selected_tool):
+		var tex := ArtRegistry.get_tex(String(GameState.BUILDINGS[GameState.selected_tool]["tex"]))
 		for i in range(blueprint_slots.size()):
-			var sl = blueprint_slots[i]
-			if sl["pos"].distance_to(cpos) > max_view_d:
-				continue
-			var is_act = (i == active_ghost_idx)
-			var col = Color(0.28, 1.0, 0.72, 0.72) if is_act else Color(0.25, 0.75, 1.0, 0.28)
-			draw_set_transform(sl["pos"], sl["rot"], Vector2.ONE)
-			var hw = sl["w_px"] * 0.46
-			var h = sl["h_px"]
-			var rc = Rect2(-hw, -h, hw * 2.0, h)
-			draw_rect(rc, Color(col.r, col.g, col.b, col.a * 0.25), true)
-			draw_rect(rc, col, false, 2.2 if is_act else 1.2)
+			var sl := blueprint_slots[i]
+			var is_act := (i == active_slot_idx)
+			var col := Color(0.32, 0.96, 1.0, 0.75 if is_act else 0.30)
+			draw_set_transform(sl["pos"], float(sl["rot"]), Vector2.ONE)
+			if tex:
+				var sz := tex.get_size() * 1.15
+				if GameState.selected_tool == "belt": sz = Vector2(110, 26)
+				elif GameState.selected_tool == "lift": sz = Vector2(36, 118)
+				draw_texture_rect(tex, Rect2(-sz.x * 0.5, -sz.y, sz.x, sz.y), false, col)
+			draw_rect(Rect2(-46, -54, 92, 54), col, false, 2.2 if is_act else 1.2)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# 2. Tesla Power Domes (under buildings)
+	# 2. Tesla Energy Domes (back layer)
 	for b in buildings:
-		if b["id"] == "tesla" and Vector2(b["pos"]).distance_to(cpos) <= max_view_d + TESLA_DOME_R:
-			var pwr = float(b.get("pwr_ratio", 0.0))
-			var col_d = Color(0.25, 0.92, 1.0, 0.14 if pwr > 0.05 else 0.05)
-			var ring_d = Color(0.32, 0.96, 1.0, 0.65 if pwr > 0.05 else 0.25)
-			draw_circle(b["pos"], TESLA_DOME_R, col_d)
-			draw_arc(b["pos"], TESLA_DOME_R, 0.0, TAU, 48, ring_d, 2.0 if pwr > 0.05 else 1.0)
+		if b["id"] != "tesla": continue
+		var bp: Vector2 = b["pos"]
+		if bp.distance_to(cpos) > max_d + TESLA_DOME_R: continue
+		var active := float(b["pwr_ratio"]) > 0.1
+		var dcol := Color(0.22, 0.84, 1.0, 0.08) if active else Color(0.6, 0.3, 0.3, 0.04)
+		var rcol := Color(0.35, 0.92, 1.0, 0.50) if active else Color(0.85, 0.35, 0.35, 0.28)
+		draw_circle(bp, TESLA_DOME_R, dcol)
+		draw_arc(bp, TESLA_DOME_R, 0.0, TAU, 72, rcol, 2.2)
 
-	# 3. Glowing Power Wires (Solar/Geo/Battery <-> Tesla)
-	for w in wires:
-		var b1 = _get_building_by_uid(int(w[0]))
-		var b2 = _get_building_by_uid(int(w[1]))
-		if b1.is_empty() or b2.is_empty():
-			continue
-		var p1 = Vector2(b1["pos"]) + Vector2(b1["pos"]).normalized() * 24.0
-		var p2 = Vector2(b2["pos"]) + Vector2(b2["pos"]).normalized() * 24.0
-		if p1.distance_to(cpos) > max_view_d + WIRE_RANGE:
-			continue
-		var live = float(b1.get("pwr_ratio", 0.0)) > 0.05 or float(b2.get("pwr_ratio", 0.0)) > 0.05
-		var w_col = Color(0.28, 0.95, 1.0, 0.88) if live else Color(0.65, 0.45, 0.25, 0.55)
-		draw_line(p1, p2, w_col, 3.0 if live else 2.0)
-		if live:
-			var t_pulse = fposmod(anim_time * 0.9, 1.0)
-			var pp = p1.lerp(p2, t_pulse)
-			draw_circle(pp, 4.5, Color(0.85, 1.0, 1.0, 0.95))
-
-	# Wire-in-progress rubber band to player
-	if wire_pick_uid > 0 and player:
-		var wb = _get_building_by_uid(wire_pick_uid)
-		if not wb.is_empty():
-			var p0 = Vector2(wb["pos"]) + Vector2(wb["pos"]).normalized() * 24.0
-			draw_line(p0, player.position, Color(1.0, 0.85, 0.30, 0.85), 2.5)
-
-	# 4. Physical Buildings + Status Badges
-	var font = ThemeDB.fallback_font
+	# 3. Physical Buildings (Crisp HD-2D Pixel Art Sprites + Additive Glows!)
+	var belt_fi := int(floor(anim_t * 10.0)) % 4
 	for b in buildings:
-		var bpos: Vector2 = b["pos"]
-		if bpos.distance_to(cpos) > max_view_d:
-			continue
-		var bid: String = b["id"]
-		var info = GameState.BUILDINGS[bid]
-		var w = b["w_px"]
-		var h = float(info["h_px"])
-		var tex: Texture2D = sprite_textures.get(bid, null)
-		var pwr = float(b.get("pwr_ratio", 0.0))
+		var bp: Vector2 = b["pos"]
+		if bp.distance_to(cpos) > max_d: continue
+		var bid := String(b["id"])
+		var pwr := float(b["pwr_ratio"])
+		var rot := float(b["rot"])
+		var n: Vector2 = b["normal"]
 
-		draw_set_transform(bpos, b["rot"], Vector2.ONE)
-		if bid == "tesla":
-			# Bespoke Glowing Copper Tesla Tower
-			draw_rect(Rect2(-14, -14, 28, 14), Color(0.24, 0.34, 0.48, 1.0), true)
-			draw_rect(Rect2(-6, -h * 0.82, 12, h * 0.70), Color(0.78, 0.48, 0.22, 1.0), true)
-			for ci in range(4):
-				draw_line(Vector2(-9, -18 - ci * 9), Vector2(9, -18 - ci * 9), Color(1.0, 0.72, 0.32), 2.0)
-			var orb_c = Color(0.30, 0.95, 1.0) if pwr > 0.05 else Color(0.42, 0.48, 0.56)
-			draw_circle(Vector2(0, -h * 0.88), 11.0, orb_c)
-			if pwr > 0.05:
-				draw_circle(Vector2(0, -h * 0.88), 16.0 + 3.0 * sin(anim_time * 6.0), Color(0.35, 0.95, 1.0, 0.32))
-		elif bid == "battery":
-			draw_rect(Rect2(-w * 0.42, -h, w * 0.84, h), Color(0.14, 0.22, 0.34, 1.0), true)
-			draw_rect(Rect2(-w * 0.42, -h, w * 0.84, h), Color(0.35, 0.82, 1.0, 0.9), false, 2.0)
-			var ch_f = clampf(float(b.get("battery_kj", 0.0)) / BATTERY_CAP_KJ, 0.0, 1.0)
-			draw_rect(Rect2(-w * 0.32, -h + 6.0 + (h - 12.0) * (1.0 - ch_f), w * 0.64, (h - 12.0) * ch_f), Color(0.28, 0.96, 0.68), true)
-		elif tex:
-			var cols = int(info.get("frames", 1))
-			var col_idx = int(b["frame"]) % maxi(1, cols)
-			var tw = float(tex.get_width()) / float(maxi(1, cols))
-			var th = float(tex.get_height())
-			var mod = Color.WHITE if (pwr > 0.05 or bid in ["depot", "solar", "geothermal", "elevator"]) else Color(0.55, 0.55, 0.65, 0.85)
-			draw_texture_rect_region(tex, Rect2(-w * 0.48, -h, w * 0.96, h), Rect2(col_idx * tw, 0, tw, th), mod)
+		# Emissive glow halos for active furnaces, Tesla orbs, Geothermal & Printers
+		if glow and pwr > 0.1:
+			if bid == "tesla":
+				draw_texture_rect(glow, Rect2(bp.x + n.x * 58 - 54, bp.y + n.y * 58 - 54, 108, 108), false, Color(0.25, 0.88, 1.0, 0.38))
+			elif bid == "smelter" and not b["in_buf"].is_empty():
+				draw_texture_rect(glow, Rect2(bp.x + n.x * 26 - 52, bp.y + n.y * 26 - 52, 104, 104), false, Color(1.0, 0.52, 0.14, 0.36))
+			elif bid == "geothermal":
+				draw_texture_rect(glow, Rect2(bp.x + n.x * 32 - 58, bp.y + n.y * 32 - 58, 116, 116), false, Color(1.0, 0.45, 0.12, 0.35))
+			elif bid == "printer":
+				draw_texture_rect(glow, Rect2(bp.x + n.x * 42 - 64, bp.y + n.y * 42 - 64, 128, 128), false, Color(0.28, 0.88, 1.0, 0.28))
 
-		# Drill / Machine Buffer Fill Bar
-		if bid in ["drill", "smelter", "assembler"]:
-			var cap = BUFFER_CAP_DRILL if bid == "drill" else BUFFER_CAP_OUT
-			var fill = float(_buf_total(b["out_buf"])) / float(cap)
-			if fill > 0.0:
-				var fcol = Color(1.0, 0.45, 0.25) if b["blocked"] else Color(0.35, 0.98, 0.68)
-				draw_rect(Rect2(-w * 0.36, -h - 9.0, w * 0.72 * clampf(fill, 0.0, 1.0), 4.0), fcol, true)
-		if bid == "belt" or bid == "lift":
-			var arrow_x = float(b["dir"]) * 12.0
-			draw_line(Vector2(-arrow_x, -6.0), Vector2(arrow_x, -6.0), Color(1.0, 0.85, 0.28, 0.9), 2.5)
+		draw_set_transform(bp, rot, Vector2.ONE)
+		if bid == "belt" and not ArtRegistry.belt_frames.is_empty():
+			var bf := ArtRegistry.belt_frames[belt_fi if pwr > 0.05 else 0]
+			var sx := 1.0 if int(b["dir"]) >= 0 else -1.0
+			draw_set_transform(bp, rot, Vector2(sx, 1.0))
+			draw_texture_rect(bf, Rect2(-56, -24, 112, 24), false)
+		elif bid == "lift" and not ArtRegistry.lift_frames.is_empty():
+			var lf := ArtRegistry.lift_frames[belt_fi if pwr > 0.05 else 0]
+			draw_texture_rect(lf, Rect2(-18, -120, 36, 120), false)
+		else:
+			var tex := ArtRegistry.get_tex(String(GameState.BUILDINGS[bid]["tex"]))
+			if tex:
+				var scale_f := 1.35 if bid in ["printer", "mass_driver"] else 1.25
+				var sz := tex.get_size() * scale_f
+				var y_off := 16.0 if bid == "drill" else 0.0
+				draw_texture_rect(tex, Rect2(-sz.x * 0.5, -sz.y + y_off, sz.x, sz.y), false)
+
+		# Live Battery charge gauge bar
+		if bid == "battery":
+			var pct := clampf(float(b["battery_kj"]) / BATTERY_CAP_KJ, 0.0, 1.0)
+			draw_rect(Rect2(-24, -68, 48, 7), Color(0.08, 0.12, 0.18, 0.9))
+			draw_rect(Rect2(-23, -67, 46 * pct, 5), Color(0.28, 0.95, 0.65))
+
+		# Assembler recipe label + progress bar
+		if bid == "assembler":
+			draw_string(font, Vector2(-34, -72), String(b["recipe"]).to_upper(), HORIZONTAL_ALIGNMENT_CENTER, 68, 11, Color(0.45, 0.96, 1.0))
+			var pr := clampf(float(b["timer"]) / 2.2, 0.0, 1.0)
+			draw_rect(Rect2(-26, -66, 52, 4), Color(0.08, 0.12, 0.18))
+			draw_rect(Rect2(-26, -66, 52 * pr, 4), Color(0.32, 0.96, 0.68))
+
+		# Status badge (NO PWR / FULL / WIRE PICK)
+		if int(b["uid"]) == wire_pick_uid:
+			draw_circle(Vector2(0, -48), 32.0, Color(0.35, 0.95, 1.0, 0.25))
+			draw_arc(Vector2(0, -48), 32.0, 0.0, TAU, 24, Color(0.5, 1.0, 1.0), 2.5)
+		elif float(GameState.BUILDINGS[bid]["pwr_use"]) > 0.0 and pwr <= 0.05:
+			draw_string(font, Vector2(-28, -80), "NO PWR", HORIZONTAL_ALIGNMENT_CENTER, 56, 10, Color(1.0, 0.42, 0.36))
+		elif bool(b["blocked"]):
+			draw_string(font, Vector2(-22, -80), "FULL", HORIZONTAL_ALIGNMENT_CENTER, 44, 10, Color(1.0, 0.82, 0.32))
+
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-		# Diegetic floating status text
-		if font:
-			var lbl_pos = bpos + bpos.normalized() * (h + 12.0) + Vector2(-26.0, 0.0)
-			if pwr <= 0.05 and float(info.get("power", 0)) < 0.0:
-				draw_string(font, lbl_pos, "NO PWR", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.32, 0.35, 0.95))
-			elif b["blocked"]:
-				draw_string(font, lbl_pos, "FULL", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.76, 0.22, 0.95))
-			elif bid == "depot":
-				draw_string(font, lbl_pos, "DEPOT[%d]" % _buf_total(b["inv"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.95, 0.84, 0.35, 0.95))
-			elif bid == "assembler":
-				draw_string(font, lbl_pos, String(b.get("recipe", "circuit")).to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.55, 0.95, 1.0, 0.92))
+	# 4. Power Cables with Animated Traveling Electric Pulses
+	for w in wires:
+		var b1 := _by_uid(int(w[0])); var b2 := _by_uid(int(w[1]))
+		if b1.is_empty() or b2.is_empty(): continue
+		var p1 := Vector2(b1["pos"]) + Vector2(b1["normal"]) * 46.0
+		var p2 := Vector2(b2["pos"]) + Vector2(b2["normal"]) * 46.0
+		if p1.distance_to(cpos) > max_d + WIRE_RANGE: continue
+		var hot := float(b1["pwr_ratio"]) > 0.1 or float(b2["pwr_ratio"]) > 0.1
+		var c_line := Color(0.30, 0.92, 1.0, 0.88) if hot else Color(0.52, 0.60, 0.72, 0.55)
+		draw_line(p1, p2, Color(0.06, 0.16, 0.26, 0.75), 6.0)
+		draw_line(p1, p2, c_line, 2.4)
+		if hot:
+			var t := fposmod(anim_t * 0.85, 1.0)
+			draw_circle(p1.lerp(p2, t), 4.2, Color(0.88, 1.0, 1.0, 0.95))
 
-		if bid == "elevator" and tex_orbital_hub:
-			var dock_r = PlanetWorld.R_ATMOS_OUTER + 420.0
-			var dock_ang = (float(b["sec"]) + 1.0) * PlanetWorld.DA
-			var dock_pos = world.polar_to_world(dock_ang, dock_r)
-			draw_line(bpos, dock_pos, Color(0.32, 0.88, 1.0, 0.65), 6.0)
-			if dock_pos.distance_to(cpos) <= max_view_d + 240.0:
-				draw_set_transform(dock_pos, dock_ang + PI * 0.5, Vector2.ONE)
-				draw_texture_rect(tex_orbital_hub, Rect2(-120, -120, 240, 240), false)
-				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-	# 5. Moving Items on Arc Belts & Radial Lifts
+	# 5. Physical Items Traveling on Belts & Lifts
 	for it in belt_items:
-		var ip = _belt_item_world_pos(it)
-		if ip.distance_to(cpos) > max_view_d:
-			continue
-		var ic: Texture2D = item_icons.get(it["item"], null)
+		var ip := _belt_item_pos(it)
+		if ip.distance_to(cpos) > max_d: continue
+		var ic := ArtRegistry.get_item_icon(String(it["item"]))
 		if ic:
-			draw_texture_rect(ic, Rect2(ip - Vector2(12, 12), Vector2(24, 24)), false)
+			draw_texture_rect(ic, Rect2(ip - Vector2(9, 9), Vector2(18, 18)), false)
+		else:
+			draw_circle(ip, 5.0, Color(0.95, 0.78, 0.36))
 
-	# 6. Turret Laser Beams & Mass Driver Projectiles
-	for lb in laser_beams:
-		draw_line(lb["a"], lb["b"], Color(0.28, 0.95, 1.0, 0.9), 3.0)
-	for pr in projectiles:
-		draw_circle(pr["pos"], 12.0, Color(1.0, 0.65, 0.25))
+	# 6. Mass Driver Blazing Spacecraft Launch Trails & Turret Lasers
+	for tr in launch_trails:
+		var p: Vector2 = tr["pos"]
+		var v: Vector2 = tr["vel"].normalized()
+		draw_line(p, p - v * 120.0, Color(1.0, 0.78, 0.34, 0.75), 5.0)
+		draw_line(p, p - v * 65.0, Color(0.95, 0.98, 1.0, 0.95), 2.5)
+		if glow:
+			draw_texture_rect(glow, Rect2(p.x - 36, p.y - 36, 72, 72), false, Color(1.0, 0.82, 0.36, 0.55))
 
-# ------------------------------------------------------------------------------
-# SERIALIZATION
-# ------------------------------------------------------------------------------
-func to_dict() -> Dictionary:
-	return {
-		"next_uid": next_uid,
-		"buildings": buildings.duplicate(true),
-		"wires": wires.duplicate(true),
-		"belt_items": belt_items.duplicate(true),
-	}
-
-func from_dict(d: Dictionary) -> void:
-	clear_factory()
-	next_uid = int(d.get("next_uid", 1))
-	for b in d.get("buildings", []):
-		if not GameState.BUILDINGS.has(b.get("id", "")):
-			continue
-		var ws = int(b["sec"])
-		var layer = int(b["layer"])
-		var sw = int(b.get("sec_w", 1))
-		var pose = _slot_world_pose(ws, layer, sw)
-		var nb = {
-			"uid": int(b.get("uid", next_uid)),
-			"id": b["id"], "sec": ws, "layer": layer, "sec_w": sw,
-			"dir": int(b.get("dir", 1)),
-			"pos": pose["pos"], "rot": pose["rot"], "w_px": pose["w_px"],
-			"timer": float(b.get("timer", 0.0)), "push_t": 0.0, "smoke_t": 0.0,
-			"charge_t": 0.0, "frame": int(b.get("frame", 0)),
-			"ore_target": String(b.get("ore_target", "fe")),
-			"in_buf": Dictionary(b.get("in_buf", {})).duplicate(),
-			"out_buf": Dictionary(b.get("out_buf", {})).duplicate(),
-			"inv": Dictionary(b.get("inv", {})).duplicate(),
-			"out_filters": Dictionary(b.get("out_filters", {"left": "auto", "right": "auto", "up": "none", "down": "none"})).duplicate(),
-			"recipe": String(b.get("recipe", "circuit")),
-			"battery_kj": float(b.get("battery_kj", 0.0)),
-			"pwr_ratio": 0.0, "wired": false, "blocked": false,
-		}
-		if nb["uid"] >= next_uid:
-			next_uid = nb["uid"] + 1
-		var idx = buildings.size()
-		buildings.append(nb)
-		for ds in range(sw):
-			occupied[_key(ws + ds, layer)] = idx
-	for w in d.get("wires", []):
-		if w is Array and w.size() >= 2:
-			wires.append([int(w[0]), int(w[1])])
-	for it in d.get("belt_items", []):
-		belt_items.append(it)
-	_recompute_local_grids(0.0)
-	refresh_blueprint_slots()
-	queue_redraw()
+	for bm in turret_beams:
+		draw_line(bm["a"], bm["b"], Color(0.32, 0.94, 1.0, 0.85), 3.2)
+		draw_line(bm["a"], bm["b"], Color(1.0, 1.0, 1.0, 0.9), 1.2)
