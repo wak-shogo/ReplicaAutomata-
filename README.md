@@ -1,20 +1,31 @@
 # STAR REPLICA: AUTOMA
 
-Web Play (GitHub Pages): https://wak-shogo.github.io/ReplicaAutomata-/
+A 2D HD-2D pixel-art Von Neumann self-replicating factory & orbital swarm game built in **Godot 4.7** (GL Compatibility / WebGL 2.0), rebuilt from the ground up from [`docs/DESIGN_SPECIFICATION.md`](docs/DESIGN_SPECIFICATION.md) and [`docs/art/target_gameplay_concept.jpeg`](docs/art/target_gameplay_concept.jpeg).
 
-Zero-from-scratch Godot 4.7 rebuild based strictly on [docs/DESIGN_SPECIFICATION.md](docs/DESIGN_SPECIFICATION.md) and [docs/art/target_gameplay_concept.jpeg](docs/art/target_gameplay_concept.jpeg).
+## Play Online
+- **GitHub Pages**: https://wak-shogo.github.io/ReplicaAutomata-/
 
 ## Core Architecture
-- **HD-2D Pixel Art & Spherical 10x Open-World Planet** (`scripts/world/planet_world.gd`, `tools/build_pixel_art_atlas.py`): Seamless toroidal sandstone regolith crust, volcanic basalt strata, carved subterranean crystal caverns, molten magma core, 3 orbiting moons (`LUNA-PRIME`, `IGNIS-IX`, `CRYO-IV`), and natural orbital asteroid belt.
-- **Full Newtonian Gravity & Zero-Drag Keplerian Orbit** (`scripts/entities/player_vessel.gd`): Multi-body inverse-square space gravity + Shell Theorem interior gravity, atmospheric drag inside `R_ATMOS`, strictly zero drag in vacuum space, RCS attitude + axial rocket bell propulsion, Electric Ion anti-softlock backup, and emergency Capsule Re-Drop.
-- **Vessel Evolution**: Starts as a minimal brushed-steel cylinder (`Seed Capsule`) and visibly bolts crafted modules via the Onboard 3D Printer (`Lander Mk-I` -> `Apollo Mk-II` -> `Warp Mk-III`) plus tethered Fabricator Drones.
-- **Hard Local Wired Power Grid & Physical Logistics** (`scripts/factory/factory_sim.gd`): Solar Arrays, 18,000 kJ night-buffer Power Banks, Geothermal Plants, wired Power Cables to Tesla Coils, Mining Drills (buffer 6), animated Conveyor Belts & Lift Shafts, Cargo Depots with 4-way output filters, Blast Smelters, Auto Assemblers, Gantry Macro Printers, and 45-degree Orbital Mass Driver railguns.
-- **10,000-Unit MultiMesh2D Swarm Fleet** (`scripts/entities/swarm_sim.gd`): GPU-instanced orbital swarm with `HARVEST / REPLICATE / DEFEND / ASSAULT` doctrines and the Corrupted Orbital Fortress boss.
-- **AAA Minimalist Controls & Fighter-Jet HUD** (`scripts/ui/hud.gd`): Diegetic circular HP/Fuel/Ion arcs with velocity/altitude/power/G callouts, single virtual joystick + ABXY 2-click command menus, and Factorio-style Tech Tree DAG for both Desktop (`1280x720`) and Portrait Mobile (`412x915`).
-- **Refined 16-bit 44.1kHz Procedural Audio** (`scripts/core/audio_synth.gd`): Warm harmonic sine/FM synthesis and low-pass filtered launch/explosion transients.
+- **360-Degree Spherical Planet (`scripts/world/spherical_planet.gd`)**: Fine-grained `24px`-voxel terrain (`900 x 100`) rendered via 30 GPU-cached curved ring `MeshInstance2D` chunks (`120x400px` nearest-neighbor HD-2D texels), with undulating sandstone crust, organic subterranean crystal caverns, molten lava core, Shell-Theorem + inverse-square multi-body gravity, zero-drag vacuum Keplerian orbits, 3 orbiting moons (`LUNA-PRIME`, `IGNIS-IX`, `CRYO-IV`), and 140 harvestable asteroids.
+- **Seed Unit + Physically Docking Fabricator Drones (`scripts/entities/seed_unit.gd`)**: Begin as an orbital Seed Core, dock up to 8 Fabricator Drones on articulated trusses for synchronized multi-beam mining, mount bolt-on propulsion tiers (`Seed Ion Hover` -> `Orbital Booster` -> `Deep Cryo Drive` -> `Swarm Flagship`), and rely on rechargeable Electric Ion hover + Emergency Re-Drop so you can never soft-lock.
+- **Hard Local Wired Power & Connected Physical Logistics (`scripts/factory/industrial_grid.gd`)**: Solar Arrays, Geothermal Plants, and 18,000 kJ Night Power Banks must be physically wired to Tesla Relays to energize nearby machines. Mining Drills feed physical items onto Conveyor Belts / Lift Shafts -> 4-Way Filter Cargo Depots -> Blast Smelters -> Auto Assemblers -> Gantry Macro 3D Printers -> 45-degree Mass Drivers.
+- **10,000-Unit GPU Swarm & Corrupted Orbital Fortress (`scripts/entities/orbital_swarm.gd`)**: `MultiMeshInstance2D` renders up to 10,000 golden replica probes launching from Mass Drivers and fighting the upper-sky Corrupted Orbital Fortress under 4 Fleet Doctrines (`HARVEST`, `REPLICATE`, `DEFEND`, `ASSAULT`).
+- **Concept-Art Industrial HUD & Tech Tree (`scripts/ui/command_hud.gd`)**: Slim left resource/fleet sidebar, bottom pixel-art icon hotbar, right doctrine strip, bottom-right orbital telemetry & log, diegetic HP/Fuel/Ion arcs, Factorio-style 8-node Tech Tree DAG (`[T]`), Cargo Depot 4-way filter UI, and mobile/touch-only virtual controls.
 
-## Verification Commands
+## Controls
+- **Move / Thrust**: `WASD` or Arrow Keys (`Shift` / Right-Click to Brake)
+- **Mine / Place / Wire / Tap Building**: Left-Click (`Space` to Mine, `E` to interact with nearby Depot/Machine)
+- **Rotate Belt**: `R` | **Tech Tree**: `T` | **Orbital View**: `M` | **Megastructures**: `G` | **Hotbar**: `1`-`7`
+
+## Verification & Export
 ```powershell
-& "H:\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64_console.exe" --headless --run-tests
-python -u tools/verify_game.py
+# Headless integration tests
+H:\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64_console.exe --headless --run-tests
+
+# Web export + COI shell injection
+H:\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64_console.exe --headless --export-release "Web" docs/index.html
+python tools/inject_web_shell.py
+
+# Live headless Chromium WebGL playtest (Desktop 1280x720 + Mobile Portrait 412x915)
+python -u tools/playtest_v3.py
 ```

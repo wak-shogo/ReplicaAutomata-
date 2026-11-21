@@ -1,20 +1,19 @@
-; Engine configuration file.
-; STAR REPLICA: AUTOMA - Clean Scratch Rebuild (Godot 4.7)
+; STAR REPLICA: AUTOMA - Concept-Art & Design-Spec Ground-Up Rebuild (Godot 4.7)
 
 config_version=5
 
 [application]
 
 config/name="STAR REPLICA: AUTOMA"
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/game.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
-config/icon="res://assets/art/bld_tesla.png"
+config/icon="res://assets/sprites/seed_core.png"
 
 [autoload]
 
-GameState="*res://scripts/core/game_state.gd"
-AudioSynth="*res://scripts/core/audio_synth.gd"
-ArtRegistry="*res://scripts/core/art_registry.gd"
+State="*res://scripts/core/state.gd"
+Sfx="*res://scripts/core/sfx.gd"
+ArtReg="*res://scripts/core/art_reg.gd"
 
 [display]
 
@@ -33,4 +32,4 @@ pointing/emulate_touch_from_mouse=false
 textures/canvas_textures/default_texture_filter=0
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-environment/defaults/default_clear_color=Color(0.025, 0.035, 0.065, 1)
+environment/defaults/default_clear_color=Color(0.02, 0.028, 0.055, 1)
