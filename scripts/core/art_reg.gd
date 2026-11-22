@@ -12,6 +12,7 @@ const ICON_IDS: Array[String] = [
 	"plate_fe", "wire_cu", "wafer_si", "circuit",
 	"alloy", "sci_pack", "probe_stock", "ice",
 	"quantum_core", "antimatter", "dyson_panel",
+	"ignis_ore", "plasma_cell", "cryo_rod", "astra_shard",
 ]
 
 func _ready() -> void:

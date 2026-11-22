@@ -9,12 +9,13 @@ extends Node2D
 
 signal orbital_inspected(uid: int)
 
-const ORB_RECIPES: Array[String] = ["quantum_core", "dyson_panel", "antimatter", "probe_stock"]
+const ORB_RECIPES: Array[String] = ["quantum_core", "dyson_panel", "antimatter", "probe_stock", "sci_pack"]
 const STATION_RECIPES: Dictionary = {
-	"quantum_core": {"in": {"si": 2, "cu": 2}, "out": "quantum_core", "qty": 1, "time": 3.0},
-	"dyson_panel":  {"in": {"fe": 2, "si": 2}, "out": "dyson_panel",  "qty": 1, "time": 3.2},
-	"antimatter":   {"in": {"quantum_core": 1, "fe": 2}, "out": "antimatter", "qty": 1, "time": 3.6},
-	"probe_stock":  {"in": {"fe": 2, "quantum_core": 1}, "out": "probe_stock", "qty": 4, "time": 3.5},
+	"quantum_core": {"in": {"si": 2, "cu": 2}, "out": "quantum_core", "qty": 1, "time": 2.8},
+	"dyson_panel":  {"in": {"fe": 2, "si": 2}, "out": "dyson_panel",  "qty": 1, "time": 3.0},
+	"antimatter":   {"in": {"quantum_core": 1, "fe": 2}, "out": "antimatter", "qty": 1, "time": 3.2},
+	"probe_stock":  {"in": {"fe": 2, "quantum_core": 1}, "out": "probe_stock", "qty": 6, "time": 3.0},
+	"sci_pack":     {"in": {"quantum_core": 1, "ti": 1}, "out": "sci_pack", "qty": 60, "time": 2.8},
 }
 
 var planet: SphericalPlanet = null
@@ -430,30 +431,32 @@ func _draw() -> void:
 		var b: Dictionary = planet.bodies[bid]
 		var bp: Vector2 = b["pos"]
 		var br := float(b["rad"])
+		var bcore := float(b.get("r_core", br * 0.32))
 		var bsoi := float(b["soi_r"])
 		if z < 0.22:
-			var sc: Color = b["col"]; sc.a = 0.14
+			var sc: Color = b["col"]; sc.a = 0.16
 			draw_arc(bp, bsoi, 0.0, TAU, 48, sc, 1.2 * z_inv)
 		if not vrect.intersects(Rect2(bp.x - br * 1.6, bp.y - br * 1.6, br * 3.2, br * 3.2)):
 			continue
 		if glow:
-			var gc: Color = b["col"]; gc.a = 0.22
-			draw_texture_rect(glow, Rect2(bp.x - br * 1.5, bp.y - br * 1.5, br * 3.0, br * 3.0), false, gc)
-		var mt := ArtReg.get_t(String(b["tex"]))
-		if mt:
-			draw_texture_rect(mt, Rect2(bp.x - br, bp.y - br, br * 2.0, br * 2.0), false)
-		# Real Sun-aligned Nightside shadow hemisphere on every Moon & Planet!
+			var gc: Color = b["col"]; gc.a = 0.16
+			draw_texture_rect(glow, Rect2(bp.x - br * 1.35, bp.y - br * 1.35, br * 2.7, br * 2.7), false, gc)
+		# Annular Sun-aligned Nightside shadow ring over each sliced voxel planet (keeps inner core glowing!)
 		var sun_ang := (-bp).angle() if bp.length() > 1.0 else -PI * 0.5
 		var night_a := sun_ang + PI
 		var pts := PackedVector2Array()
-		pts.append(bp)
 		for si in range(25):
 			var a := night_a - PI * 0.52 + float(si) / 24.0 * PI * 1.04
-			pts.append(bp + Vector2(cos(a), sin(a)) * (br + 4.0))
-		draw_colored_polygon(pts, Color(0.01, 0.015, 0.038, 0.62))
+			pts.append(bp + Vector2(cos(a), sin(a)) * (br + 18.0))
+		for si in range(24, -1, -1):
+			var a := night_a - PI * 0.52 + float(si) / 24.0 * PI * 1.04
+			pts.append(bp + Vector2(cos(a), sin(a)) * (bcore + 10.0))
+		draw_colored_polygon(pts, Color(0.01, 0.015, 0.038, 0.56))
 		if z < 0.45:
 			var fs := int(clampf(14.0 * z_inv, 13.0, 520.0))
-			draw_string(font, bp + Vector2(-90.0 * z_inv, -br - 12.0 * z_inv), String(b["name"]), HORIZONTAL_ALIGNMENT_CENTER, int(180.0 * z_inv), fs, Color(0.92, 0.96, 1.0, 0.90))
+			var tag := String(b["name"]) + (" [敵中枢拠点]" if (bid == "astra" and not State.astra_liberated) else "")
+			var lcol := Color(1.0, 0.46, 0.52) if (bid == "astra" and not State.astra_liberated) else Color(0.92, 0.96, 1.0, 0.92)
+			draw_string(font, bp + Vector2(-110.0 * z_inv, -br - 16.0 * z_inv), tag, HORIZONTAL_ALIGNMENT_CENTER, int(220.0 * z_inv), fs, lcol)
 
 	# 2. World-Space Asteroids
 	if z >= 0.05:

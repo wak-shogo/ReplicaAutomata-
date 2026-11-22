@@ -6,7 +6,7 @@ extends CanvasLayer
 # ・軌道施設インスペクタ＆同一軌道ワンタップ配置対応
 # ・モバイル実機シングルタップ保護・2本指ピンチズーム・ツインスティック採掘完全維持
 
-enum Modal { NONE, CRAFT, TECH, COMMAND, DEPOT, GUIDE, BUILDING, ORBITAL }
+enum Modal { NONE, CRAFT, TECH, COMMAND, DEPOT, GUIDE, BUILDING, ORBITAL, ITEM_TREE }
 
 var planet: SphericalPlanet = null
 var grid: Node2D = null
@@ -19,6 +19,7 @@ var modal: int = Modal.NONE
 var craft_tab: int = 0
 var tech_sel: int = 1
 var tech_detail_open: bool = false
+var item_tree_sel: String = "circuit"
 var guide_tab: int = 0
 var depot_uid: int = -1
 var inspect_uid: int = -1
@@ -208,6 +209,10 @@ func _on_key(code: int) -> void:
 			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.GUIDE else Modal.GUIDE
 			Sfx.play("select")
+		KEY_I:
+			tech_detail_open = false
+			modal = Modal.NONE if modal == Modal.ITEM_TREE else Modal.ITEM_TREE
+			Sfx.play("select")
 		KEY_ESCAPE:
 			if tech_detail_open:
 				tech_detail_open = false
@@ -325,6 +330,13 @@ func _exec(h: Dictionary) -> void:
 			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.GUIDE else Modal.GUIDE
 			Sfx.play("select")
+		"open_item_tree":
+			tech_detail_open = false
+			modal = Modal.NONE if modal == Modal.ITEM_TREE else Modal.ITEM_TREE
+			Sfx.play("select")
+		"item_tree_pick":
+			item_tree_sel = String(h["v"])
+			Sfx.play("click")
 		"close":
 			modal = Modal.NONE; tech_detail_open = false; redrop_armed = false; Sfx.play("click")
 		"close_tech_detail":
@@ -521,13 +533,14 @@ func _on_draw() -> void:
 	_draw_bottom_dock(vp, portrait, font)
 
 	match modal:
-		Modal.CRAFT:    _draw_craft_modal(vp, portrait, font)
-		Modal.TECH:     _draw_tech_modal(vp, portrait, font)
-		Modal.COMMAND:  _draw_command_modal(vp, portrait, font)
-		Modal.DEPOT:    _draw_depot_modal(vp, font)
-		Modal.BUILDING: _draw_building_modal(vp, font)
-		Modal.ORBITAL:  _draw_orbital_modal(vp, font)
-		Modal.GUIDE:    _draw_guide_modal(vp, portrait, font)
+		Modal.CRAFT:     _draw_craft_modal(vp, portrait, font)
+		Modal.TECH:      _draw_tech_modal(vp, portrait, font)
+		Modal.COMMAND:   _draw_command_modal(vp, portrait, font)
+		Modal.DEPOT:     _draw_depot_modal(vp, font)
+		Modal.BUILDING:  _draw_building_modal(vp, font)
+		Modal.ORBITAL:   _draw_orbital_modal(vp, font)
+		Modal.GUIDE:     _draw_guide_modal(vp, portrait, font)
+		Modal.ITEM_TREE: _draw_item_tree_modal(vp, portrait, font)
 
 	if touch_ui_active and modal == Modal.NONE:
 		_draw_touch_controls(font)
@@ -561,11 +574,11 @@ func _draw_diegetic_arcs(vp: Vector2, font: Font) -> void:
 	elif player.velocity.length() > 24.0:
 		root_ctrl.draw_string(font, sp + Vector2(rad + 8, 5), "%dm/s" % int(player.velocity.length()), HORIZONTAL_ALIGNMENT_LEFT, 80, 13, Color(0.88, 0.95, 1.0, 0.90))
 
-# 2. 左上ステータス（大型アイコン＆くっきり数字＋昼夜・天体・軌道バッジ）
+# 2. 左上ステータス（大型アイコン＆くっきり数字＋昼夜・天体・汚染度・研究ポイント1,000達成ゲージ）
 func _draw_top_left_status(vp: Vector2, portrait: bool, font: Font) -> void:
 	var has_ref := (State.get_r("plate_fe") + State.get_r("wire_cu") + State.get_r("wafer_si") + State.get_r("circuit")) > 0
-	var w := 280.0 if not portrait else minf(vp.x - 118.0, 340.0)
-	var h := (144.0 if has_ref else 118.0)
+	var w := 284.0 if not portrait else minf(vp.x - 118.0, 340.0)
+	var h := (172.0 if has_ref else 146.0)
 	var r := Rect2(8, 8, w, h)
 	_panel(r, Color(0.04, 0.07, 0.12, 0.90), Color(0.28, 0.42, 0.58, 0.88), 1.6)
 
@@ -601,8 +614,8 @@ func _draw_top_left_status(vp: Vector2, portrait: bool, font: Font) -> void:
 	if d_ic: root_ctrl.draw_texture_rect(d_ic, Rect2(dx_ic, y2 + 1, 18, 18), false)
 	root_ctrl.draw_string(font, Vector2(dx_ic + 22, y2 + 16), "%d/8" % State.attached_drones, HORIZONTAL_ALIGNMENT_LEFT, 48, 13, Color(0.76, 0.94, 1.0))
 
-	# 昼夜＆天体＆軌道ステータス（太陽/月インジケータ描画）
-	y2 += 25.0
+	# 昼夜＆天体＆汚染度＆軌道ステータス
+	y2 += 24.0
 	var sun_v := planet.get_sunlight_world(player.position) if (planet and player) else 1.0
 	var is_day := sun_v > 0.35
 	var is_dusk := (not is_day) and sun_v > 0.05
@@ -616,15 +629,26 @@ func _draw_top_left_status(vp: Vector2, portrait: bool, font: Font) -> void:
 		root_ctrl.draw_circle(sc_p + Vector2(3.0, -2.0), 5.0, Color(0.04, 0.07, 0.12))
 	var dn_lbl := "昼" if is_day else ("夕" if is_dusk else "夜")
 	var b_name: String = String(player.get_active_body_name()) if player else "テラ-I"
+	var act_bid: String = String(player.active_body_id) if player else "terra"
+	var pol_v := State.get_pollution(act_bid)
+	var pol_tag := ("  汚染%d%%" % int(pol_v)) if pol_v >= 1.0 else ""
 	var orb_tag := " [軌道ロック]" if (player and player.on_rails) else ""
-	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 15), "%s  %s%s" % [dn_lbl, b_name, orb_tag], HORIZONTAL_ALIGNMENT_LEFT, int(w - 34), 13, Color(0.45, 0.98, 0.90) if (player and player.on_rails) else Color(1.0, 0.90, 0.56))
+	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 15), "%s %s%s%s" % [dn_lbl, b_name, pol_tag, orb_tag], HORIZONTAL_ALIGNMENT_LEFT, int(w - 34), 13, Color(1.0, 0.44, 0.56) if pol_v >= 12.0 else (Color(0.45, 0.98, 0.90) if (player and player.on_rails) else Color(1.0, 0.90, 0.56)))
+
+	# 研究ポイント（明確な日本語表記＋クリア目標1,000ptゲージ！）
+	y2 += 23.0
+	var rp_cur := State.get_r("sci_pack")
+	root_ctrl.draw_string(font, Vector2(r.position.x + 8, y2 + 13), "研究ポイント: %d / %d" % [rp_cur, State.RESEARCH_POINT_GOAL], HORIZONTAL_ALIGNMENT_LEFT, int(w - 16), 13, Color(0.42, 1.0, 0.78))
+	var rbar := Rect2(r.position.x + 8, y2 + 18, w - 16, 6)
+	root_ctrl.draw_rect(rbar, Color(0.08, 0.14, 0.18))
+	root_ctrl.draw_rect(Rect2(rbar.position, Vector2(rbar.size.x * clampf(float(rp_cur) / float(State.RESEARCH_POINT_GOAL), 0.0, 1.0), rbar.size.y)), Color(0.36, 0.98, 0.74))
 
 	# 艦隊ゲージ（プローブアイコン＋ゲージ）
-	y2 += 24.0
+	y2 += 26.0
 	var p_ic := ArtReg.get_icon("probe_stock")
 	if p_ic: root_ctrl.draw_texture_rect(p_ic, Rect2(r.position.x + 8, y2 - 1, 16, 16), false)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 12), "%d / 10,000" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(w - 36), 13, Color(1.0, 0.86, 0.42))
-	var br := Rect2(r.position.x + 8, y2 + 18, w - 16, 7)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 12), "艦隊 %d / 10,000" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(w - 36), 13, Color(1.0, 0.86, 0.42))
+	var br := Rect2(r.position.x + 8, y2 + 17, w - 16, 6)
 	root_ctrl.draw_rect(br, Color(0.10, 0.14, 0.22))
 	root_ctrl.draw_rect(Rect2(br.position, Vector2(br.size.x * clampf(float(State.swarm_fleet) / 10000.0, 0.0, 1.0), br.size.y)), Color(0.34, 0.86, 1.0))
 
@@ -673,10 +697,10 @@ func _draw_top_right_menu(vp: Vector2, portrait: bool, font: Font) -> void:
 	_add_hit(mr, "toggle_orbit" if State.orbit_view else "open_cmd")
 	y += 44.0
 
-	var gr := Rect2(x, y, bw, 32)
-	_panel(gr, Color(0.06, 0.14, 0.18, 0.92) if modal == Modal.GUIDE else Color(0.05, 0.08, 0.14, 0.88), Color(0.38, 0.88, 0.74), 1.4)
-	root_ctrl.draw_string(font, Vector2(gr.position.x, gr.position.y + 21), "図解ガイド", HORIZONTAL_ALIGNMENT_CENTER, bw, 13, Color(0.86, 0.98, 0.94))
-	_add_hit(gr, "open_guide")
+	var gr := Rect2(x, y, bw, 34)
+	_panel(gr, Color(0.06, 0.20, 0.24, 0.95) if modal == Modal.ITEM_TREE else Color(0.05, 0.09, 0.16, 0.90), Color(0.42, 0.96, 0.82), 1.6)
+	root_ctrl.draw_string(font, Vector2(gr.position.x, gr.position.y + 23), "レシピ図", HORIZONTAL_ALIGNMENT_CENTER, bw, 14, Color(0.86, 1.0, 0.94))
+	_add_hit(gr, "open_item_tree")
 
 # 4. ビジュアル重視のコンパクト目標バー（アイコン＋短い誘導のみ！）
 func _draw_tutorial_banner(vp: Vector2, portrait: bool, font: Font) -> void:
@@ -1160,7 +1184,11 @@ func _draw_guide_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	var mh := minf(vp.y - 40.0, 480.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
 	_panel(r, Color(0.04, 0.07, 0.13, 0.98), Color(0.38, 0.92, 0.78), 2.2)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "図解プレイガイド", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.46, 1.0, 0.82))
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "図解プレイガイド", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 210), 17, Color(0.46, 1.0, 0.82))
+	var itr_b := Rect2(r.end.x - 196, r.position.y + 8, 110, 30)
+	_panel(itr_b, Color(0.08, 0.24, 0.28, 0.95), Color(0.42, 0.96, 0.84), 1.5)
+	root_ctrl.draw_string(font, Vector2(itr_b.position.x, itr_b.position.y + 20), "レシピ図へ", HORIZONTAL_ALIGNMENT_CENTER, itr_b.size.x, 13, Color.WHITE)
+	_add_hit(itr_b, "open_item_tree")
 	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
 	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
@@ -1195,6 +1223,142 @@ func _draw_guide_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	_panel(tb, Color(0.08, 0.26, 0.20, 0.95) if State.tut_enabled else Color(0.16, 0.10, 0.12, 0.92), Color(0.42, 1.0, 0.74) if State.tut_enabled else Color(0.68, 0.42, 0.44), 1.5)
 	root_ctrl.draw_string(font, Vector2(tb.position.x, tb.position.y + 26), "上部ガイド表示: ON" if State.tut_enabled else "上部ガイド表示: OFF", HORIZONTAL_ALIGNMENT_CENTER, tb.size.x, 14, Color.WHITE)
 	_add_hit(tb, "tut_toggle")
+
+# 10b. 完全網羅アイテム＆施設レシピツリー画面 ([I] または右上「レシピ図」ボタン)
+func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
+	var mw := minf(vp.x - 12.0, 1120.0)
+	var mh := minf(vp.y - 24.0, 670.0)
+	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
+	_panel(r, Color(0.03, 0.05, 0.10, 0.98), Color(0.40, 0.96, 0.84), 2.2)
+
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "アイテム＆施設レシピツリー（カードをタップで経路ハイライト）", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 210), 16 if not portrait else 13, Color(0.48, 1.0, 0.86))
+	var gb := Rect2(r.end.x - 192, r.position.y + 8, 106, 30)
+	_panel(gb, Color(0.08, 0.20, 0.30, 0.95), Color(0.42, 0.90, 1.0), 1.5)
+	root_ctrl.draw_string(font, Vector2(gb.position.x, gb.position.y + 20), "操作ガイド", HORIZONTAL_ALIGNMENT_CENTER, gb.size.x, 13, Color.WHITE)
+	_add_hit(gb, "open_guide")
+
+	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
+	_add_hit(cr, "close")
+
+	# 列ヘッダ (Col 0..6)
+	var col_titles := ["1.惑星原石", "2.採掘/溶鉱炉", "3.基礎素材", "4.組立機/電力", "5.回路/合金", "6.高度/軌道局", "7.最終/研究pt"]
+	var gx := r.position.x + 10.0
+	var gy := r.position.y + 44.0
+	var gw := mw - 20.0
+	var detail_h := 94.0
+	var gh := mh - 48.0 - detail_h - 12.0
+	var col_w := gw / 7.0
+	var row_h := (gh - 24.0) / 7.0
+
+	for ci in range(7):
+		var cx := gx + float(ci) * col_w
+		root_ctrl.draw_string(font, Vector2(cx, gy + 14), col_titles[ci], HORIZONTAL_ALIGNMENT_CENTER, col_w, 10 if portrait else 12, Color(0.68, 0.88, 1.0))
+
+	var node_rects: Dictionary = {}
+	var node_map: Dictionary = {}
+	for nd in State.ITEM_TREE_NODES:
+		var nid := String(nd["id"])
+		node_map[nid] = nd
+		var c_idx := int(nd["col"])
+		var r_idx := int(nd["row"])
+		var cw_box := col_w - (6.0 if portrait else 12.0)
+		var ch_box := row_h - 5.0
+		var bx := gx + float(c_idx) * col_w + (col_w - cw_box) * 0.5
+		var by := gy + 22.0 + float(r_idx) * row_h
+		node_rects[nid] = Rect2(bx, by, cw_box, ch_box)
+
+	# 選択カードの上流チェーン（一番左の原石 → 精錬器 → 中間素材 → 組立機 → 選択アイテム！）を再帰的に全て収集
+	var up_nodes: Dictionary = {}
+	var q_up: Array[String] = [item_tree_sel]
+	while not q_up.is_empty():
+		var cur_id: String = String(q_up.pop_front())
+		var pars: Array = State.ITEM_UPSTREAM_PARENTS.get(cur_id, [])
+		for p_v in pars:
+			var pid := String(p_v)
+			if not up_nodes.has(pid):
+				up_nodes[pid] = true
+				q_up.append(pid)
+
+	var down_nodes: Dictionary = {}
+	for ed in State.ITEM_TREE_EDGES:
+		if String(ed[0]) == item_tree_sel:
+			down_nodes[String(ed[1])] = true
+
+	# 1) 背景の非アクティブ接続エッジを先に描画
+	for ed in State.ITEM_TREE_EDGES:
+		var u := String(ed[0]); var v := String(ed[1])
+		if not node_rects.has(u) or not node_rects.has(v): continue
+		var is_up_edge := (u == item_tree_sel or up_nodes.has(u)) and (v == item_tree_sel or up_nodes.has(v))
+		var is_out_edge := (u == item_tree_sel and down_nodes.has(v))
+		if is_up_edge or is_out_edge: continue
+		var ru: Rect2 = node_rects[u]; var rv: Rect2 = node_rects[v]
+		var p1 := Vector2(ru.end.x, ru.get_center().y)
+		var p2 := Vector2(rv.position.x, rv.get_center().y)
+		var mid_x := (p1.x + p2.x) * 0.5
+		root_ctrl.draw_polyline(PackedVector2Array([p1, Vector2(mid_x, p1.y), Vector2(mid_x, p2.y), p2]), Color(0.28, 0.40, 0.54, 0.28), 1.2)
+
+	# 2) 全資源・全施設カード描画
+	for nd in State.ITEM_TREE_NODES:
+		var nid := String(nd["id"])
+		var nr: Rect2 = node_rects[nid]
+		var is_sel := (nid == item_tree_sel)
+		var is_in := up_nodes.has(nid)
+		var is_out := down_nodes.has(nid)
+		var is_fac := String(nd["kind"]) == "fac"
+		var bg := Color(0.16, 0.34, 0.46, 0.99) if is_sel else (Color(0.09, 0.24, 0.34, 0.98) if is_in else (Color(0.08, 0.18, 0.26, 0.95) if is_fac else Color(0.06, 0.10, 0.17, 0.94)))
+		var bd := Color(1.0, 0.92, 0.36) if is_sel else (Color(0.32, 0.98, 1.0) if is_in else (Color(1.0, 0.78, 0.28) if is_out else (Color(0.34, 0.62, 0.82, 0.75) if is_fac else Color(0.24, 0.36, 0.50, 0.75))))
+		_panel(nr, bg, bd, 2.5 if (is_sel or is_in or is_out) else 1.2)
+
+		var it := _get_visual_tex(String(nd["icon"]))
+		var isz := clampf(nr.size.y - 10.0, 16.0, 28.0)
+		if it:
+			root_ctrl.draw_texture_rect(it, Rect2(nr.position.x + 5, nr.position.y + (nr.size.y - isz) * 0.5, isz, isz), false)
+		var tx := nr.position.x + isz + 9.0
+		var tw_c := int(maxf(20.0, nr.size.x - isz - 12.0))
+		root_ctrl.draw_string(font, Vector2(tx, nr.position.y + nr.size.y * 0.46), String(nd["name"]), HORIZONTAL_ALIGNMENT_LEFT, tw_c, 10 if portrait else 12, Color.WHITE)
+		root_ctrl.draw_string(font, Vector2(tx, nr.position.y + nr.size.y * 0.84), String(nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, tw_c, 9 if portrait else 10, Color(0.68, 0.88, 1.0) if is_fac else Color(0.55, 0.98, 0.80))
+		_add_hit(nr, "item_tree_pick", nid)
+
+	# 2b) アクティブな上流チェーン（青線: 原石→溶鉱炉→鉄板/銅線→組立機→完成品）＆下流エッジ（黄線）を最前面にくっきり描画！
+	for ed in State.ITEM_TREE_EDGES:
+		var u := String(ed[0]); var v := String(ed[1])
+		if not node_rects.has(u) or not node_rects.has(v): continue
+		var is_up_edge := (u == item_tree_sel or up_nodes.has(u)) and (v == item_tree_sel or up_nodes.has(v))
+		var is_out_edge := (u == item_tree_sel and down_nodes.has(v))
+		if not is_up_edge and not is_out_edge: continue
+		var ru: Rect2 = node_rects[u]; var rv: Rect2 = node_rects[v]
+		var p1 := Vector2(ru.end.x, ru.get_center().y)
+		var p2 := Vector2(rv.position.x, rv.get_center().y)
+		var lcol := Color(0.32, 0.98, 1.0, 0.98) if is_up_edge else Color(1.0, 0.84, 0.28, 0.96)
+		var mid_x := (p1.x + p2.x) * 0.5
+		root_ctrl.draw_polyline(PackedVector2Array([p1, Vector2(mid_x, p1.y), Vector2(mid_x, p2.y), p2]), lcol, 3.0)
+		root_ctrl.draw_polygon(PackedVector2Array([p2, p2 + Vector2(-8, -5), p2 + Vector2(-8, 5)]), PackedColorArray([lcol]))
+
+	# 3) 下部：選択カードの詳細工程＆必要材料チェーン表示
+	var dr := Rect2(r.position.x + 12, r.end.y - detail_h - 8, mw - 24, detail_h)
+	_panel(dr, Color(0.05, 0.09, 0.16, 0.98), Color(0.42, 0.94, 1.0), 1.8)
+	var sel_nd: Dictionary = node_map.get(item_tree_sel, State.ITEM_TREE_NODES[0])
+	var sit := _get_visual_tex(String(sel_nd["icon"]))
+	if sit:
+		root_ctrl.draw_texture_rect(sit, Rect2(dr.position.x + 14, dr.position.y + 18, 56, 56), false)
+
+	var in_names: Array[String] = []
+	var out_names: Array[String] = []
+	for ed in State.ITEM_TREE_EDGES:
+		if String(ed[1]) == item_tree_sel and node_map.has(String(ed[0])):
+			in_names.append(String(node_map[String(ed[0])]["name"]))
+		if String(ed[0]) == item_tree_sel and node_map.has(String(ed[1])):
+			out_names.append(String(node_map[String(ed[1])]["name"]))
+
+	var dtx := dr.position.x + 84.0
+	var dtw := int(dr.size.x - 96.0)
+	var kind_tag := "【施設・装備】" if String(sel_nd["kind"]) == "fac" else ("【資源・加工品】（現在の所持: %d）" % State.get_r(item_tree_sel))
+	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 26), "%s  %s" % [String(sel_nd["name"]), kind_tag], HORIZONTAL_ALIGNMENT_LEFT, dtw, 16, Color(1.0, 0.90, 0.42))
+	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 52), "製造・入手工程:  " + String(sel_nd["recipe"]), HORIZONTAL_ALIGNMENT_LEFT, dtw, 14, Color(0.92, 0.98, 1.0))
+	var chain_s := ("入力元(青線): " + ("・".join(in_names) if not in_names.is_empty() else "原石採掘")) + "    →    出力・用途先(黄線): " + ("・".join(out_names) if not out_names.is_empty() else "最終目標")
+	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 78), chain_s, HORIZONTAL_ALIGNMENT_LEFT, dtw, 13, Color(0.46, 0.98, 0.84))
 
 # 11. カーゴデポ（倉庫）モーダル
 func _draw_depot_modal(vp: Vector2, font: Font) -> void:
@@ -1267,31 +1431,36 @@ func _draw_building_modal(vp: Vector2, font: Font) -> void:
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var y := r.position.y + 58.0
-	var st_r := Rect2(r.position.x + 14, y, mw - 28, 66)
+	var y := r.position.y + 56.0
+	var st_r := Rect2(r.position.x + 14, y, mw - 28, 68)
 	_panel(st_r, Color(0.06, 0.10, 0.17, 0.95), Color(0.28, 0.44, 0.62), 1.4)
 	var pwr := float(snap["pwr_ratio"])
 	var p_col := Color(0.45, 0.98, 0.72)
+	var hp_s := "  [耐久HP %d/%d]" % [int(snap.get("hp", 150.0)), int(snap.get("max_hp", 150.0))]
 	var p_txt := ""
 	if bool(snap["is_power"]):
 		if bid == "battery":
-			p_txt = "蓄電 %d / %d kJ" % [int(snap["battery_kj"]), int(snap["battery_cap"])]
+			p_txt = "蓄電 %d / %d kJ%s" % [int(snap["battery_kj"]), int(snap["battery_cap"]), hp_s]
 		elif float(snap["gen"]) > 0.1:
-			p_txt = "発電 %.0fW（%s）" % [float(snap["gen"]), "通電" if bool(snap["wired"]) else "未配線"]
+			p_txt = "発電 %.0fW（%s）%s" % [float(snap["gen"]), "通電" if bool(snap["wired"]) else "未配線", hp_s]
 		else:
-			p_txt = "テスラ配電: %s" % ("稼働中" if pwr > 0.1 else "未通電")
+			p_txt = "テスラ配電: %s%s" % ["稼働中" if pwr > 0.1 else "未通電", hp_s]
 			if pwr <= 0.1: p_col = Color(1.0, 0.68, 0.36)
 	else:
 		if float(snap["use"]) <= 0.01 or pwr > 0.1:
-			p_txt = "稼働中（%d%%）%s" % [int(round(pwr * 100.0)), "  ※満杯" if bool(snap["blocked"]) else ""]
+			p_txt = "稼働中（%d%%）%s%s" % [int(round(pwr * 100.0)), hp_s, " ※満杯" if bool(snap["blocked"]) else ""]
 		else:
-			p_txt = "電力不足（テスラ範囲外）"
+			p_txt = "電力不足（テスラ範囲外）" + hp_s
 			p_col = Color(1.0, 0.46, 0.40)
-	root_ctrl.draw_string(font, Vector2(st_r.position.x + 12, st_r.position.y + 26), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 24), 15, p_col)
+	root_ctrl.draw_string(font, Vector2(st_r.position.x + 12, st_r.position.y + 24), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 24), 14, p_col)
 
-	if bool(snap.get("has_prog", false)):
+	if bid == "assembler":
+		var rec_k := String(snap["recipe"])
+		var rdata: Dictionary = State.ASSEMBLER_RECIPES.get(rec_k, State.ASSEMBLER_RECIPES["circuit"])
+		_draw_recipe_visual(Rect2(st_r.position.x + 10, st_r.position.y + 30, st_r.size.x - 20, 32), rdata["in"], String(rdata["out"]), int(rdata["qty"]), font)
+	elif bool(snap.get("has_prog", false)):
 		var pg := clampf(float(snap.get("prog", 0.0)), 0.0, 1.0)
-		var pgr := Rect2(st_r.position.x + 12, st_r.position.y + 38, st_r.size.x - 24, 16)
+		var pgr := Rect2(st_r.position.x + 12, st_r.position.y + 40, st_r.size.x - 24, 16)
 		root_ctrl.draw_rect(pgr, Color(0.08, 0.14, 0.22))
 		root_ctrl.draw_rect(Rect2(pgr.position, Vector2(pgr.size.x * pg, pgr.size.y)), Color(1.0, 0.72, 0.22) if bid == "smelter" else Color(0.36, 0.96, 0.74))
 		root_ctrl.draw_rect(pgr, Color(0.38, 0.56, 0.72), false, 1.2)

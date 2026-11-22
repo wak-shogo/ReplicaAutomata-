@@ -1,6 +1,6 @@
 extends Node
 
-# STAR REPLICA: AUTOMA - 状態管理・製造キュー・所持インベントリ・研究ツリー・インタラクティブチュートリアル
+# STAR REPLICA: AUTOMA - 状態管理・惑星別資源・アイテムツリー・研究ポイント勝利・汚染度＆防衛
 
 signal resource_changed(id: String, amt: int)
 signal tech_unlocked(id: String)
@@ -13,6 +13,7 @@ signal log_added(msg: String, kind: String)
 enum Doctrine { HARVEST, REPLICATE, DEFEND, ASSAULT }
 
 const SWARM_MAX: int = 10000
+const RESEARCH_POINT_GOAL: int = 1000
 const MAX_DRONES: int = 8
 const DRONE_COST: Dictionary = {"fe": 10, "cu": 6}
 const DRONE_CRAFT_TIME: float = 3.5
@@ -22,34 +23,75 @@ const RES_NAMES: Dictionary = {
 	"cu": "銅",
 	"si": "ケイ素",
 	"ti": "チタン",
-	"ice": "氷",
+	"ignis_ore": "紅蓮鉱",
+	"ice": "永久氷晶",
+	"astra_shard": "アストラ結晶",
 	"plate_fe": "鉄板",
 	"wire_cu": "銅線",
 	"wafer_si": "基板",
+	"alloy": "チタン合金",
 	"circuit": "回路",
-	"alloy": "合金",
-	"sci_pack": "研究パック",
-	"probe_stock": "プローブ",
+	"plasma_cell": "プラズマセル",
+	"cryo_rod": "超伝導ロッド",
 	"quantum_core": "量子コア",
-	"antimatter": "反物質セル",
+	"antimatter": "反物質コア",
 	"dyson_panel": "ダイソン板",
+	"sci_pack": "研究ポイント",
+	"probe_stock": "プローブ",
+}
+
+const RES_PLANET_ORIGIN: Dictionary = {
+	"fe": "テラ-I (初期惑星)",
+	"cu": "テラ-I (初期惑星)",
+	"si": "テラ-I (初期惑星)",
+	"ti": "衛星ルナ (月面・洞窟)",
+	"ignis_ore": "イグニス-I (内周灼熱惑星)",
+	"ice": "クライオ-IV (外周氷結惑星)",
+	"astra_shard": "アストラ-V (最外周・敵中枢惑星)",
+}
+
+# 各施設のレシピ定義（自動搬送の必要量計算＆アイテムツリー図解の単一ソース）
+const SMELTER_RECIPES: Dictionary = {
+	"plate_fe": {"in": {"fe": 2}, "out": "plate_fe", "qty": 1, "time": 1.8},
+	"wire_cu":  {"in": {"cu": 2}, "out": "wire_cu",  "qty": 1, "time": 1.8},
+	"wafer_si": {"in": {"si": 2}, "out": "wafer_si", "qty": 1, "time": 1.8},
+}
+
+const ASSEMBLER_RECIPES: Dictionary = {
+	"circuit":     {"in": {"plate_fe": 1, "wire_cu": 1},   "out": "circuit",     "qty": 1,  "time": 2.0},
+	"alloy":       {"in": {"plate_fe": 2, "ti": 1},        "out": "alloy",       "qty": 1,  "time": 2.1},
+	"plasma_cell": {"in": {"ignis_ore": 2, "alloy": 1},    "out": "plasma_cell", "qty": 1,  "time": 2.2},
+	"cryo_rod":    {"in": {"ice": 2, "wafer_si": 1},       "out": "cryo_rod",    "qty": 1,  "time": 2.2},
+	"sci_pack":    {"in": {"plate_fe": 1, "circuit": 1},   "out": "sci_pack",    "qty": 20, "time": 2.1},
+}
+
+const PRINTER_RECIPE: Dictionary = {
+	"in": {"plate_fe": 2, "circuit": 1}, "out": "probe_stock", "qty": 1, "time": 2.4
+}
+
+const ORB_STATION_RECIPES: Dictionary = {
+	"quantum_core": {"in": {"si": 2, "cu": 2},             "out": "quantum_core", "qty": 1,  "time": 2.8},
+	"dyson_panel":  {"in": {"fe": 2, "si": 2},             "out": "dyson_panel",  "qty": 1,  "time": 3.0},
+	"antimatter":   {"in": {"quantum_core": 1, "fe": 2},   "out": "antimatter",   "qty": 1,  "time": 3.2},
+	"probe_stock":  {"in": {"fe": 2, "quantum_core": 1},   "out": "probe_stock",  "qty": 6,  "time": 3.0},
+	"sci_pack":     {"in": {"quantum_core": 1, "ti": 1},   "out": "sci_pack",     "qty": 60, "time": 2.8},
 }
 
 const DOCTRINE_NAMES: Array[String] = ["収穫", "複製", "防衛", "強襲"]
 const DOCTRINE_DESCS: Array[String] = [
 	"軌道上の小惑星から自動で鉱石を回収します。",
 	"艦隊が自己複製し、時間経過で機体数を増やします。",
-	"襲来する敵襲撃機を自動迎撃します。",
-	"上空の汚染軌道要塞へ一斉攻撃を行います。",
+	"各惑星の汚染やマップ外から襲来する敵機を自動迎撃します。",
+	"最外周の敵拠点惑星アストラ-Vおよび軌道要塞を制圧攻撃します。",
 ]
 
 var res: Dictionary = {}
-var bld_stock: Dictionary = {} # クラフト完了して所持している設置用装置の数
-var craft_queue: Array[Dictionary] = [] # {"kind": "building"|"drone"|"propulsion", "id": String, "name": String, "time_left": float, "total_time": float, "cost": Dictionary}
+var bld_stock: Dictionary = {}
+var craft_queue: Array[Dictionary] = []
 
 var unlocked_techs: Array[String] = ["seed_core"]
 var attached_drones: int = 0
-var propulsion_tier: int = 0 # 0: シード・イオン, 1: 軌道ブースター, 2: 深宇宙クライオ, 3: スウォーム旗艦
+var propulsion_tier: int = 0
 
 var hp: float = 100.0
 var max_hp: float = 100.0
@@ -64,7 +106,14 @@ var doctrine: int = Doctrine.HARVEST
 var boss_hp: float = 3500.0
 var boss_max_hp: float = 3500.0
 var boss_dead: bool = false
+var astra_liberated: bool = false
+var astra_bastions_left: int = 6
 var game_won: bool = false
+
+# 惑星ごとの環境汚染度（初期惑星 terra は常に 0、他惑星で工場稼働すると上昇→敵襲撃を誘発！）
+var planet_pollution: Dictionary = {
+	"terra": 0.0, "luna": 0.0, "ignis": 0.0, "cryo": 0.0, "astra": 0.0
+}
 
 # 電力網テレメトリ
 var pwr_prod: float = 0.0
@@ -87,7 +136,7 @@ var logs: Array[Dictionary] = []
 # インタラクティブ・チュートリアル状態
 var tut_enabled: bool = true
 var tut_step: int = 0
-var tut_placed: Dictionary = {} # bid -> count
+var tut_placed: Dictionary = {}
 var tut_opened_depot: bool = false
 var tut_opened_orbit: bool = false
 
@@ -98,19 +147,19 @@ const PROPULSION_TIERS: Dictionary = {
 		"desc": "初期装備。自動充電イオンで地表や洞窟内を自由に移動できます。",
 	},
 	1: {
-		"name": "軌道ブースター", "thrust": 430.0, "ion": 450.0, "max_spd": 320.0,
-		"fuel": 190.0, "req": "smelting_booster", "cost": {"fe": 16, "cu": 8, "plate_fe": 4}, "craft_time": 5.0,
-		"desc": "大気圏を突破して宇宙軌道へ進入できる化学推進ブースター。",
+		"name": "軌道ブースター", "thrust": 460.0, "ion": 460.0, "max_spd": 360.0,
+		"fuel": 220.0, "req": "smelting_booster", "cost": {"fe": 16, "cu": 8, "plate_fe": 4}, "craft_time": 4.5,
+		"desc": "テラ-Iの資源のみで製造可能！宇宙軌道と衛星ルナへ進出しチタンを採掘しよう。",
 	},
 	2: {
-		"name": "深宇宙クライオ推進", "thrust": 720.0, "ion": 480.0, "max_spd": 560.0,
-		"fuel": 320.0, "req": "deep_space", "cost": {"plate_fe": 10, "wire_cu": 8, "wafer_si": 4, "circuit": 4}, "craft_time": 6.5,
-		"desc": "衛星や小惑星帯へ高速航行できる高効率クライオ推進機関。",
+		"name": "深宇宙クライオ推進", "thrust": 760.0, "ion": 500.0, "max_spd": 600.0,
+		"fuel": 340.0, "req": "deep_space", "cost": {"plate_fe": 8, "wire_cu": 6, "circuit": 4, "ti": 6}, "craft_time": 5.5,
+		"desc": "衛星ルナのチタンを使用！惑星イグニス-Iやクライオ-IVへ高速惑星間航行。",
 	},
 	3: {
-		"name": "スウォーム旗艦ドライブ", "thrust": 1200.0, "ion": 540.0, "max_spd": 900.0,
-		"fuel": 480.0, "req": "macro_swarm", "cost": {"plate_fe": 16, "circuit": 10, "alloy": 6, "ti": 12}, "craft_time": 8.0,
-		"desc": "最終決戦用の超高出力ドライブ。星系全域を自在に制圧できます。",
+		"name": "スウォーム旗艦ドライブ", "thrust": 1250.0, "ion": 560.0, "max_spd": 940.0,
+		"fuel": 520.0, "req": "macro_swarm", "cost": {"alloy": 6, "circuit": 8, "plasma_cell": 2}, "craft_time": 6.5,
+		"desc": "イグニス-Iのプラズマセルを搭載した最高出力ドライブ。",
 	},
 }
 
@@ -127,7 +176,7 @@ const TECHS: Dictionary = {
 		"unlock_keys": ["seed_core", "fab_drone"],
 		"flow_keys": ["ore_fe", "seed_core", "fab_drone"],
 		"summary": "ドローン製造で採掘＆製造を高速化",
-		"flow": "採掘 ➔ ドローン製造 ➔ 自動合体",
+		"flow": "採掘 → ドローン製造 → 自動合体",
 	},
 	"power_grid": {
 		"name": "電力とテスラ", "col": 1, "row": 0, "req": ["seed_core"],
@@ -137,17 +186,17 @@ const TECHS: Dictionary = {
 		"unlock_keys": ["solar", "tesla", "battery"],
 		"flow_keys": ["solar", "battery", "tesla"],
 		"summary": "発電機と蓄電池を電線でテスラへ接続（夜間対策）",
-		"flow": "ソーラー＋蓄電池 ➔ 電線 ➔ テスラ",
+		"flow": "ソーラー＋蓄電池 → 電線 → テスラ",
 	},
 	"cave_logistics": {
 		"name": "洞窟物流ライン", "col": 1, "row": 2, "req": ["power_grid"],
 		"cost": {"fe": 16, "cu": 8},
 		"icon": "drill",
-		"unlocks": ["採掘ドリル", "搬送ライン", "倉庫"],
+		"unlocks": ["採掘ドリル", "自動配線コンベア", "倉庫"],
 		"unlock_keys": ["drill", "depot"],
 		"flow_keys": ["drill", "depot"],
-		"summary": "硬質鉱床にドリル設置＆自由結束で自動搬送",
-		"flow": "硬質鉱床ドリル ➔ 搬送ライン ➔ 倉庫",
+		"summary": "硬質鉱床にドリル設置＆他ラインと交差しない自動配線で搬送",
+		"flow": "硬質鉱床ドリル → 自動配線コンベア → 倉庫",
 	},
 	"smelting_booster": {
 		"name": "精錬と軌道進出", "col": 2, "row": 1, "req": ["cave_logistics"],
@@ -155,49 +204,49 @@ const TECHS: Dictionary = {
 		"icon": "orbital_booster",
 		"unlocks": ["溶鉱炉", "軌道ブースター", "軌道発電衛星", "軌道採掘レーザー"],
 		"unlock_keys": ["smelter", "orbital_booster", "orb_power", "orb_laser"],
-		"flow_keys": ["smelter", "orbital_booster", "orb_power", "orb_laser"],
-		"summary": "宇宙軌道へ進出！同一軌道上に発電衛星＆採掘レーザー配置",
-		"flow": "溶鉱炉 ➔ ブースター ➔ 軌道送電＆軌道採掘",
+		"flow_keys": ["smelter", "orbital_booster", "moon_luna", "orb_laser"],
+		"summary": "ブースターで衛星ルナへ飛びチタンを採掘！軌道施設を建造可能に",
+		"flow": "溶鉱炉 → ブースター → 衛星ルナでチタン採掘 → 軌道施設",
 	},
 	"circuits_geo": {
-		"name": "電子回路と地熱", "col": 3, "row": 0, "req": ["smelting_booster"],
+		"name": "電子回路と防衛", "col": 3, "row": 0, "req": ["smelting_booster"],
 		"cost": {"plate_fe": 6, "wire_cu": 4, "si": 8},
 		"icon": "assembler",
 		"unlocks": ["自動組立機", "地熱発電所", "レーザー砲台"],
 		"unlock_keys": ["assembler", "geothermal", "turret"],
-		"flow_keys": ["smelter", "assembler", "geothermal"],
-		"summary": "回路・合金量産＆昼夜無休の地熱発電",
-		"flow": "溶鉱炉 ➔ 組立機 ＋ 地熱発電",
+		"flow_keys": ["smelter", "assembler", "turret"],
+		"summary": "組立機で回路・合金・研究ポイント生産！他惑星の汚染襲撃を砲台で防衛",
+		"flow": "溶鉱炉 → 組立機(回路/研究ポイント) ＋ レーザー砲台",
 	},
 	"deep_space": {
-		"name": "深宇宙と軌道工場", "col": 3, "row": 2, "req": ["circuits_geo"],
+		"name": "惑星開拓と軌道工場", "col": 3, "row": 2, "req": ["circuits_geo"],
 		"cost": {"plate_fe": 8, "wire_cu": 6, "wafer_si": 4, "circuit": 4},
 		"icon": "orb_station",
 		"unlocks": ["クライオ推進", "軌道回収モジュール", "軌道クラフト局"],
-		"unlock_keys": ["orb_collector", "orb_station", "quantum_core", "antimatter"],
+		"unlock_keys": ["orb_collector", "orb_station", "quantum_core", "plasma_cell"],
 		"flow_keys": ["orb_laser", "orb_collector", "orb_station", "quantum_core"],
-		"summary": "軌道採掘で舞い上がる資源を回収し、軌道上で量子コア・反物質を製造！",
-		"flow": "軌道レーザー ➔ 軌道回収 ➔ 軌道クラフト局",
+		"summary": "イグニス-Iの紅蓮鉱・クライオ-IVの永久氷晶を開拓し軌道工場で量子コア製造",
+		"flow": "軌道採掘 → 軌道回収 → 軌道クラフト局 → 量子コア/研究ポイント",
 	},
 	"macro_swarm": {
 		"name": "マクロ艦隊量産", "col": 4, "row": 1, "req": ["deep_space"],
-		"cost": {"plate_fe": 12, "circuit": 8, "ti": 10},
+		"cost": {"plate_fe": 12, "circuit": 8, "ti": 8},
 		"icon": "mass_driver",
 		"unlocks": ["3Dプリンタ", "マスドライバー", "旗艦ドライブ"],
 		"unlock_keys": ["gantry_printer", "mass_driver", "probe_stock"],
 		"flow_keys": ["gantry_printer", "mass_driver", "probe_stock"],
-		"summary": "10,000機レプリカ艦隊を宇宙へ連続射出！",
-		"flow": "3Dプリンタ ➔ 射出機 ➔ 10,000機艦隊",
+		"summary": "艦隊を連続射出し、最外周の敵拠点惑星アストラ-Vを強襲制圧！",
+		"flow": "3Dプリンタ → 射出機 → 艦隊強襲でアストラ-V解放",
 	},
 	"megastructures": {
 		"name": "巨大構造物", "col": 5, "row": 1, "req": ["macro_swarm"],
-		"cost": {"alloy": 8, "circuit": 12, "ti": 16},
+		"cost": {"alloy": 6, "circuit": 10, "ti": 12},
 		"icon": "dyson_panel",
 		"unlocks": ["軌道エレベーター", "ダイソンリング", "軌道要塞", "ワープゲート"],
-		"unlock_keys": ["dyson_panel", "antimatter", "enemy_station"],
-		"flow_keys": ["orb_station", "dyson_panel", "enemy_station"],
-		"summary": "星系メガ構造物建造＆汚染軌道要塞を撃破！",
-		"flow": "艦隊強襲 ＋ ワープゲート ➔ 完全勝利",
+		"unlock_keys": ["dyson_panel", "antimatter", "sci_pack"],
+		"flow_keys": ["orb_station", "antimatter", "sci_pack"],
+		"summary": "研究ポイント1,000pt達成、またはワープゲート建造で完全クリア！",
+		"flow": "研究ポイント 1,000 / 1,000 達成 → 完全勝利",
 	},
 }
 
@@ -209,155 +258,266 @@ const CRAFT_TABS: Array[Dictionary] = [
 	{"id": "orbital", "label": "軌道施設",   "items": ["orb_power", "orb_laser", "orb_collector", "orb_station"]},
 ]
 
+# 軌道モジュールは衛星ルナ等で手に入るチタン(ti)またはチタン合金(alloy)を要求 → 宇宙進出の明確なモチベーション！
 const BLD: Dictionary = {
 	"solar": {
 		"name": "ソーラーパネル", "short": "ソーラー", "tex": "solar", "req": "power_grid",
-		"cost": {"fe": 10, "cu": 6}, "craft_time": 2.5, "gen": 44.0, "use": 0.0, "w": 74, "h": 54,
-		"desc": "太陽光で発電(44W)。電線でテスラリレーへ繋いで供給します。",
+		"cost": {"fe": 10, "cu": 6}, "craft_time": 2.5, "gen": 44.0, "use": 0.0, "w": 74, "h": 54, "hp": 110.0,
+		"desc": "昼間に太陽光発電(44W)。電線でテスラリレーへ接続。",
 	},
 	"tesla": {
 		"name": "テスラリレー", "short": "テスラ", "tex": "tesla", "req": "power_grid",
-		"cost": {"fe": 10, "cu": 8}, "craft_time": 3.0, "gen": 0.0, "use": 0.0, "w": 54, "h": 78,
-		"desc": "電線で受けた電力を周囲の電力ドーム内の機械へ無線配電します。",
+		"cost": {"fe": 10, "cu": 8}, "craft_time": 3.0, "gen": 0.0, "use": 0.0, "w": 54, "h": 78, "hp": 140.0,
+		"desc": "電線で受けた電力を周囲ドーム内の機械へ無線配電＆施設自動修復。",
 	},
 	"battery": {
 		"name": "夜間バッテリー", "short": "蓄電池", "tex": "battery", "req": "power_grid",
-		"cost": {"fe": 12, "cu": 8, "si": 4}, "craft_time": 3.5, "gen": 0.0, "use": 0.0, "w": 58, "h": 56,
-		"desc": "余剰電力を18,000kJ蓄電し、夜間も工場を止めずに稼働させます。",
+		"cost": {"fe": 12, "cu": 8, "si": 4}, "craft_time": 3.5, "gen": 0.0, "use": 0.0, "w": 58, "h": 56, "hp": 150.0,
+		"desc": "余剰電力を蓄電し、夜間も工場を止めずに稼働。",
 	},
 	"geothermal": {
 		"name": "地熱発電所", "short": "地熱", "tex": "geothermal", "req": "circuits_geo",
-		"cost": {"plate_fe": 8, "wire_cu": 6, "si": 6}, "craft_time": 4.5, "gen": 135.0, "use": 0.0, "w": 78, "h": 74,
-		"desc": "昼夜を問わず135Wを安定発電する大型発電機。電線で接続して使用。",
+		"cost": {"plate_fe": 8, "wire_cu": 6, "si": 6}, "craft_time": 4.5, "gen": 135.0, "use": 0.0, "w": 78, "h": 74, "hp": 180.0,
+		"desc": "昼夜を問わず135Wを安定発電する大型発電機。",
 	},
 	"turret": {
 		"name": "レーザー砲台", "short": "砲台", "tex": "turret", "req": "circuits_geo",
-		"cost": {"plate_fe": 8, "wire_cu": 6}, "craft_time": 3.5, "gen": 0.0, "use": 14.0, "w": 58, "h": 58,
-		"desc": "襲来する敵機を自動迎撃します(消費14W)。",
+		"cost": {"plate_fe": 6, "wire_cu": 6}, "craft_time": 3.0, "gen": 0.0, "use": 12.0, "w": 58, "h": 58, "hp": 260.0,
+		"desc": "汚染で引き寄せられた敵機やマップ外襲撃機を自動迎撃(12W)。",
 	},
 	"drill": {
 		"name": "採掘ドリル", "short": "ドリル", "tex": "drill", "req": "cave_logistics",
-		"cost": {"fe": 12, "cu": 6}, "craft_time": 3.0, "gen": 0.0, "use": 12.0, "w": 58, "h": 78,
-		"desc": "【硬質鉱床】専用(12W)。手で掘れない永久鉱床から自動採掘します。",
+		"cost": {"fe": 12, "cu": 6}, "craft_time": 3.0, "gen": 0.0, "use": 12.0, "w": 58, "h": 78, "hp": 140.0,
+		"desc": "各惑星の【硬質鉱床】専用(12W)。固有鉱石を自動採掘。",
 	},
 	"belt": {
 		"name": "コンベアベルト", "short": "ベルト", "tex": "belt", "req": "cave_logistics",
-		"cost": {"fe": 2}, "craft_time": 1.2, "gen": 0.0, "use": 1.0, "w": 48, "h": 18,
-		"desc": "旧ベルト（現在は自由搬送ラインに統合）。",
+		"cost": {"fe": 2}, "craft_time": 1.2, "gen": 0.0, "use": 1.0, "w": 48, "h": 18, "hp": 60.0,
+		"desc": "自動配線コンベアに統合。",
 	},
 	"lift": {
 		"name": "縦リフト", "short": "リフト", "tex": "lift", "req": "cave_logistics",
-		"cost": {"fe": 3}, "craft_time": 1.5, "gen": 0.0, "use": 1.0, "w": 24, "h": 54,
-		"desc": "旧リフト（現在は自由搬送ラインに統合）。",
+		"cost": {"fe": 3}, "craft_time": 1.5, "gen": 0.0, "use": 1.0, "w": 24, "h": 54, "hp": 60.0,
+		"desc": "自動配線コンベアに統合。",
 	},
 	"depot": {
 		"name": "カーゴデポ", "short": "倉庫", "tex": "depot", "req": "cave_logistics",
-		"cost": {"fe": 16, "cu": 6}, "craft_time": 3.5, "gen": 0.0, "use": 0.0, "w": 100, "h": 60,
-		"desc": "資源を240個保管。タップして各搬送ライン毎の出力フィルタを設定！",
+		"cost": {"fe": 16, "cu": 6}, "craft_time": 3.5, "gen": 0.0, "use": 0.0, "w": 100, "h": 60, "hp": 200.0,
+		"desc": "資源240個保管。接続先のレシピに応じて必要材料だけを賢く自動供給！",
 	},
 	"smelter": {
 		"name": "溶鉱炉", "short": "溶鉱炉", "tex": "smelter", "req": "smelting_booster",
-		"cost": {"fe": 18, "cu": 10}, "craft_time": 4.0, "gen": 0.0, "use": 18.0, "w": 88, "h": 88,
-		"desc": "鉄→鉄板、銅→銅線、ケイ素→基板へ精錬(18W)。タップで手動投入も可。",
+		"cost": {"fe": 18, "cu": 10}, "craft_time": 4.0, "gen": 0.0, "use": 18.0, "w": 88, "h": 88, "hp": 170.0,
+		"desc": "鉄→鉄板、銅→銅線、ケイ素→基板へ精錬(18W)。",
 	},
 	"assembler": {
 		"name": "自動組立機", "short": "組立機", "tex": "assembler", "req": "circuits_geo",
-		"cost": {"plate_fe": 8, "wire_cu": 6, "si": 4}, "craft_time": 4.5, "gen": 0.0, "use": 22.0, "w": 84, "h": 68,
-		"desc": "回路・合金・研究パックを自動生産(22W)。タップでレシピ切替。",
+		"cost": {"plate_fe": 8, "wire_cu": 6, "si": 4}, "craft_time": 4.5, "gen": 0.0, "use": 22.0, "w": 84, "h": 68, "hp": 170.0,
+		"desc": "回路・チタン合金・プラズマセル・超伝導ロッド・研究ポイントを自動生産(22W)。",
 	},
 	"gantry_printer": {
 		"name": "マクロ3Dプリンタ", "short": "3D印刷", "tex": "gantry_printer", "req": "macro_swarm",
-		"cost": {"plate_fe": 16, "circuit": 6, "ti": 8}, "craft_time": 5.5, "gen": 0.0, "use": 34.0, "w": 134, "h": 96,
-		"desc": "鉄板と回路から軌道プローブを連続造形(34W)。ベルトで射出機へ。",
+		"cost": {"plate_fe": 14, "circuit": 6, "ti": 6}, "craft_time": 5.0, "gen": 0.0, "use": 34.0, "w": 134, "h": 96, "hp": 220.0,
+		"desc": "鉄板×2＋回路×1からプローブを連続造形(34W)。",
 	},
 	"mass_driver": {
 		"name": "マスドライバー", "short": "射出機", "tex": "mass_driver", "req": "macro_swarm",
-		"cost": {"plate_fe": 18, "wire_cu": 10, "circuit": 6}, "craft_time": 6.0, "gen": 0.0, "use": 30.0, "w": 134, "h": 112,
-		"desc": "プローブを宇宙へ射出(30W)",
+		"cost": {"plate_fe": 16, "wire_cu": 10, "circuit": 6, "ti": 6}, "craft_time": 5.5, "gen": 0.0, "use": 30.0, "w": 134, "h": 112, "hp": 240.0,
+		"desc": "プローブを宇宙へ射出し10,000機艦隊を編成(30W)。",
 	},
 	"orb_power": {
 		"name": "軌道発電衛星", "short": "軌道送電", "tex": "orb_power", "req": "smelting_booster",
 		"orbital": true,
-		"cost": {"plate_fe": 8, "wire_cu": 6, "wafer_si": 4}, "craft_time": 4.5, "gen": 120.0, "use": 0.0, "w": 76, "h": 56,
-		"desc": "軌道上で+120W発電し地上・軌道施設へ無線送電",
+		"cost": {"plate_fe": 6, "wire_cu": 6, "wafer_si": 4, "ti": 4}, "craft_time": 4.5, "gen": 120.0, "use": 0.0, "w": 76, "h": 56, "hp": 150.0,
+		"desc": "【要チタン(衛星ルナ)】軌道上で+120W発電し地上・軌道施設へ無線送電。",
 	},
 	"orb_laser": {
 		"name": "軌道採掘レーザー", "short": "軌道採掘", "tex": "orb_laser", "req": "smelting_booster",
 		"orbital": true,
-		"cost": {"plate_fe": 10, "wire_cu": 8, "wafer_si": 4}, "craft_time": 5.0, "gen": 0.0, "use": 40.0, "w": 64, "h": 68,
-		"desc": "地上の鉱物を自動採掘し宇宙へ打ち上げ（未回収は重力落下）",
+		"cost": {"plate_fe": 8, "wire_cu": 6, "wafer_si": 4, "ti": 6}, "craft_time": 5.0, "gen": 0.0, "use": 40.0, "w": 64, "h": 68, "hp": 160.0,
+		"desc": "【要チタン(衛星ルナ)】惑星の鉱物を軌道から自動採掘し宇宙へ打ち上げ。",
 	},
 	"orb_collector": {
 		"name": "軌道回収モジュール", "short": "軌道回収", "tex": "orb_collector", "req": "deep_space",
 		"orbital": true,
-		"cost": {"plate_fe": 10, "circuit": 4, "ti": 4}, "craft_time": 4.5, "gen": 0.0, "use": 25.0, "w": 68, "h": 64,
-		"desc": "打ち上がった鉱物パケットを自動回収し軌道工場へ転送",
+		"cost": {"plate_fe": 8, "circuit": 4, "ti": 6}, "craft_time": 4.5, "gen": 0.0, "use": 25.0, "w": 68, "h": 64, "hp": 160.0,
+		"desc": "重力落下する前の採掘パケットを磁気回収し軌道クラフト局へ転送。",
 	},
 	"orb_station": {
 		"name": "軌道クラフト局", "short": "軌道工場", "tex": "orb_station", "req": "deep_space",
 		"orbital": true,
-		"cost": {"plate_fe": 14, "circuit": 8, "alloy": 4}, "craft_time": 6.0, "gen": 0.0, "use": 45.0, "w": 92, "h": 76,
-		"desc": "回収資源から量子コア・反物質・ダイソン板・軌道プローブ製造",
+		"cost": {"plate_fe": 12, "circuit": 6, "alloy": 4}, "craft_time": 5.5, "gen": 0.0, "use": 45.0, "w": 92, "h": 76, "hp": 220.0,
+		"desc": "【要チタン合金】軌道上で量子コア・反物質コア・ダイソン板・研究ポイント製造。",
 	},
 }
 
 const MEGAS: Dictionary = {
-	"elevator": {"name": "軌道エレベーター", "cost": {"plate_fe": 18, "wire_cu": 14, "alloy": 6}, "fleet": 300, "desc": "艦隊+300機を軌道上へ即時補給。"},
-	"dyson":    {"name": "ダイソンリング",   "cost": {"wafer_si": 14, "circuit": 10, "alloy": 6}, "fleet": 0,   "desc": "全テスラ電力網へ常時+240Wを無線送電。"},
-	"citadel":  {"name": "軌道要塞シタデル", "cost": {"alloy": 10, "circuit": 12, "ti": 16},      "fleet": 700, "desc": "艦隊+700機 & 要塞への強襲火力大幅強化。"},
-	"warpgate": {"name": "スターワープゲート", "cost": {"alloy": 12, "circuit": 14, "sci_pack": 5}, "fleet": 0,  "desc": "汚染軌道要塞撃破と併せて星系解放を達成！"},
+	"elevator": {"name": "軌道エレベーター", "cost": {"plate_fe": 16, "wire_cu": 12, "alloy": 4}, "fleet": 400, "sci": 150, "desc": "艦隊+400機 ＆ 研究ポイント+150"},
+	"dyson":    {"name": "ダイソンリング",   "cost": {"wafer_si": 12, "circuit": 8, "dyson_panel": 2}, "fleet": 0, "sci": 250, "desc": "常時+240W送電 ＆ 研究ポイント+250"},
+	"citadel":  {"name": "軌道要塞シタデル", "cost": {"alloy": 8, "circuit": 10, "plasma_cell": 2}, "fleet": 800, "sci": 250, "desc": "艦隊+800機 ＆ 研究ポイント+250"},
+	"warpgate": {"name": "スターワープゲート", "cost": {"alloy": 10, "quantum_core": 2, "antimatter": 1}, "fleet": 0, "sci": 400, "desc": "研究ポイント+400 ＆ 星系完全解放！"},
 }
+
+# ------------------------------------------------------------------------------
+# 完全網羅アイテム＆施設レシピツリー（全資源19種＋全施設・装備を1つのDAGに集約！）
+# 左(Col 0: 原石) → (Col 1: 採掘/精錬器) → (Col 2: 基礎素材) → (Col 3: 組立機/基礎設備)
+# → (Col 4: 回路/高度素材) → (Col 5: 高度施設/軌道局) → (Col 6: 最終品/研究ポイント)
+# ------------------------------------------------------------------------------
+const ITEM_TREE_NODES: Array[Dictionary] = [
+	# Col 0: 各惑星の原石 (7種)
+	{"id": "fe",          "kind": "res", "col": 0, "row": 0, "name": "鉄",          "icon": "fe",          "sub": "テラ-I",     "recipe": "テラ-I 地表・洞窟・ドリル鉱床で採掘"},
+	{"id": "cu",          "kind": "res", "col": 0, "row": 1, "name": "銅",          "icon": "cu",          "sub": "テラ-I",     "recipe": "テラ-I 地表・洞窟・ドリル鉱床で採掘"},
+	{"id": "si",          "kind": "res", "col": 0, "row": 2, "name": "ケイ素",      "icon": "si",          "sub": "テラ-I",     "recipe": "テラ-I 洞窟の青い結晶・鉱床で採掘"},
+	{"id": "ti",          "kind": "res", "col": 0, "row": 3, "name": "チタン",      "icon": "ti",          "sub": "衛星ルナ",   "recipe": "【宇宙進出】衛星ルナの地表・洞窟で採掘"},
+	{"id": "ignis_ore",   "kind": "res", "col": 0, "row": 4, "name": "紅蓮鉱",      "icon": "ignis_ore",   "sub": "イグニス-I", "recipe": "【内周惑星】イグニス-Iの灼熱地層で採掘"},
+	{"id": "ice",         "kind": "res", "col": 0, "row": 5, "name": "永久氷晶",    "icon": "ice",         "sub": "クライオ-IV","recipe": "【外周惑星】クライオ-IVの氷結洞窟で採掘"},
+	{"id": "astra_shard", "kind": "res", "col": 0, "row": 6, "name": "アストラ結晶","icon": "astra_shard", "sub": "アストラ-V", "recipe": "【敵中枢惑星】艦隊で制圧後に採掘可能"},
+
+	# Col 1: 一次精錬（溶鉱炉を鉄・銅・ケイ素の真横に配置！）＋採掘・物流・初期設備 (7種)
+	{"id": "drill",       "kind": "fac", "col": 1, "row": 0, "name": "採掘ドリル",  "icon": "drill",       "sub": "鉄12 銅6",   "recipe": "硬質鉱床から原石を自動採掘(12W)"},
+	{"id": "smelter",     "kind": "fac", "col": 1, "row": 1, "name": "溶鉱炉",      "icon": "smelter",     "sub": "鉄18 銅10",  "recipe": "鉄×2→鉄板 / 銅×2→銅線 / ケイ素×2→基板"},
+	{"id": "depot",       "kind": "fac", "col": 1, "row": 2, "name": "倉庫(デポ)",  "icon": "depot",       "sub": "鉄16 銅6",   "recipe": "接続先施設のレシピ必要量だけを自動供給"},
+	{"id": "seed_core",   "kind": "fac", "col": 1, "row": 3, "name": "シード自機",  "icon": "seed_core",   "sub": "初期機体",   "recipe": "採掘ビームで全惑星の原石を直接採掘"},
+	{"id": "fab_drone",   "kind": "fac", "col": 1, "row": 4, "name": "ドローン",    "icon": "fab_drone",   "sub": "鉄10 銅6",   "recipe": "鉄×10 + 銅×6 → クラフト製造"},
+	{"id": "solar",       "kind": "fac", "col": 1, "row": 5, "name": "ソーラー",    "icon": "solar",       "sub": "鉄10 銅6",   "recipe": "昼間に44W発電 → 電線でテスラへ"},
+	{"id": "tesla",       "kind": "fac", "col": 1, "row": 6, "name": "テスラ/蓄電", "icon": "tesla",       "sub": "鉄10 銅8",   "recipe": "周囲へ無線配電＆夜間バッテリー連携"},
+
+	# Col 2: 一次精錬素材 + 基礎電力・宇宙推進 (5種)
+	{"id": "plate_fe",        "kind": "res", "col": 2, "row": 0, "name": "鉄板",          "icon": "plate_fe",        "sub": "鉄×2",         "recipe": "鉄×2 → [溶鉱炉] → 鉄板×1"},
+	{"id": "wire_cu",         "kind": "res", "col": 2, "row": 1, "name": "銅線",          "icon": "wire_cu",         "sub": "銅×2",         "recipe": "銅×2 → [溶鉱炉] → 銅線×1"},
+	{"id": "wafer_si",        "kind": "res", "col": 2, "row": 2, "name": "基板",          "icon": "wafer_si",        "sub": "ケイ素×2",     "recipe": "ケイ素×2 → [溶鉱炉] → 基板×1"},
+	{"id": "battery",         "kind": "fac", "col": 2, "row": 4, "name": "夜間蓄電池",    "icon": "battery",         "sub": "鉄12 銅8 珪4", "recipe": "昼の余剰電力を蓄電し夜間稼働"},
+	{"id": "orbital_booster", "kind": "fac", "col": 2, "row": 6, "name": "軌道ブースター","icon": "orbital_booster", "sub": "鉄16 銅8 板4", "recipe": "テラ-Iから宇宙＆衛星ルナへ飛び立つ推進機"},
+
+	# Col 3: 自動組立機・地上中級施設・初期軌道施設 (5種)
+	{"id": "assembler",  "kind": "fac", "col": 3, "row": 1, "name": "自動組立機",    "icon": "assembler",  "sub": "板8 線6 珪4", "recipe": "回路・チタン合金・プラズマ・超伝導・研究ポイント製造"},
+	{"id": "geothermal", "kind": "fac", "col": 3, "row": 3, "name": "地熱発電所",    "icon": "geothermal", "sub": "板8 線6 珪6", "recipe": "昼夜無休で135Wを大出力発電"},
+	{"id": "turret",     "kind": "fac", "col": 3, "row": 4, "name": "レーザー砲台",  "icon": "turret",     "sub": "板6 線6",     "recipe": "他惑星の汚染襲撃機やマップ外敵機を自動迎撃"},
+	{"id": "orb_power",  "kind": "fac", "col": 3, "row": 5, "name": "軌道発電衛星",  "icon": "orb_power",  "sub": "板6 線6 チタン4","recipe": "同一軌道上で+120W発電し地上・軌道へ送電"},
+	{"id": "orb_laser",  "kind": "fac", "col": 3, "row": 6, "name": "軌道採掘機",    "icon": "orb_laser",  "sub": "板8 線6 チタン6","recipe": "軌道から地上鉱脈を自動採掘し宇宙へ打ち上げ"},
+
+	# Col 4: 組立完成素材・惑星固有加工品 (4種)
+	{"id": "circuit",     "kind": "res", "col": 4, "row": 0, "name": "回路",          "icon": "circuit",     "sub": "鉄板1+銅線1",   "recipe": "鉄板×1 + 銅線×1 → [自動組立機] → 回路×1"},
+	{"id": "alloy",       "kind": "res", "col": 4, "row": 2, "name": "チタン合金",    "icon": "alloy",       "sub": "鉄板2+チタン1", "recipe": "鉄板×2 + チタン×1 → [自動組立機] → チタン合金×1"},
+	{"id": "plasma_cell", "kind": "res", "col": 4, "row": 4, "name": "プラズマセル",  "icon": "plasma_cell", "sub": "紅蓮鉱2+合金1", "recipe": "紅蓮鉱×2 + チタン合金×1 → [自動組立機] → プラズマセル×1"},
+	{"id": "cryo_rod",    "kind": "res", "col": 4, "row": 6, "name": "超伝導ロッド",  "icon": "cryo_rod",    "sub": "氷晶2+基板1",   "recipe": "永久氷晶×2 + 基板×1 → [自動組立機] → 超伝導ロッド×1"},
+
+	# Col 5: 高度製造施設（軌道回収・軌道クラフト局・3Dプリンタ・マスドライバー）(4種)
+	{"id": "gantry_printer", "kind": "fac", "col": 5, "row": 0, "name": "3Dプリンタ",    "icon": "gantry_printer", "sub": "板14 回路6 チタン6", "recipe": "鉄板×2 + 回路×1 → プローブ×1"},
+	{"id": "mass_driver",    "kind": "fac", "col": 5, "row": 2, "name": "マスドライバー","icon": "mass_driver",    "sub": "板16 線10 回路6",    "recipe": "プローブを宇宙へ射出し艦隊+12機"},
+	{"id": "orb_collector",  "kind": "fac", "col": 5, "row": 4, "name": "軌道回収機",    "icon": "orb_collector",  "sub": "板8 回路4 チタン6",  "recipe": "軌道採掘で浮上した資源パケットを磁気回収"},
+	{"id": "orb_station",    "kind": "fac", "col": 5, "row": 6, "name": "軌道クラフト局","icon": "orb_station",    "sub": "板12 回路6 合金4",   "recipe": "軌道上で量子コア・ダイソン板・反物質・研究ポイント製造"},
+
+	# Col 6: 最終完成アイテム＆クリア目標「研究ポイント」(5種)
+	{"id": "probe_stock",  "kind": "res", "col": 6, "row": 0, "name": "プローブ艦隊",  "icon": "probe_stock",  "sub": "10,000機艦隊",      "recipe": "3Dプリンタ/軌道局 → マスドライバーで艦隊編成"},
+	{"id": "sci_pack",     "kind": "res", "col": 6, "row": 1, "name": "研究ポイント",  "icon": "sci_pack",     "sub": "1,000ptでクリア!", "recipe": "組立機(鉄板+回路→+20pt) / 軌道局(量子コア+チタン→+60pt)"},
+	{"id": "quantum_core", "kind": "res", "col": 6, "row": 3, "name": "量子コア",      "icon": "quantum_core", "sub": "珪2+銅2 / 超伝導", "recipe": "ケイ素×2+銅×2 (または超伝導ロッド) → [軌道クラフト局]"},
+	{"id": "dyson_panel",  "kind": "res", "col": 6, "row": 5, "name": "ダイソン板",    "icon": "dyson_panel",  "sub": "鉄2+ケイ素2",      "recipe": "鉄×2 + ケイ素×2 → [軌道クラフト局] → ダイソン板×1"},
+	{"id": "antimatter",   "kind": "res", "col": 6, "row": 6, "name": "反物質コア",    "icon": "antimatter",   "sub": "量子1+アストラ結晶","recipe": "量子コア×1 + アストラ結晶(または鉄×2) → [軌道クラフト局]"},
+]
+
+# 特定アイテムの製造に必要な「直接の原料・施設」マップ（上流ツリー自動展開用！）
+const ITEM_UPSTREAM_PARENTS: Dictionary = {
+	"plate_fe": ["fe", "smelter"],
+	"wire_cu": ["cu", "smelter"],
+	"wafer_si": ["si", "smelter"],
+	"circuit": ["plate_fe", "wire_cu", "assembler"],
+	"alloy": ["plate_fe", "ti", "assembler"],
+	"plasma_cell": ["ignis_ore", "alloy", "assembler"],
+	"cryo_rod": ["ice", "wafer_si", "assembler"],
+	"sci_pack": ["plate_fe", "circuit", "assembler", "quantum_core", "orb_station"],
+	"probe_stock": ["plate_fe", "circuit", "gantry_printer", "mass_driver"],
+	"quantum_core": ["si", "cu", "cryo_rod", "orb_laser", "orb_collector", "orb_station"],
+	"dyson_panel": ["fe", "si", "orb_laser", "orb_collector", "orb_station"],
+	"antimatter": ["quantum_core", "astra_shard", "orb_station"],
+	"fab_drone": ["fe", "cu"],
+	"drill": ["fe", "cu"],
+	"depot": ["fe", "cu"],
+	"smelter": ["fe", "cu"],
+	"solar": ["fe", "cu"],
+	"tesla": ["fe", "cu"],
+	"battery": ["fe", "cu", "si"],
+	"orbital_booster": ["fe", "cu", "plate_fe"],
+	"assembler": ["plate_fe", "wire_cu", "si"],
+	"geothermal": ["plate_fe", "wire_cu", "si"],
+	"turret": ["plate_fe", "wire_cu"],
+	"orb_power": ["plate_fe", "wire_cu", "wafer_si", "ti"],
+	"orb_laser": ["plate_fe", "wire_cu", "wafer_si", "ti"],
+	"orb_collector": ["plate_fe", "circuit", "ti", "orb_laser"],
+	"orb_station": ["plate_fe", "circuit", "alloy", "orb_collector"],
+	"gantry_printer": ["plate_fe", "circuit", "ti"],
+	"mass_driver": ["plate_fe", "wire_cu", "circuit", "gantry_printer"],
+}
+
+const ITEM_TREE_EDGES: Array[Array] = [
+	# 原石 → 採掘・一次施設・溶鉱炉
+	["fe", "smelter"], ["cu", "smelter"], ["si", "smelter"],
+	["fe", "fab_drone"], ["cu", "fab_drone"],
+	["fe", "drill"], ["fe", "depot"], ["fe", "solar"], ["fe", "tesla"],
+	["si", "battery"],
+	# 溶鉱炉 → 精錬素材
+	["smelter", "plate_fe"], ["smelter", "wire_cu"], ["smelter", "wafer_si"],
+	# 精錬素材 → 軌道ブースター・中級施設・自動組立機
+	["plate_fe", "orbital_booster"],
+	["plate_fe", "assembler"], ["wire_cu", "assembler"], ["wafer_si", "assembler"],
+	["plate_fe", "geothermal"], ["wire_cu", "turret"],
+	# 衛星ルナ＆他惑星原石 → 軌道施設・自動組立機
+	["orbital_booster", "ti"],
+	["ti", "orb_power"], ["ti", "orb_laser"], ["ti", "assembler"],
+	["ignis_ore", "assembler"], ["ice", "assembler"],
+	# 自動組立機 → 回路・合金・惑星加工品・研究ポイント
+	["assembler", "circuit"], ["assembler", "alloy"],
+	["assembler", "plasma_cell"], ["assembler", "cryo_rod"],
+	["assembler", "sci_pack"],
+	# 回路・合金 → 高度施設・軌道クラフト局
+	["circuit", "gantry_printer"], ["plate_fe", "gantry_printer"],
+	["circuit", "mass_driver"], ["circuit", "orb_collector"],
+	["alloy", "orb_station"], ["circuit", "orb_station"],
+	["alloy", "plasma_cell"], ["wafer_si", "cryo_rod"],
+	# 軌道採掘 → 軌道回収 → 軌道クラフト局
+	["orb_laser", "orb_collector"], ["orb_collector", "orb_station"],
+	["cryo_rod", "orb_station"], ["astra_shard", "orb_station"],
+	# 最終生産 → プローブ・研究ポイント・量子コア・ダイソン板・反物質コア
+	["gantry_printer", "probe_stock"], ["mass_driver", "probe_stock"],
+	["orb_station", "quantum_core"], ["orb_station", "dyson_panel"],
+	["orb_station", "antimatter"], ["orb_station", "sci_pack"], ["orb_station", "probe_stock"],
+	["quantum_core", "antimatter"], ["quantum_core", "sci_pack"],
+]
 
 const GUIDE_TOPICS: Array[Dictionary] = [
 	{
-		"title": "1. 移動・採掘・ズーム",
+		"title": "1. アイテムツリーと回路製造",
 		"lines": [
-			"・移動は常に【画面で見えている方向】に進みます（スマホ左下スティック / PCはWASD）。",
-			"・採掘は右下【採掘スティック】を倒した方向へビーム照射！（PCはカーソル方向＋SPACE）",
-			"・2本指のピンチイン／アウト（PCはホイール）で機体拡大〜惑星全体まで自在にズーム！",
+			"・右上の【レシピ図】で全資源・全施設のつながり（鉄→溶鉱炉→鉄板→組立機→回路など）を一目で確認！",
+			"・倉庫から組立機や溶鉱炉へコンベアを繋ぐと、レシピに必要な材料だけがバランスよく自動搬入されます。",
 		],
 	},
 	{
-		"title": "2. クラフトと製造キュー",
+		"title": "2. 自動配線コンベア (Autorouter)",
 		"lines": [
-			"・右上の【クラフト】から、ドローン・推進機・各種装置を製造できます。",
-			"・押したアイテムは【製造キュー】に積まれ、時間経過で順番に完成します。",
-			"・キュー内の項目をタップするとキャンセル＆資源100%返却できます。",
-			"・ドローンが増えるほど製造速度と採掘ビーム本数がアップします！",
+			"・コンベアは回路基板の自動配線（Autorouter）のように、他施設や既存ラインを避けてグリッド配線されます。",
+			"・他のコンベアと交差して解が見つからないルートは赤く表示され設置できません。配置パズルを楽しもう！",
 		],
 	},
 	{
-		"title": "3. 施設の確認・設置・削除",
+		"title": "3. 5つの輪切り惑星と固有資源",
 		"lines": [
-			"・完成した装置は下部バーに並びます。選んで地面をタップするとホログラム位置へ設置。",
-			"・通常モードで施設をタップすると、中身（在庫・電力・レシピ等）の確認と操作ができます。",
-			"・下部バーの【削除】モードでは、施設をダブルタップ（2回タップ）すると安全に削除・回収！",
+			"・初期惑星テラ-Iには宇宙へ出るための必須資源（鉄・銅・ケイ素）だけが存在します。",
+			"・軌道ブースターで宇宙へ出て、輪切り内部を持つ【衛星ルナ】でチタン、【イグニス-I】で紅蓮鉱、【クライオ-IV】で永久氷晶を採掘しよう！",
 		],
 	},
 	{
-		"title": "4. 電力網と電線接続",
+		"title": "4. 汚染・施設耐久値・アストラ-V制圧",
 		"lines": [
-			"・ソーラーパネルや地熱発電所は置いただけでは動きません（出力0W）。",
-			"・下部バーの【配線】を選び、発電機 → テスラリレーの順にタップして電線を張ります。",
-			"・通電したテスラリレーの青いドーム内にある全機械へ自動で給電されます。",
-			"・夜間バッテリーも電線で繋ぐと、夜間の停電を防げます。",
+			"・初期惑星以外で工場を稼働すると【汚染】が広がり、敵機が飛来して施設を攻撃（耐久値HP減少）します！",
+			"・レーザー砲台と艦隊の【防衛】で工場を守り、【強襲】で最外周の敵拠点惑星アストラ-Vを制圧しよう！",
 		],
 	},
 	{
-		"title": "5. 硬質鉱床と自由搬送ライン",
+		"title": "5. 研究ポイント1,000達成でクリア",
 		"lines": [
-			"・採掘ドリルは手で掘れない【硬質鉱床（ドリル専用）】の上にのみ設置できます。",
-			"・下部バーの【搬送】を選び、送り元施設→送り先施設をタップすると自由結束で接続！",
-			"・距離に応じて鉄を消費します（不足時は届かない部分が赤く表示され必要数を案内）。",
-			"・カーゴデポをタップすると、接続した搬送ラインごとに出力する資源を設定できます。",
-		],
-	},
-	{
-		"title": "6. 軌道飛行と10,000機艦隊",
-		"lines": [
-			"・軌道ブースターをクラフトすると大気圏を突破し、真空ゼロ抵抗の軌道周回が可能に！",
-			"・右上の【指令】から軌道全体マップ切替・艦隊ドクトリン・メガストラクチャーを操作。",
-			"・マクロ3Dプリンタ→マスドライバーで艦隊を打ち上げ、上空の汚染軌道要塞を撃破しよう！",
+			"・組立機や軌道クラフト局、巨大構造物で【研究ポイント】を生産できます。",
+			"・左上の【研究ポイント: 1,000 / 1,000】がマックスに到達するとゲームクリアです！",
 		],
 	},
 ]
@@ -376,12 +536,9 @@ func _process(delta: float) -> void:
 		_finish_craft(done)
 
 func reset_all() -> void:
-	res = {
-		"fe": 0, "cu": 0, "si": 0, "ti": 0, "ice": 0,
-		"plate_fe": 0, "wire_cu": 0, "wafer_si": 0,
-		"circuit": 0, "alloy": 0, "sci_pack": 0, "probe_stock": 0,
-		"quantum_core": 0, "antimatter": 0, "dyson_panel": 0,
-	}
+	res = {}
+	for k in RES_NAMES.keys():
+		res[String(k)] = 0
 	bld_stock.clear()
 	craft_queue.clear()
 	unlocked_techs = ["seed_core"]
@@ -391,7 +548,10 @@ func reset_all() -> void:
 	max_fuel = float(PROPULSION_TIERS[0]["fuel"]); fuel = max_fuel
 	max_ion_bat = 100.0; ion_bat = 100.0
 	swarm_fleet = 0; total_launches = 0; doctrine = Doctrine.HARVEST
-	boss_hp = boss_max_hp; boss_dead = false; game_won = false
+	boss_hp = boss_max_hp; boss_dead = false
+	astra_liberated = false; astra_bastions_left = 6
+	game_won = false
+	planet_pollution = {"terra": 0.0, "luna": 0.0, "ignis": 0.0, "cryo": 0.0, "astra": 0.0}
 	pwr_prod = 0.0; pwr_use = 0.0; pwr_stored = 0.0; pwr_cap = 0.0; orb_power_bonus_w = 0.0
 	wire_count = 0; active_teslas = 0; active_printers = 0; total_printers = 0
 	selected_tool = "mine"; build_dir = 1; orbit_view = false
@@ -402,7 +562,7 @@ func reset_all() -> void:
 	tut_opened_depot = false
 	tut_opened_orbit = false
 	logs.clear()
-	add_log("シード・ユニット降下完了。右下スティック（PCはSPACE）で採掘しよう！", "info")
+	add_log("シード降下完了！研究ポイント1,000pt達成を目指そう。【レシピ図】で全工程を確認！", "info")
 
 func res_name(id: String) -> String:
 	return String(RES_NAMES.get(id, id))
@@ -421,7 +581,18 @@ func get_r(id: String) -> int:
 func add_r(id: String, delta: int) -> void:
 	res[id] = maxi(0, int(res.get(id, 0)) + delta)
 	resource_changed.emit(id, int(res[id]))
+	if id == "sci_pack" and delta > 0:
+		check_victory()
 	update_tutorial()
+
+func get_pollution(body_id: String) -> float:
+	if body_id == "terra": return 0.0
+	return float(planet_pollution.get(body_id, 0.0))
+
+func add_pollution(body_id: String, delta_p: float) -> void:
+	if body_id == "terra" or body_id == "sun":
+		return
+	planet_pollution[body_id] = clampf(float(planet_pollution.get(body_id, 0.0)) + delta_p, 0.0, 100.0)
 
 func get_stock(bid: String) -> int:
 	return int(bld_stock.get(bid, 0))
@@ -486,9 +657,6 @@ func is_unlocked(tool_id: String) -> bool:
 	if not BLD.has(tool_id): return false
 	return has_tech(String(BLD[tool_id]["req"]))
 
-# ------------------------------------------------------------------------------
-# 製造キュー（クラフト画面から追加 → 時間経過で完成！）
-# ------------------------------------------------------------------------------
 func count_queued(kind: String, id: String = "") -> int:
 	var c := 0
 	for q in craft_queue:
@@ -528,7 +696,7 @@ func enqueue_craft(kind: String, id: String) -> bool:
 			"time_left": DRONE_CRAFT_TIME, "total_time": DRONE_CRAFT_TIME, "cost": DRONE_COST.duplicate(),
 		})
 		Sfx.play("select")
-		add_log("製造開始: ファブリケータードローン（キュー %d件）" % craft_queue.size(), "info")
+		add_log("製造開始: ファブリケータードローン", "info")
 		update_tutorial()
 		return true
 	elif kind == "propulsion":
@@ -554,7 +722,7 @@ func enqueue_craft(kind: String, id: String) -> bool:
 			if BLD.has(id) and not is_unlocked(id):
 				add_log("先に【研究】で「%s」を解放してください。" % TECHS[BLD[id]["req"]]["name"], "warn")
 			else:
-				add_log("資源が不足しています。", "warn")
+				add_log("資源が不足しています（【レシピ図】で入手先を確認）。", "warn")
 			return false
 		var binfo: Dictionary = BLD[id]
 		spend(binfo["cost"])
@@ -589,7 +757,7 @@ func _finish_craft(item: Dictionary) -> void:
 		max_hp = 100.0 + float(attached_drones) * 15.0 + float(propulsion_tier) * 40.0
 		hp = max_hp
 		Sfx.play("dock")
-		add_log("ドローン #%d 製造完了＆自動ドッキング！採掘と製造速度UP！" % attached_drones, "good")
+		add_log("ドローン #%d 製造完了＆自動ドッキング！" % attached_drones, "good")
 		drone_docked.emit(attached_drones)
 	elif kind == "propulsion":
 		var nxt := int(id)
@@ -599,12 +767,12 @@ func _finish_craft(item: Dictionary) -> void:
 		max_hp = 100.0 + float(attached_drones) * 15.0 + float(propulsion_tier) * 40.0
 		hp = max_hp
 		Sfx.play("dock")
-		add_log("推進モジュール装着完了: %s！" % String(info["name"]), "good")
+		add_log("推進モジュール装着完了: %s！衛星ルナや他惑星へ飛び立とう！" % String(info["name"]), "good")
 		propulsion_upgraded.emit(propulsion_tier)
 	elif kind == "building":
 		add_stock(id, 1)
 		Sfx.play("research")
-		add_log("製造完了: %s（下部バーから選択して地面へ設置できます！）" % String(item["name"]), "good")
+		add_log("製造完了: %s（下部バーから配置）" % String(item["name"]), "good")
 	craft_completed.emit(kind, id)
 	update_tutorial()
 
@@ -616,24 +784,25 @@ func build_mega(mid: String) -> bool:
 	megastructures[mid] = true
 	var fl := int(MEGAS[mid]["fleet"])
 	if fl > 0: swarm_fleet = mini(SWARM_MAX, swarm_fleet + fl)
+	var sp := int(MEGAS[mid].get("sci", 0))
+	if sp > 0: add_r("sci_pack", sp)
 	Sfx.play("research")
-	add_log("巨大構造物 完成: %s！" % MEGAS[mid]["name"], "good")
+	add_log("巨大構造物 完成: %s！（研究ポイント+%d）" % [MEGAS[mid]["name"], sp], "good")
 	check_victory()
 	return true
 
 func check_victory() -> void:
-	if boss_dead and bool(megastructures["warpgate"]) and not game_won:
+	if game_won:
+		return
+	if get_r("sci_pack") >= RESEARCH_POINT_GOAL or (boss_dead and bool(megastructures["warpgate"])):
 		game_won = true
 		Sfx.play("research")
-		add_log("勝利！汚染軌道要塞を撃破し、ワープゲートが起動しました！", "good")
+		add_log("完全勝利！研究ポイントが最大（%dpt）に達し、星系開拓を達成しました！" % RESEARCH_POINT_GOAL, "good")
 
 func note_building_placed(bid: String) -> void:
 	tut_placed[bid] = int(tut_placed.get(bid, 0)) + 1
 	update_tutorial()
 
-# ------------------------------------------------------------------------------
-# インタラクティブ・チュートリアル進行判定
-# ------------------------------------------------------------------------------
 func update_tutorial() -> void:
 	var changed := true
 	while changed:
@@ -666,7 +835,7 @@ func update_tutorial() -> void:
 				if propulsion_tier >= 1:
 					tut_step = 8; changed = true
 			8:
-				if total_launches >= 1:
+				if get_r("ti") >= 4 or total_launches >= 1:
 					tut_step = 9; changed = true
 
 func get_tutorial_info() -> Dictionary:
@@ -674,61 +843,61 @@ func get_tutorial_info() -> Dictionary:
 		0:
 			return {
 				"step": "1/9", "title": "鉱石を採掘しよう",
-				"hint": "右下スティック（PCはSPACE）で狙った方向を掘ろう！（鉄 %d/10  銅 %d/6）" % [mini(10, get_r("fe")), mini(6, get_r("cu"))],
+				"hint": "右下スティック（PCはSPACE）で狙った方向を掘ろう！",
 				"focus": "mine",
 			}
 		1:
 			var qd := count_queued("drone")
-			var h := "製造キュー進行中…完成すると自動で自機にドッキングします！" if qd > 0 else "右上の【クラフト】を開き、『ファブリケータードローン』を製造しよう！"
-			return {"step": "2/9", "title": "ドローンをクラフト増設しよう", "hint": h, "focus": "craft_drone"}
+			var h := "製造キュー進行中…完成すると自動で自機にドッキング！" if qd > 0 else "右上の【クラフト】を開き『ドローン増設』を製造！"
+			return {"step": "2/9", "title": "ドローンをクラフト増設", "hint": h, "focus": "craft_drone"}
 		2:
 			return {
 				"step": "3/9", "title": "電力を研究しよう",
-				"hint": "鉄12・銅6を集め、右上の【研究】から『電力とテスラ』を研究しよう！",
+				"hint": "右上の【研究】から『電力とテスラ』カードをタップして研究！",
 				"focus": "research_power",
 			}
 		3:
 			var s_ok := (get_stock("solar") + int(tut_placed.get("solar", 0))) >= 1
 			var t_ok := (get_stock("tesla") + int(tut_placed.get("tesla", 0))) >= 1
 			return {
-				"step": "4/9", "title": "発電装置をクラフトしよう",
-				"hint": "【クラフト】→『電力・防衛』でソーラーパネル(%s)とテスラリレー(%s)を製造しよう！" % ["済" if s_ok else "未", "済" if t_ok else "未"],
+				"step": "4/9", "title": "発電装置をクラフト",
+				"hint": "【クラフト】→『電力・防衛』でソーラー(%s)とテスラ(%s)を製造！" % ["済" if s_ok else "未", "済" if t_ok else "未"],
 				"focus": "craft_power",
 			}
 		4:
 			return {
-				"step": "5/9", "title": "地表に装置を設置しよう",
-				"hint": "下部バーの『ソーラー』と『テスラ』をそれぞれ選び、地表をタップして設置しよう！",
+				"step": "5/9", "title": "地表に装置を設置",
+				"hint": "下部バーの『ソーラー』と『テスラ』を選び地表をタップして設置！",
 				"focus": "place_power",
 			}
 		5:
 			return {
-				"step": "6/9", "title": "電線を張って通電させよう",
-				"hint": "下部バーの【配線】を選び、ソーラーパネル → テスラリレーの順にタップして電線を接続！",
+				"step": "6/9", "title": "電線を張って通電",
+				"hint": "下部バーの【配線】を選び、ソーラー → テスラの順にタップ！",
 				"focus": "wire_power",
 			}
 		6:
 			return {
-				"step": "7/9", "title": "硬質鉱床と自由搬送ライン",
-				"hint": "『洞窟物流ライン』研究→【硬質鉱床】にドリル＆倉庫を置き、【搬送】で施設同士を繋ごう！",
+				"step": "7/9", "title": "鉱床ドリルと自動配線コンベア",
+				"hint": "『洞窟物流ライン』研究→硬質鉱床にドリル＆倉庫を置き【搬送】で接続！",
 				"focus": "logistics",
 			}
 		7:
 			return {
-				"step": "8/9", "title": "精錬と宇宙進出",
-				"hint": "『精錬と軌道進出』を研究→溶鉱炉で鉄板を作り、【クラフト】で軌道ブースターを製造しよう！",
+				"step": "8/9", "title": "軌道ブースターで衛星ルナへ！",
+				"hint": "溶鉱炉で鉄板を作り【クラフト】で軌道ブースターを製造して宇宙へ！",
 				"focus": "smelt_orbit",
 			}
 		8:
 			return {
-				"step": "9/9", "title": "10,000機スウォーム艦隊",
-				"hint": "マクロ3Dプリンタとマスドライバーを建造して艦隊を射出し、【指令】で『強襲』を命じよう！",
+				"step": "9/9", "title": "衛星ルナでチタン採掘＆研究ポイント生産",
+				"hint": "衛星ルナでチタンを掘り、軌道施設や組立機で研究ポイント1,000を目指そう！",
 				"focus": "swarm",
 			}
 		_:
 			return {
-				"step": "完了", "title": "星系解放ミッション",
-				"hint": "基本操作マスター！汚染軌道要塞を撃破し、【指令】からワープゲートを建造しよう！",
+				"step": "完了", "title": "研究ポイント1,000＆アストラ-V制圧",
+				"hint": "研究ポイント1,000pt達成でクリア！艦隊で敵拠点アストラ-Vも制圧しよう！",
 				"focus": "none",
 			}
 

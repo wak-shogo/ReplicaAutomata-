@@ -1,9 +1,13 @@
 extends Node2D
 class_name SphericalPlanet
 
-# Fine-grained 24px-voxel 360-degree Spherical Open-World Planet (TERRA-I) orbiting the central SUN,
-# featuring 2D Cartesian FastNoiseLite organic caverns, real geometric Day/Night terminator & shadow,
-# multiple orbiting planets (IGNIS-I, TERRA-I + LUNA, CRYO-IV, ASTRA-V), and Patched-Conic SOI gravity!
+# Multi-Planet 360-degree Sliced Voxel Solar System:
+# - Central SUN at world (0,0)
+# - TERRA-I (starter planet: ONLY fe, cu, si — everything needed to reach space!)
+# - LUNA (moon of Terra: sliced voxel interior + caves + Titanium 'ti')
+# - IGNIS-I (inner volcanic planet: sliced voxel interior + caves + 'ignis_ore')
+# - CRYO-IV (outer glacial planet: sliced voxel interior + caves + 'ice')
+# - ASTRA-V (outermost enemy stronghold planet: sliced voxel interior + 6 Bastions + 'astra_shard')
 
 const COLS: int = 900
 const ROWS: int = 100
@@ -11,6 +15,14 @@ const CHUNKS: int = 30
 const CHUNK_COLS: int = 30
 const SUB_X: int = 4
 const SUB_Y: int = 4
+
+const EX_COLS: int = 360
+const EX_ROWS: int = 48
+const EX_CHUNKS: int = 12
+const EX_CHUNK_COLS: int = 30
+const EX_SUB_X: int = 2
+const EX_SUB_Y: int = 2
+const EX_DA: float = TAU / float(EX_COLS)
 
 const R_CORE: float = 1100.0
 const R_SURFACE: float = 3500.0
@@ -23,10 +35,11 @@ const GRAV_SURF: float = 210.0
 const ORIGIN_GM: float = GRAV_SURF * R_SURFACE * R_SURFACE
 const SUN_RAD: float = 2200.0
 const SUN_GM: float = 2.6e9
-const TERRA_ORBIT_R: float = 29500.0
+const TERRA_ORBIT_R: float = 30500.0
 
-# Material byte codes: 0=sky, 1=regolith, 2=basalt, 3=magma, 4=cave_backwall
-# Ore byte codes: 0=none, 1=fe, 2=cu, 3=si, 4=ti
+# Ore byte codes: 0=none, 1=fe, 2=cu, 3=si, 4=ti, 5=ignis_ore, 6=ice, 7=astra_shard
+const ORE_CODE_TO_ID: Array[String] = ["", "fe", "cu", "si", "ti", "ignis_ore", "ice", "astra_shard"]
+
 var mat: PackedByteArray
 var ore: PackedByteArray
 var cell_hp: PackedFloat32Array
@@ -35,20 +48,25 @@ var chunk_meshes: Array[MeshInstance2D] = []
 var chunk_texs: Array[ImageTexture] = []
 var dirty_chunks: Array[int] = []
 
+# Sliced Voxel Data & Chunk Meshes for LUNA, IGNIS-I, CRYO-IV, ASTRA-V!
+var extra_vox: Dictionary = {} # body_id -> Dictionary
+var dirty_extra: Array[Array] = [] # [body_id, chunk_idx]
+
 var crystal_props: Array[Dictionary] = []
-var drill_nodes: Array[Dictionary] = []
+var drill_nodes: Array[Dictionary] = [] # includes "body_id", "local_pos"
 var _last_bounce_ms: int = -2000
 
 var factory: Node2D = null
 var home_root: Node2D = null
 var anim_t: float = 0.0
 
-# Heliocentric Solar System catalog (world origin = SUN center!)
-var bodies: Dictionary = {} # id -> Dictionary
+var bodies: Dictionary = {}
 var body_order: Array[String] = ["sun", "ignis", "terra", "luna", "cryo", "astra"]
-var asteroids: Array[Dictionary] = [] # world-space orbital asteroids around Terra & outer belt
+var asteroids: Array[Dictionary] = []
 
-# Local-space Terra VFX
+# Enemy Stronghold Bastions on ASTRA-V (must be destroyed by Swarm Fleet to liberate ASTRA-V!)
+var astra_bastions: Array[Dictionary] = []
+
 var sparks: Array[Dictionary] = []
 var smokes: Array[Dictionary] = []
 var popups: Array[Dictionary] = []
@@ -61,12 +79,13 @@ func _ready() -> void:
 	_init_chunk_nodes()
 	_init_solar_system()
 	generate_planet()
+	_init_extra_planets()
 
 func _init_chunk_nodes() -> void:
 	for ci in range(CHUNKS):
 		var mi := MeshInstance2D.new()
 		mi.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		mi.mesh = _build_ring_mesh(ci)
+		mi.mesh = _build_ring_mesh(ci, CHUNK_COLS, DA, R_SURFACE, R_CORE)
 		var img := Image.create(CHUNK_COLS * SUB_X, ROWS * SUB_Y, false, Image.FORMAT_RGBA8)
 		var itex := ImageTexture.create_from_image(img)
 		mi.texture = itex
@@ -75,9 +94,9 @@ func _init_chunk_nodes() -> void:
 		chunk_meshes.append(mi)
 		chunk_texs.append(itex)
 
-func _build_ring_mesh(ci: int) -> ArrayMesh:
-	var a0 := float(ci * CHUNK_COLS) * DA
-	var a1 := float((ci + 1) * CHUNK_COLS) * DA
+func _build_ring_mesh(ci: int, c_cols: int, step_da: float, r_surf: float, r_core: float) -> ArrayMesh:
+	var a0 := float(ci * c_cols) * step_da
+	var a1 := float((ci + 1) * c_cols) * step_da
 	var seg_a := 8
 	var seg_r := 6
 	var verts := PackedVector2Array()
@@ -92,8 +111,8 @@ func _build_ring_mesh(ci: int) -> ArrayMesh:
 		for ir in range(seg_r):
 			var v0 := float(ir) / float(seg_r)
 			var v1 := float(ir + 1) / float(seg_r)
-			var r0 := lerpf(R_SURFACE, R_CORE, v0)
-			var r1 := lerpf(R_SURFACE, R_CORE, v1)
+			var r0 := lerpf(r_surf, r_core, v0)
+			var r1 := lerpf(r_surf, r_core, v1)
 			var p00 := Vector2(c0 * r0, s0 * r0)
 			var p10 := Vector2(c1 * r0, s1 * r0)
 			var p11 := Vector2(c1 * r1, s1 * r1)
@@ -113,56 +132,54 @@ func _build_ring_mesh(ci: int) -> ArrayMesh:
 	return mesh
 
 func _init_solar_system() -> void:
-	# Heliocentric Solar System: SUN at (0,0), 4 planets orbiting Sun + LUNA orbiting TERRA-I!
-	# Terra spawns at ang = PI*0.50 -> pos = (0, +28500), so to_sun = (0, -1) = North Pole starts at NOON!
 	bodies = {
 		"sun": {
-			"id": "sun", "name": "恒星ソラリス", "parent": "", "tex": "", "ore": "",
+			"id": "sun", "name": "恒星ソラリス", "parent": "", "tex": "", "ore": "", "ore_code": 0,
 			"orbit_r": 0.0, "ang": 0.0, "spd": 0.0,
-			"rad": SUN_RAD, "atmos_r": 0.0, "soi_r": 1e9,
+			"rad": SUN_RAD, "r_core": 800.0, "atmos_r": 0.0, "soi_r": 1e9,
 			"g_surf": 380.0, "gm": SUN_GM,
 			"pos": Vector2.ZERO, "prev_pos": Vector2.ZERO, "delta_pos": Vector2.ZERO, "vel": Vector2.ZERO,
 			"col": Color(1.0, 0.84, 0.34),
 		},
 		"ignis": {
-			"id": "ignis", "name": "イグニス-I", "parent": "sun", "tex": "moon_ignis", "ore": "fe",
-			"orbit_r": 13500.0, "ang": PI * 0.28, "spd": 0.024,
-			"rad": 680.0, "atmos_r": 0.0, "soi_r": 2200.0,
-			"g_surf": 200.0, "gm": 200.0 * 680.0 * 680.0,
+			"id": "ignis", "name": "イグニス-I", "parent": "sun", "tex": "moon_ignis", "ore": "ignis_ore", "ore_code": 5,
+			"orbit_r": 14000.0, "ang": PI * 0.28, "spd": 0.020,
+			"rad": 2400.0, "r_core": 760.0, "atmos_r": 0.0, "soi_r": 4600.0,
+			"g_surf": 195.0, "gm": 195.0 * 2400.0 * 2400.0,
 			"pos": Vector2.ZERO, "prev_pos": Vector2.ZERO, "delta_pos": Vector2.ZERO, "vel": Vector2.ZERO,
 			"col": Color(1.0, 0.48, 0.24),
 		},
 		"terra": {
-			"id": "terra", "name": "テラ-I", "parent": "sun", "tex": "", "ore": "fe",
-			"orbit_r": TERRA_ORBIT_R, "ang": PI * 0.50, "spd": 0.015,
-			"rad": R_SURFACE, "atmos_r": R_ATMOS, "soi_r": 13200.0,
+			"id": "terra", "name": "テラ-I", "parent": "sun", "tex": "", "ore": "fe", "ore_code": 1,
+			"orbit_r": TERRA_ORBIT_R, "ang": PI * 0.50, "spd": 0.013,
+			"rad": R_SURFACE, "r_core": R_CORE, "atmos_r": R_ATMOS, "soi_r": 15200.0,
 			"g_surf": GRAV_SURF, "gm": ORIGIN_GM,
 			"pos": Vector2.ZERO, "prev_pos": Vector2.ZERO, "delta_pos": Vector2.ZERO, "vel": Vector2.ZERO,
 			"col": Color(0.42, 0.82, 1.0),
 		},
 		"luna": {
-			"id": "luna", "name": "衛星ルナ", "parent": "terra", "tex": "moon_luna", "ore": "ti",
-			"orbit_r": 10400.0, "ang": -PI * 0.64, "spd": 0.018,
-			"rad": 480.0, "atmos_r": 0.0, "soi_r": 2100.0,
-			"g_surf": 175.0, "gm": 175.0 * 480.0 * 480.0,
+			"id": "luna", "name": "衛星ルナ", "parent": "terra", "tex": "moon_luna", "ore": "ti", "ore_code": 4,
+			"orbit_r": 11600.0, "ang": -PI * 0.64, "spd": 0.016,
+			"rad": 1750.0, "r_core": 550.0, "atmos_r": 0.0, "soi_r": 3200.0,
+			"g_surf": 175.0, "gm": 175.0 * 1750.0 * 1750.0,
 			"pos": Vector2.ZERO, "prev_pos": Vector2.ZERO, "delta_pos": Vector2.ZERO, "vel": Vector2.ZERO,
 			"col": Color(0.76, 0.84, 0.96),
 		},
 		"cryo": {
-			"id": "cryo", "name": "クライオ-IV", "parent": "sun", "tex": "moon_cryo", "ore": "ice",
-			"orbit_r": 46500.0, "ang": PI * 0.68, "spd": 0.010,
-			"rad": 780.0, "atmos_r": 0.0, "soi_r": 3400.0,
-			"g_surf": 190.0, "gm": 190.0 * 780.0 * 780.0,
+			"id": "cryo", "name": "クライオ-IV", "parent": "sun", "tex": "moon_cryo", "ore": "ice", "ore_code": 6,
+			"orbit_r": 49500.0, "ang": PI * 0.68, "spd": 0.009,
+			"rad": 2700.0, "r_core": 860.0, "atmos_r": 0.0, "soi_r": 5200.0,
+			"g_surf": 190.0, "gm": 190.0 * 2700.0 * 2700.0,
 			"pos": Vector2.ZERO, "prev_pos": Vector2.ZERO, "delta_pos": Vector2.ZERO, "vel": Vector2.ZERO,
 			"col": Color(0.56, 0.92, 1.0),
 		},
 		"astra": {
-			"id": "astra", "name": "アストラ-V", "parent": "sun", "tex": "planet_astra", "ore": "si",
-			"orbit_r": 60000.0, "ang": PI * 0.34, "spd": 0.007,
-			"rad": 900.0, "atmos_r": 0.0, "soi_r": 3800.0,
-			"g_surf": 220.0, "gm": 220.0 * 900.0 * 900.0,
+			"id": "astra", "name": "アストラ-V", "parent": "sun", "tex": "planet_astra", "ore": "astra_shard", "ore_code": 7,
+			"orbit_r": 64500.0, "ang": PI * 0.34, "spd": 0.006,
+			"rad": 3100.0, "r_core": 980.0, "atmos_r": 0.0, "soi_r": 5800.0,
+			"g_surf": 215.0, "gm": 215.0 * 3100.0 * 3100.0,
 			"pos": Vector2.ZERO, "prev_pos": Vector2.ZERO, "delta_pos": Vector2.ZERO, "vel": Vector2.ZERO,
-			"col": Color(0.74, 0.56, 1.0),
+			"col": Color(0.78, 0.44, 1.0),
 		},
 	}
 	step_celestials(0.0, true)
@@ -195,6 +212,16 @@ func step_celestials(delta: float, snap_init: bool = false) -> void:
 		home_root.position = bodies["terra"]["pos"]
 
 	var terra_p: Vector2 = bodies["terra"]["pos"]
+	for bid in extra_vox.keys():
+		var ev: Dictionary = extra_vox[bid]
+		var rnode: Node2D = ev["root"]
+		rnode.position = Vector2(bodies[bid]["pos"]) - terra_p
+
+	for dn in drill_nodes:
+		var bid_d := String(dn.get("body_id", "terra"))
+		var b_off := Vector2(bodies[bid_d]["pos"]) - terra_p
+		dn["pos"] = b_off + Vector2(dn["local_pos"])
+
 	for ast in asteroids:
 		ast["ang"] = wrapf(float(ast["ang"]) + float(ast["spd"]) * delta, -PI, PI)
 		ast["rot"] = float(ast["rot"]) + 0.2 * delta
@@ -208,12 +235,12 @@ func generate_planet() -> void:
 	ore.resize(n)
 	cell_hp.resize(n)
 	crystal_props.clear()
+	drill_nodes.clear()
 	sparks.clear(); smokes.clear(); popups.clear()
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20261121
 
-	# Organic 2D Cartesian domain-warped FastNoiseLite cavern generator (ZERO polar waffle pattern!)
 	var warp_x := FastNoiseLite.new()
 	warp_x.seed = 20261122
 	warp_x.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -251,7 +278,7 @@ func generate_planet() -> void:
 	hill_n.fractal_octaves = 3
 	hill_n.frequency = 0.0009
 
-	# 1. Carve natural undulating hills, warm sandstone regolith, organic domain-warped caverns & magma floor
+	# 1. Carve TERRA-I terrain & domain-warped organic FastNoiseLite caverns
 	for c in range(COLS):
 		var a := float(c) * DA
 		var ca := cos(a); var sa := sin(a)
@@ -266,18 +293,12 @@ func generate_planet() -> void:
 			var idx := r * COLS + c
 			ore[idx] = 0
 			if r > surf_row:
-				mat[idx] = 0
-				cell_hp[idx] = 0.0
-				continue
+				mat[idx] = 0; cell_hp[idx] = 0.0; continue
 			if r < 6:
-				mat[idx] = 3 # Incandescent magma core floor
-				cell_hp[idx] = 999.0
-				continue
+				mat[idx] = 3; cell_hp[idx] = 999.0; continue
 
-			# 2D Cartesian sampling -> 100% seamless 360° & completely natural irregular caves!
 			var rad := R_CORE + (float(r) + 0.5) * CELL_H
-			var wx := ca * rad
-			var wy := sa * rad
+			var wx := ca * rad; var wy := sa * rad
 			var dx := warp_x.get_noise_2d(wx, wy) * 195.0
 			var dy := warp_y.get_noise_2d(wx, wy) * 195.0
 			var cn := cave_n.get_noise_2d(wx + dx, wy + dy)
@@ -286,7 +307,6 @@ func generate_planet() -> void:
 			var roof_taper := clampf(float(surf_row - 6 - r) / 8.0, 0.0, 1.0)
 			var core_taper := clampf(float(r - 7) / 6.0, 0.0, 1.0)
 			var chamber_thresh := 0.24 + (1.0 - roof_taper) * 0.38
-			# Gently encourage natural caverns below starter North Pole without artificial ovals
 			if d_spawn < 24 and r >= 64 and r <= surf_row - 8:
 				chamber_thresh -= 0.10
 			var is_cave := (r >= 8 and r <= surf_row - 6) and (
@@ -294,16 +314,13 @@ func generate_planet() -> void:
 			)
 
 			if is_cave:
-				mat[idx] = 4 # Shaded cave backwall
-				cell_hp[idx] = 0.0
+				mat[idx] = 4; cell_hp[idx] = 0.0
 			elif r >= surf_row - rego_depth:
-				mat[idx] = 1 # Warm desert sandstone regolith
-				cell_hp[idx] = 8.0
+				mat[idx] = 1; cell_hp[idx] = 8.0
 			else:
-				mat[idx] = 2 # Deep volcanic cavern basalt
-				cell_hp[idx] = 14.0
+				mat[idx] = 2; cell_hp[idx] = 14.0
 
-	# 2. Paint organic mineral & crystal veins across the entire 360-degree planet
+	# 2. Paint ONLY fe (1), cu (2), si (3) on TERRA-I! (NO Titanium on starter planet -> motivates spaceflight to LUNA!)
 	for dc in [-24, -18, -13, -8, -4, 5, 10, 15, 21, 27]:
 		var wc := wrap_col(SPAWN_COL + int(dc))
 		var sr := get_surface_row(wc)
@@ -312,27 +329,25 @@ func generate_planet() -> void:
 	_paint_vein(wrap_col(SPAWN_COL - 6), 76, 3, 2, 3)
 	_paint_vein(wrap_col(SPAWN_COL + 8), 75, 3, 2, 3)
 	_paint_vein(wrap_col(SPAWN_COL - 16), 72, 3, 2, 1)
-	_paint_vein(wrap_col(SPAWN_COL + 18), 71, 3, 2, 1)
-	_paint_vein(wrap_col(SPAWN_COL), 50, 4, 3, 4)
+	_paint_vein(wrap_col(SPAWN_COL + 18), 71, 3, 2, 2)
+	_paint_vein(wrap_col(SPAWN_COL), 52, 4, 3, 3)
 
-	for _i in range(260):
-		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(64, ROWS - 4), rng.randi_range(2, 4), rng.randi_range(1, 3), 1)
-	for _i in range(210):
-		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(50, ROWS - 4), rng.randi_range(2, 3), rng.randi_range(1, 3), 2)
-	for _i in range(170):
-		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(24, 82), rng.randi_range(2, 4), rng.randi_range(1, 3), 3)
-	for _i in range(110):
-		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(10, 56), rng.randi_range(2, 4), rng.randi_range(2, 3), 4)
+	for _i in range(280):
+		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(50, ROWS - 4), rng.randi_range(2, 4), rng.randi_range(1, 3), 1)
+	for _i in range(240):
+		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(40, ROWS - 4), rng.randi_range(2, 3), rng.randi_range(1, 3), 2)
+	for _i in range(220):
+		_paint_vein(rng.randi_range(0, COLS - 1), rng.randi_range(14, 82), rng.randi_range(2, 4), rng.randi_range(1, 3), 3)
 
-	# 3. Spawn glowing HD-2D crystal spire props on cavern floors & surface mineral outcrops
+	# 3. Crystal spires on Terra (fe, cu, si ONLY!)
 	for c in range(0, COLS, 4):
 		var d_sp := absi(wrap_col(c - SPAWN_COL + COLS / 2) - COLS / 2)
 		for r in range(12, ROWS - 2):
 			var idx := r * COLS + c
 			if mat[idx] == 4 and r > 0 and mat[(r - 1) * COLS + c] in [1, 2]:
 				var o := int(ore[(r - 1) * COLS + c])
-				if o > 0 or (d_sp < 30 and rng.randf() < 0.52):
-					var oid: int = o if o > 0 else int([3, 3, 1, 2][rng.randi() % 4])
+				if o in [1, 2, 3] or (d_sp < 30 and rng.randf() < 0.52):
+					var oid: int = o if (o in [1, 2, 3]) else int([3, 3, 1, 2][rng.randi() % 4])
 					var p := cell_world_pos(c, r)
 					crystal_props.append({"col": c, "row": r, "pos": p, "rot": col_angle(c) + PI * 0.5, "ore": oid, "sc": rng.randf_range(0.85, 1.45)})
 	for dc in [-22, -16, -11, -7, -3, 4, 9, 14, 19, 25]:
@@ -341,8 +356,7 @@ func generate_planet() -> void:
 		var oid := 2 if (int(dc) in [-16, -7, 4, 14, 25]) else 1
 		crystal_props.append({"col": wc, "row": sr + 1, "pos": cell_world_pos(wc, sr + 1), "rot": col_angle(wc) + PI * 0.5, "ore": oid, "sc": 0.92})
 
-	# 3b. Spawn Indestructible Bedrock Drill-Only Ore Deposits
-	drill_nodes.clear()
+	# 3b. Bedrock Drill-Only Ore Deposits on TERRA-I (fe, cu, si ONLY!)
 	var next_dn_id := 1
 	var starter_surf := [[-14, "fe"], [12, "fe"], [-23, "cu"], [23, "cu"]]
 	for st in starter_surf:
@@ -350,47 +364,44 @@ func generate_planet() -> void:
 		var sr := get_surface_row(wc) + 1
 		var pose := get_pose_at(wc, sr)
 		drill_nodes.append({
-			"id": next_dn_id, "col": wc, "row": sr,
-			"pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
+			"id": next_dn_id, "body_id": "terra", "col": wc, "row": sr,
+			"local_pos": pose["pos"], "pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
 			"ore": String(st[1]),
 		})
 		next_dn_id += 1
-	var starter_cave := [[-11, 74, "si"], [14, 75, "si"], [2, 69, "fe"], [-2, 46, "ti"]]
+	var starter_cave := [[-11, 74, "si"], [14, 75, "si"], [2, 69, "fe"], [-2, 46, "si"]]
 	for scv in starter_cave:
 		var wc := wrap_col(SPAWN_COL + int(scv[0]))
 		var fr := int(scv[1])
-		while fr > 8 and not is_solid(wc, fr - 1):
-			fr -= 1
-		while fr < ROWS - 6 and is_solid(wc, fr):
-			fr += 1
+		while fr > 8 and not is_solid(wc, fr - 1): fr -= 1
+		while fr < ROWS - 6 and is_solid(wc, fr): fr += 1
 		var pose := get_pose_at(wc, fr)
 		drill_nodes.append({
-			"id": next_dn_id, "col": wc, "row": fr,
-			"pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
+			"id": next_dn_id, "body_id": "terra", "col": wc, "row": fr,
+			"local_pos": pose["pos"], "pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
 			"ore": String(scv[2]),
 		})
 		next_dn_id += 1
-	var g_ores: Array[String] = ["fe", "cu", "si", "ti"]
-	for i in range(36):
-		var c := wrap_col(SPAWN_COL + 42 + i * 24)
+	var g_ores: Array[String] = ["fe", "cu", "si"]
+	for i in range(30):
+		var c := wrap_col(SPAWN_COL + 42 + i * 28)
 		var o_id: String = g_ores[i % g_ores.size()]
 		var r := get_surface_row(c) + 1
-		if o_id == "si" or o_id == "ti":
-			var target_r := 62 if o_id == "si" else 34
+		if o_id == "si":
 			var found_r := -1
-			for rr in range(target_r - 12, target_r + 14):
+			for rr in range(50, 76):
 				if rr > 8 and rr < ROWS - 8 and mat[rr * COLS + c] == 4 and is_solid(c, rr - 1):
 					found_r = rr; break
 			if found_r > 0: r = found_r
 		var pose := get_pose_at(c, r)
 		drill_nodes.append({
-			"id": next_dn_id, "col": c, "row": r,
-			"pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
+			"id": next_dn_id, "body_id": "terra", "col": c, "row": r,
+			"local_pos": pose["pos"], "pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
 			"ore": o_id,
 		})
 		next_dn_id += 1
 
-	# 4. Bake spawn-visible chunks immediately, queue remaining chunks lazily
+	# 4. Bake spawn chunks immediately
 	dirty_chunks.clear()
 	var spawn_ci := SPAWN_COL / CHUNK_COLS
 	for dci in range(-2, 3):
@@ -400,30 +411,224 @@ func generate_planet() -> void:
 		if dist_c > 2:
 			dirty_chunks.append(ci)
 
-	# 5. Orbital Asteroid Belt around Terra + Heliocentric Asteroid Belt
+	# 5. Asteroids (Terra orbit: fe, cu, si; Deep space belt: ti, ignis_ore, ice)
 	asteroids.clear()
-	var cyc: Array[String] = ["si", "cu", "fe", "ti"]
+	var t_cyc: Array[String] = ["si", "cu", "fe"]
 	var terra_p: Vector2 = bodies["terra"]["pos"]
-	for i in range(110):
-		var ang := (-PI * 0.5 + float(i - 8) * 0.055) if i < 16 else rng.randf_range(0.0, TAU)
-		var dist := rng.randf_range(R_ATMOS + 260.0, R_ATMOS + 1100.0) if i < 16 else rng.randf_range(R_ATMOS + 450.0, 10800.0)
-		var ot: String = cyc[i % cyc.size()]
+	for i in range(80):
+		var ang := (-PI * 0.5 + float(i - 8) * 0.055) if i < 14 else rng.randf_range(0.0, TAU)
+		var dist := rng.randf_range(R_ATMOS + 260.0, R_ATMOS + 1100.0) if i < 14 else rng.randf_range(R_ATMOS + 450.0, 9600.0)
+		var ot: String = t_cyc[i % t_cyc.size()]
 		asteroids.append({
 			"parent": "terra", "pos": terra_p + Vector2(cos(ang), sin(ang)) * dist,
-			"ore": ot, "hp": 60.0, "rad": rng.randf_range(28.0, 48.0),
+			"ore": ot, "hp": 60.0, "rad": rng.randf_range(28.0, 46.0),
 			"ang": ang, "dist": dist, "spd": rng.randf_range(0.003, 0.007) * (1.0 if i % 2 == 0 else -1.0),
 			"rot": rng.randf_range(0.0, TAU),
 		})
-	for i in range(50):
-		var ang := rng.randf_range(0.0, TAU)
-		var dist := rng.randf_range(35500.0, 38500.0) # Heliocentric asteroid belt between Terra & Cryo!
-		var ot: String = cyc[i % cyc.size()]
-		asteroids.append({
-			"parent": "sun", "pos": Vector2(cos(ang), sin(ang)) * dist,
-			"ore": ot, "hp": 80.0, "rad": rng.randf_range(36.0, 62.0),
-			"ang": ang, "dist": dist, "spd": rng.randf_range(0.006, 0.011),
-			"rot": rng.randf_range(0.0, TAU),
+
+func _init_extra_planets() -> void:
+	# Generate 360-degree sliced voxel cross-sections + organic caves + drill nodes for LUNA, IGNIS, CRYO, ASTRA!
+	for old_v in extra_vox.values():
+		if is_instance_valid(old_v.get("root", null)):
+			old_v["root"].queue_free()
+	extra_vox.clear()
+	dirty_extra.clear()
+
+	var next_dn_id := drill_nodes.size() + 1
+	var terra_p := Vector2(bodies["terra"]["pos"])
+	var seed_base := 20262000
+
+	for bid in ["luna", "ignis", "cryo", "astra"]:
+		seed_base += 101
+		var b: Dictionary = bodies[bid]
+		var r_surf := float(b["rad"])
+		var r_core := float(b["r_core"])
+		var ch_h := (r_surf - r_core) / float(EX_ROWS)
+		var o_code := int(b["ore_code"])
+		var o_str := String(b["ore"])
+
+		var rnode := Node2D.new()
+		rnode.name = "Vox_" + bid
+		rnode.position = Vector2(b["pos"]) - terra_p
+		add_child(rnode)
+
+		var meshes: Array[MeshInstance2D] = []
+		var texs: Array[ImageTexture] = []
+		for ci in range(EX_CHUNKS):
+			var mi := MeshInstance2D.new()
+			mi.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			mi.mesh = _build_ring_mesh(ci, EX_CHUNK_COLS, EX_DA, r_surf, r_core)
+			var img := Image.create(EX_CHUNK_COLS * EX_SUB_X, EX_ROWS * EX_SUB_Y, false, Image.FORMAT_RGBA8)
+			var itex := ImageTexture.create_from_image(img)
+			mi.texture = itex
+			rnode.add_child(mi)
+			meshes.append(mi)
+			texs.append(itex)
+
+		var e_mat := PackedByteArray(); e_mat.resize(EX_COLS * EX_ROWS)
+		var e_ore := PackedByteArray(); e_ore.resize(EX_COLS * EX_ROWS)
+		var e_hp := PackedFloat32Array(); e_hp.resize(EX_COLS * EX_ROWS)
+
+		var cn_noise := FastNoiseLite.new()
+		cn_noise.seed = seed_base
+		cn_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		cn_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+		cn_noise.fractal_octaves = 3
+		cn_noise.frequency = 0.0026
+
+		var wx_noise := FastNoiseLite.new()
+		wx_noise.seed = seed_base + 37
+		wx_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		wx_noise.frequency = 0.0018
+
+		for c in range(EX_COLS):
+			var a := float(c) * EX_DA
+			var ca := cos(a); var sa := sin(a)
+			var hill := int(round(wx_noise.get_noise_2d(ca * r_surf, sa * r_surf) * 2.2))
+			var s_row := clampi(EX_ROWS - 2 + hill, EX_ROWS - 5, EX_ROWS - 1)
+			for r in range(EX_ROWS):
+				var idx := r * EX_COLS + c
+				e_ore[idx] = 0
+				if r > s_row:
+					e_mat[idx] = 0; e_hp[idx] = 0.0; continue
+				if r < 4:
+					e_mat[idx] = 3; e_hp[idx] = 999.0; continue
+				var rad := r_core + (float(r) + 0.5) * ch_h
+				var wx := ca * rad; var wy := sa * rad
+				var w_off := wx_noise.get_noise_2d(wx, wy) * 140.0
+				var cv := cn_noise.get_noise_2d(wx + w_off, wy - w_off)
+				var roof_f := clampf(float(s_row - 3 - r) / 5.0, 0.0, 1.0)
+				if r >= 6 and r <= s_row - 3 and cv > (0.20 + (1.0 - roof_f) * 0.36):
+					e_mat[idx] = 4; e_hp[idx] = 0.0
+				elif r >= s_row - 5:
+					e_mat[idx] = 1; e_hp[idx] = 9.0
+				else:
+					e_mat[idx] = 2; e_hp[idx] = 15.0
+				# Rich planet-specific ore veins + secondary iron/silicon!
+				if e_mat[idx] in [1, 2]:
+					var vn := cn_noise.get_noise_2d(wx * 2.3 + 500.0, wy * 2.3 - 500.0)
+					if vn > 0.32 or (r == s_row and (c % 18) < 3):
+						e_ore[idx] = o_code
+					elif vn < -0.44:
+						e_ore[idx] = 1 # Fe backup
+
+		extra_vox[bid] = {
+			"id": bid, "root": rnode, "r_surf": r_surf, "r_core": r_core, "cell_h": ch_h,
+			"mat": e_mat, "ore": e_ore, "hp": e_hp, "meshes": meshes, "texs": texs,
+			"ore_code": o_code, "ore_id": o_str,
+		}
+
+		# Spawn 10 Bedrock Drill-Only Ore Deposits on each planet (surface + underground caves!)
+		for di in range(10):
+			var dc := (di * (EX_COLS / 10) + 12) % EX_COLS
+			var dr := EX_ROWS - 1
+			while dr > 6 and int(e_mat[(dr - 1) * EX_COLS + dc]) in [0, 4]:
+				dr -= 1
+			var a := (float(dc) + 0.5) * EX_DA
+			var rad := r_core + float(dr) * ch_h
+			var n_vec := Vector2(cos(a), sin(a))
+			var lpos := n_vec * rad
+			drill_nodes.append({
+				"id": next_dn_id, "body_id": bid, "col": dc, "row": dr,
+				"local_pos": lpos, "pos": (Vector2(b["pos"]) - terra_p) + lpos,
+				"normal": n_vec, "rot": a + PI * 0.5,
+				"ore": o_str if (di % 4 != 3) else "fe",
+			})
+			next_dn_id += 1
+
+		# Bake first 3 chunks immediately, queue rest lazily
+		for ci in range(EX_CHUNKS):
+			if ci < 3:
+				_bake_extra_chunk(bid, ci)
+			else:
+				dirty_extra.append([bid, ci])
+
+	# Initialize 6 Enemy Stronghold Bastions on ASTRA-V!
+	astra_bastions.clear()
+	var astra_r := float(bodies["astra"]["rad"])
+	for bi in range(6):
+		var ba := float(bi) * (TAU / 6.0) - PI * 0.5
+		var bn := Vector2(cos(ba), sin(ba))
+		astra_bastions.append({
+			"idx": bi, "ang": ba, "normal": bn,
+			"local_pos": bn * (astra_r + 36.0),
+			"hp": 450.0, "max_hp": 450.0, "alive": true, "fire_t": float(bi) * 0.3,
 		})
+	State.astra_bastions_left = 6
+	State.astra_liberated = false
+
+func _bake_extra_chunk(bid: String, ci: int) -> void:
+	if not extra_vox.has(bid): return
+	var ev: Dictionary = extra_vox[bid]
+	var w := EX_CHUNK_COLS * EX_SUB_X
+	var h := EX_ROWS * EX_SUB_Y
+	var data := PackedByteArray(); data.resize(w * h * 4)
+	var base_c := ci * EX_CHUNK_COLS
+	var e_mat: PackedByteArray = ev["mat"]
+	var e_ore: PackedByteArray = ev["ore"]
+
+	# Planet-specific crust / deep rock / core / ore color themes!
+	var c_crust := Vector3i(154, 164, 186)
+	var c_deep  := Vector3i(28, 34, 48)
+	var c_core  := Vector3i(120, 224, 255)
+	var c_cave  := Vector3i(14, 18, 28)
+	match bid:
+		"ignis":
+			c_crust = Vector3i(164, 58, 34); c_deep = Vector3i(52, 20, 16); c_core = Vector3i(255, 168, 38); c_cave = Vector3i(26, 10, 10)
+		"cryo":
+			c_crust = Vector3i(118, 206, 242); c_deep = Vector3i(24, 54, 86); c_core = Vector3i(164, 246, 255); c_cave = Vector3i(10, 24, 42)
+		"astra":
+			c_crust = Vector3i(104, 62, 152); c_deep = Vector3i(34, 20, 56); c_core = Vector3i(238, 68, 255); c_cave = Vector3i(16, 10, 30)
+
+	for r in range(EX_ROWS):
+		var y_base := (EX_ROWS - 1 - r) * EX_SUB_Y
+		var core_glow := clampf(float(10 - r) / 10.0, 0.0, 1.0)
+		for lc in range(EX_CHUNK_COLS):
+			var c := base_c + lc
+			var idx := r * EX_COLS + c
+			var m := int(e_mat[idx])
+			if m == 0: continue
+			var o := int(e_ore[idx])
+			var solid := (m in [1, 2, 3])
+			var open_bot := (r > 0) and (int(e_mat[(r - 1) * EX_COLS + c]) in [0, 4])
+			var open_l := int(e_mat[r * EX_COLS + ((c - 1 + EX_COLS) % EX_COLS)]) in [0, 4]
+
+			for sy in range(EX_SUB_Y):
+				var py := y_base + sy
+				for sx in range(EX_SUB_X):
+					var px := lc * EX_SUB_X + sx
+					var hv := ((c * EX_SUB_X + sx) * 374761393 + (r * EX_SUB_Y + sy) * 668265263) & 0xFFFF
+					var n := float(hv % 100) / 100.0
+					var rr_c := 0; var gg_c := 0; var bb_c := 0
+					if m == 4:
+						rr_c = c_cave.x + int(n * 8.0 + core_glow * float(c_core.x) * 0.25)
+						gg_c = c_cave.y + int(n * 8.0 + core_glow * float(c_core.y) * 0.22)
+						bb_c = c_cave.z + int(n * 8.0 + core_glow * float(c_core.z) * 0.22)
+					elif m == 3:
+						rr_c = clampi(c_core.x + int(n * 35.0), 0, 255)
+						gg_c = clampi(c_core.y + int(n * 35.0), 0, 255)
+						bb_c = clampi(c_core.z + int(n * 35.0), 0, 255)
+					elif m == 1:
+						rr_c = clampi(c_crust.x + int(n * 28.0), 0, 255)
+						gg_c = clampi(c_crust.y + int(n * 28.0), 0, 255)
+						bb_c = clampi(c_crust.z + int(n * 28.0), 0, 255)
+					else:
+						rr_c = clampi(c_deep.x + int(n * 22.0 + core_glow * 42.0), 0, 255)
+						gg_c = clampi(c_deep.y + int(n * 22.0 + core_glow * 24.0), 0, 255)
+						bb_c = clampi(c_deep.z + int(n * 22.0 + core_glow * 32.0), 0, 255)
+					if solid and m != 3 and ((open_bot and sy == EX_SUB_Y - 1) or (open_l and sx == 0)):
+						rr_c = int(rr_c * 0.35); gg_c = int(gg_c * 0.35); bb_c = int(bb_c * 0.38)
+					if o > 0 and n > 0.58:
+						var oc := ore_col(ORE_CODE_TO_ID[o])
+						rr_c = int(rr_c * 0.38 + oc.r * 255.0 * 0.62)
+						gg_c = int(gg_c * 0.38 + oc.g * 255.0 * 0.62)
+						bb_c = int(bb_c * 0.38 + oc.b * 255.0 * 0.62)
+					var off := (py * w + px) * 4
+					data[off] = rr_c; data[off + 1] = gg_c; data[off + 2] = bb_c; data[off + 3] = 255
+
+	var img := Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, data)
+	var tex_arr: Array = ev["texs"]
+	tex_arr[ci].update(img)
 
 func _paint_vein(c0: int, r0: int, rc: int, rr: int, oid: int) -> void:
 	for dr in range(-rr, rr + 1):
@@ -522,6 +727,9 @@ func _process(delta: float) -> void:
 	if not dirty_chunks.is_empty():
 		var ci := int(dirty_chunks.pop_front())
 		_bake_chunk(ci)
+	elif not dirty_extra.is_empty():
+		var pair: Array = dirty_extra.pop_front()
+		_bake_extra_chunk(String(pair[0]), int(pair[1]))
 
 	for i in range(sparks.size() - 1, -1, -1):
 		sparks[i]["pos"] += sparks[i]["vel"] * delta
@@ -545,7 +753,7 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 # ------------------------------------------------------------------------------
-# SOLAR SYSTEM, PATCHED-CONIC SOI, DAY/NIGHT & POLAR COORDINATES
+# MULTI-PLANET VOXEL QUERIES & COORDINATES
 # ------------------------------------------------------------------------------
 func get_body(bid: String) -> Dictionary:
 	return bodies.get(bid, bodies["terra"])
@@ -569,7 +777,6 @@ func get_sunlight_local(local_pos: Vector2) -> float:
 	return clampf((up.dot(sd) + 0.08) / 0.65, 0.0, 1.0)
 
 func get_sunlight(pos_or_local: Vector2) -> float:
-	# Works for Terra-local positions (from IndustrialGrid) cleanly!
 	return get_sunlight_local(pos_or_local)
 
 func get_sunlight_world(world_pos: Vector2) -> float:
@@ -582,7 +789,6 @@ func get_sunlight_world(world_pos: Vector2) -> float:
 	var rel := world_pos - bp
 	if rel.length() <= float(b["rad"]) + 380.0:
 		return clampf((rel.normalized().dot(sd) + 0.08) / 0.65, 0.0, 1.0)
-	# In orbit: check planet shadow cone (eclipse!)
 	var proj := rel.dot(sd)
 	if proj < 0.0:
 		var perp := (rel - sd * proj).length()
@@ -591,7 +797,6 @@ func get_sunlight_world(world_pos: Vector2) -> float:
 	return 1.0
 
 func get_dominant_body(world_pos: Vector2) -> Dictionary:
-	# Patched-Conic SOI priority: Moon (Luna) first -> Planets -> Sun!
 	var luna: Dictionary = bodies["luna"]
 	if world_pos.distance_to(Vector2(luna["pos"])) <= float(luna["soi_r"]):
 		return luna
@@ -608,7 +813,7 @@ func compute_gravity_for(world_pos: Vector2, body_id: String) -> Vector2:
 	if r < 20.0:
 		return Vector2.ZERO
 	var rad := float(b["rad"])
-	var g_mag := (float(b["g_surf"]) * (r / rad)) if (body_id == "terra" and r < rad) else (float(b["gm"]) / (r * r))
+	var g_mag := (float(b["g_surf"]) * (r / rad)) if (r < rad) else (float(b["gm"]) / (r * r))
 	return (-rel / r) * g_mag
 
 func compute_gravity(world_pos: Vector2) -> Vector2:
@@ -624,16 +829,83 @@ func get_atmos_density_world(world_pos: Vector2) -> float:
 func get_atmos_density(pos: Vector2) -> float:
 	return get_atmos_density_world(pos)
 
+# Extra planet voxel queries (for LUNA, IGNIS-I, CRYO-IV, ASTRA-V!)
+static func wrap_ex_col(c: int) -> int:
+	return ((c % EX_COLS) + EX_COLS) % EX_COLS
+
+func extra_local_to_cell(bid: String, rel_pos: Vector2) -> Vector2i:
+	if not extra_vox.has(bid): return Vector2i.ZERO
+	var ev: Dictionary = extra_vox[bid]
+	var a := atan2(rel_pos.y, rel_pos.x)
+	if a < 0.0: a += TAU
+	var c := wrap_ex_col(int(floor(a / EX_DA)))
+	var r := int(floor((rel_pos.length() - float(ev["r_core"])) / float(ev["cell_h"])))
+	return Vector2i(c, r)
+
+func is_extra_solid(bid: String, c: int, r: int) -> bool:
+	if not extra_vox.has(bid): return false
+	if r < 4: return true
+	if r >= EX_ROWS: return false
+	var e_mat: PackedByteArray = extra_vox[bid]["mat"]
+	var m := int(e_mat[r * EX_COLS + wrap_ex_col(c)])
+	return m in [1, 2, 3]
+
+func get_extra_surface_row(bid: String, c: int) -> int:
+	if not extra_vox.has(bid): return EX_ROWS - 2
+	var e_mat: PackedByteArray = extra_vox[bid]["mat"]
+	var wc := wrap_ex_col(c)
+	for r in range(EX_ROWS - 1, 3, -1):
+		if int(e_mat[r * EX_COLS + wc]) in [1, 2]:
+			return r
+	return 4
+
+func get_body_pose_at(bid: String, c: int, r: int) -> Dictionary:
+	if bid == "terra" or not extra_vox.has(bid):
+		var p := get_pose_at(c, r)
+		p["body_id"] = "terra"
+		p["local_pos"] = p["pos"]
+		return p
+	var ev: Dictionary = extra_vox[bid]
+	var wc := wrap_ex_col(c)
+	var a := (float(wc) + 0.5) * EX_DA
+	var rad := float(ev["r_core"]) + float(r) * float(ev["cell_h"])
+	var n := Vector2(cos(a), sin(a))
+	var lpos := n * rad
+	var b_off := Vector2(bodies[bid]["pos"]) - Vector2(bodies["terra"]["pos"])
+	return {
+		"body_id": bid, "col": wc, "row": r, "ang": a, "r": rad,
+		"local_pos": lpos, "pos": b_off + lpos, "normal": n, "rot": a + PI * 0.5
+	}
+
 func check_celestial_hit(world_pos: Vector2, rad: float = 18.0) -> Dictionary:
-	for bid in ["luna", "ignis", "cryo", "astra", "sun"]:
-		var b: Dictionary = bodies[bid]
-		var bp: Vector2 = b["pos"]
-		var lim := float(b["rad"]) + rad
-		var diff := world_pos - bp
-		var d := diff.length()
-		if d < lim and d > 0.1:
-			return {"hit": true, "body_id": bid, "normal": diff / d, "push": bp + (diff / d) * lim, "body": b}
+	# Only SUN is a simple sphere now; LUNA/IGNIS/CRYO/ASTRA use real sliced voxel collision!
+	var b: Dictionary = bodies["sun"]
+	var bp: Vector2 = b["pos"]
+	var lim := float(b["rad"]) + rad
+	var diff := world_pos - bp
+	var d := diff.length()
+	if d < lim and d > 0.1:
+		return {"hit": true, "body_id": "sun", "normal": diff / d, "push": bp + (diff / d) * lim, "body": b}
 	return {"hit": false}
+
+func damage_astra_bastions(dmg: float) -> void:
+	if State.astra_liberated: return
+	var alive_cnt := 0
+	for bst in astra_bastions:
+		if not bool(bst["alive"]): continue
+		bst["hp"] = maxf(0.0, float(bst["hp"]) - dmg)
+		if float(bst["hp"]) <= 0.0:
+			bst["alive"] = false
+			var wp := Vector2(bodies["astra"]["pos"]) + Vector2(bst["local_pos"])
+			spawn_sparks_world(wp, Color(1.0, 0.45, 0.25), 24)
+			Sfx.play("boom")
+		else:
+			alive_cnt += 1
+	State.astra_bastions_left = alive_cnt
+	if alive_cnt == 0 and not State.astra_liberated:
+		State.astra_liberated = true
+		Sfx.play("research")
+		State.add_log("敵中枢惑星アストラ-Vの防衛拠点を全滅させ制圧しました！上陸・採掘が可能に！", "good")
 
 static func wrap_col(c: int) -> int:
 	return ((c % COLS) + COLS) % COLS
@@ -667,12 +939,10 @@ func is_solid(c: int, r: int) -> bool:
 
 func get_ore_id(c: int, r: int) -> String:
 	if r < 0 or r >= ROWS: return ""
-	match int(ore[r * COLS + wrap_col(c)]):
-		1: return "fe"
-		2: return "cu"
-		3: return "si"
-		4: return "ti"
-		_: return ""
+	var code := int(ore[r * COLS + wrap_col(c)])
+	if code > 0 and code < ORE_CODE_TO_ID.size():
+		return ORE_CODE_TO_ID[code]
+	return ""
 
 func get_surface_row(c: int) -> int:
 	var wc := wrap_col(c)
@@ -686,39 +956,38 @@ func get_pose_at(c: int, r: int) -> Dictionary:
 	var a := col_angle(wc)
 	var rad := R_CORE + float(r) * CELL_H
 	var n := Vector2(cos(a), sin(a))
-	return {"col": wc, "row": r, "ang": a, "r": rad, "pos": n * rad, "normal": n, "rot": a + PI * 0.5}
+	return {"body_id": "terra", "col": wc, "row": r, "ang": a, "r": rad, "local_pos": n * rad, "pos": n * rad, "normal": n, "rot": a + PI * 0.5}
 
-func is_drill_node_protected(col: int, row: int) -> bool:
-	var wc := wrap_col(col)
+func is_drill_node_protected(col: int, row: int, bid: String = "terra") -> bool:
+	var cols_n := COLS if bid == "terra" else EX_COLS
+	var wc := ((col % cols_n) + cols_n) % cols_n
 	for dn in drill_nodes:
+		if String(dn.get("body_id", "terra")) != bid: continue
 		var dr := int(dn["row"])
 		if row < dr - 3 or row > dr: continue
-		var dc := absi(wrap_col(wc - int(dn["col"]) + COLS / 2) - COLS / 2)
+		var dc := absi(((wc - int(dn["col"]) + cols_n / 2) % cols_n + cols_n) % cols_n - cols_n / 2)
 		if dc <= 2:
 			return true
 	return false
 
-func find_nearest_drill_node(local_pos: Vector2, max_d: float = 175.0) -> Dictionary:
+func find_nearest_drill_node(terra_local_pos: Vector2, max_d: float = 175.0) -> Dictionary:
 	var best: Dictionary = {}
 	var bd := max_d
 	for dn in drill_nodes:
-		var d := Vector2(dn["pos"]).distance_to(local_pos)
+		var d := Vector2(dn["pos"]).distance_to(terra_local_pos)
 		if d < bd:
 			bd = d; best = dn
 	return best
 
 func sample_surface_ore_under(world_pos: Vector2) -> Dictionary:
-	# Used by Orbital Mining Laser to locate surface ore directly beneath it!
 	var b := get_dominant_body(world_pos)
 	var bid := String(b["id"])
-	if bid == "sun":
-		return {}
+	if bid == "sun": return {}
 	var bp: Vector2 = b["pos"]
 	var rel := world_pos - bp
 	var dist := rel.length()
 	var alt := dist - float(b["rad"])
-	if alt > 5200.0 or dist < 10.0:
-		return {}
+	if alt > 5200.0 or dist < 10.0: return {}
 	var n := rel / dist
 	if bid == "terra":
 		var a := atan2(n.y, n.x)
@@ -729,62 +998,77 @@ func sample_surface_ore_under(world_pos: Vector2) -> Dictionary:
 		var o := get_ore_id(c, sr - 1)
 		if o == "":
 			var dn := find_nearest_drill_node(surf_local, 420.0)
-			o = String(dn["ore"]) if not dn.is_empty() else (["fe", "cu", "si", "ti"][(c / 15) % 4])
+			o = String(dn["ore"]) if not dn.is_empty() else (["fe", "cu", "si"][(c / 15) % 3])
 		return {"body_id": "terra", "world_pos": bp + surf_local, "normal": n, "ore": o}
 	else:
 		var surf_w := bp + n * float(b["rad"])
 		return {"body_id": bid, "world_pos": surf_w, "normal": n, "ore": String(b["ore"])}
 
 # ------------------------------------------------------------------------------
-# DIRECTIONAL RAYCAST MULTI-BEAM MINING (WORLD SPACE -> TERRA + MOONS + ASTEROIDS!)
+# DIRECTIONAL RAYCAST MULTI-BEAM MINING (ALL 5 SLICED VOXEL PLANETS + ASTEROIDS!)
 # ------------------------------------------------------------------------------
 func find_mine_target(world_pos: Vector2, aim_dir: Vector2, max_range: float = 260.0) -> Dictionary:
+	var dom := get_dominant_body(world_pos)
+	var dom_id := String(dom["id"])
+	var dom_p := Vector2(dom["pos"])
 	var terra_p := Vector2(bodies["terra"]["pos"])
-	var rel_t := world_pos - terra_p
-	var dir := aim_dir.normalized() if aim_dir.length() > 0.05 else (-rel_t.normalized() if rel_t.length() > 1.0 else Vector2.DOWN)
+	var rel_dom := world_pos - dom_p
+	var dir := aim_dir.normalized() if aim_dir.length() > 0.05 else (-rel_dom.normalized() if rel_dom.length() > 1.0 else Vector2.DOWN)
 	var step_d := 8.0
 	var d := 14.0
-	var in_space := rel_t.length() > R_SURFACE + 220.0
+	var in_space := rel_dom.length() > float(dom["rad"]) + 220.0
 	var space_reach := max_range + (180.0 if in_space else 0.0)
 
 	while d <= space_reach:
 		var wp := world_pos + dir * d
-		var lp := wp - terra_p
+		var lp_terra := wp - terra_p
 
-		# 0. Terra Bedrock Drill Nodes
-		if d <= max_range + 12.0 and lp.length() <= R_SURFACE + 90.0:
+		# 0. Bedrock Drill Nodes on ANY planet
+		if d <= max_range + 14.0:
 			for dn in drill_nodes:
-				if Vector2(dn["pos"]).distance_to(lp) <= 26.0:
+				if Vector2(dn["pos"]).distance_to(lp_terra) <= 26.0:
 					return {"kind": "drill_node", "pos": terra_p + Vector2(dn["pos"]), "ore": dn["ore"]}
 
-		# 1. Terra Crystal Spires
-		if d <= max_range + 16.0 and lp.length() <= R_SURFACE + 90.0:
-			for pi in range(crystal_props.size()):
-				var pr: Dictionary = crystal_props[pi]
-				if Vector2(pr["pos"]).distance_to(lp) <= 24.0 * float(pr.get("sc", 1.0)):
-					var o_n: String = ["", "fe", "cu", "si", "ti"][int(pr["ore"])]
-					return {"kind": "crystal", "idx": pi, "pos": terra_p + Vector2(pr["pos"]), "ore": o_n}
+		# 1. Terra Crystal Spires & Voxels
+		if dom_id == "terra":
+			if d <= max_range + 16.0 and lp_terra.length() <= R_SURFACE + 90.0:
+				for pi in range(crystal_props.size()):
+					var pr: Dictionary = crystal_props[pi]
+					if Vector2(pr["pos"]).distance_to(lp_terra) <= 24.0 * float(pr.get("sc", 1.0)):
+						var o_n: String = ORE_CODE_TO_ID[int(pr["ore"])]
+						return {"kind": "crystal", "idx": pi, "pos": terra_p + Vector2(pr["pos"]), "ore": o_n}
+			if d <= max_range and lp_terra.length() <= R_SURFACE + 28.0:
+				var cell := world_to_cell(lp_terra)
+				if is_solid(cell.x, cell.y):
+					if is_drill_node_protected(cell.x, cell.y, "terra"):
+						return {"kind": "drill_node", "pos": wp, "ore": "fe"}
+					if factory == null or not factory.is_foundation_protected(cell.x, cell.y, "terra"):
+						return {"kind": "voxel", "body_id": "terra", "col": cell.x, "row": cell.y, "pos": wp, "ore": get_ore_id(cell.x, cell.y)}
+					return {}
 
-		# 2. Terra Solid Terrain Voxels
-		if d <= max_range and lp.length() <= R_SURFACE + 28.0:
-			var cell := world_to_cell(lp)
-			if is_solid(cell.x, cell.y):
-				if is_drill_node_protected(cell.x, cell.y):
-					return {"kind": "drill_node", "pos": wp, "ore": "fe"}
-				if factory == null or not factory.is_foundation_protected(cell.x, cell.y):
-					return {"kind": "voxel", "col": cell.x, "row": cell.y, "pos": wp, "ore": get_ore_id(cell.x, cell.y)}
-				return {}
+		# 2. Extra Sliced Voxel Planets (LUNA, IGNIS-I, CRYO-IV, ASTRA-V)
+		elif extra_vox.has(dom_id) and d <= max_range + 20.0:
+			var rel_b := wp - dom_p
+			var ev: Dictionary = extra_vox[dom_id]
+			if rel_b.length() <= float(ev["r_surf"]) + 28.0:
+				var ecell := extra_local_to_cell(dom_id, rel_b)
+				if is_extra_solid(dom_id, ecell.x, ecell.y):
+					if dom_id == "astra" and not State.astra_liberated:
+						return {"kind": "astra_shield", "pos": wp, "ore": "astra_shard"}
+					if is_drill_node_protected(ecell.x, ecell.y, dom_id):
+						return {"kind": "drill_node", "pos": wp, "ore": ev["ore_id"]}
+					if factory == null or not factory.is_foundation_protected(ecell.x, ecell.y, dom_id):
+						var o_c := int(ev["ore"][ecell.y * EX_COLS + wrap_ex_col(ecell.x)])
+						var o_s := ORE_CODE_TO_ID[o_c] if (o_c > 0 and o_c < ORE_CODE_TO_ID.size()) else String(ev["ore_id"])
+						return {"kind": "extra_voxel", "body_id": dom_id, "col": ecell.x, "row": ecell.y, "pos": wp, "ore": o_s}
+					return {}
 
-		# 3. Asteroids & Other Planets/Moons (LUNA, IGNIS, CRYO, ASTRA)
+		# 3. Asteroids
 		if in_space:
 			for ai in range(asteroids.size()):
 				var ast: Dictionary = asteroids[ai]
 				if Vector2(ast["pos"]).distance_to(wp) <= float(ast["rad"]) + 12.0:
 					return {"kind": "asteroid", "idx": ai, "pos": wp, "ore": ast["ore"]}
-			for bid in ["luna", "ignis", "cryo", "astra"]:
-				var b: Dictionary = bodies[bid]
-				if Vector2(b["pos"]).distance_to(wp) <= float(b["rad"]) + 14.0:
-					return {"kind": "body", "body_id": bid, "pos": wp, "ore": b["ore"]}
 
 		d += step_d
 	return {}
@@ -794,6 +1078,13 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 	var kind := String(tgt["kind"])
 	var wpos: Vector2 = Vector2(tgt["pos"])
 	var lpos := to_terra_local(wpos)
+	if kind == "astra_shield":
+		var now_s := Time.get_ticks_msec()
+		if now_s - _last_bounce_ms > 950:
+			_last_bounce_ms = now_s
+			Sfx.play("error")
+			spawn_popup(lpos, "敵防衛シールド！（艦隊の「強襲」で制圧しよう）", Color(1.0, 0.36, 0.42))
+		return false
 	if kind == "drill_node":
 		if randf() < 0.35:
 			spawn_sparks(lpos, Color(0.86, 0.92, 1.0), 3)
@@ -808,7 +1099,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 		if pi < 0 or pi >= crystal_props.size(): return false
 		var pr: Dictionary = crystal_props[pi]
 		pr["hp"] = float(pr.get("hp", 10.0)) - dmg
-		var o_n: String = ["", "fe", "cu", "si", "ti"][int(pr["ore"])]
+		var o_n: String = ORE_CODE_TO_ID[int(pr["ore"])]
 		if randf() < 0.45:
 			spawn_sparks(pr["pos"], ore_col(o_n), 4)
 		if float(pr["hp"]) <= 0.0:
@@ -830,8 +1121,8 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 				if abs(dc) + abs(dr) > 2: continue
 				var wc := wrap_col(c0 + dc)
 				if not is_solid(wc, r): continue
-				if is_drill_node_protected(wc, r): continue
-				if factory != null and factory.is_foundation_protected(wc, r): continue
+				if is_drill_node_protected(wc, r, "terra"): continue
+				if factory != null and factory.is_foundation_protected(wc, r, "terra"): continue
 				var idx := r * COLS + wc
 				cell_hp[idx] -= dmg
 				if cell_hp[idx] <= 0.0:
@@ -853,13 +1144,52 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 			spawn_sparks(lpos, ore_col(String(tgt.get("ore", "fe"))), 8)
 			for pi in range(crystal_props.size() - 1, -1, -1):
 				if Vector2(crystal_props[pi]["pos"]).distance_to(lpos) <= 52.0:
-					var o_n: String = ["", "fe", "cu", "si", "ti"][int(crystal_props[pi]["ore"])]
+					var o_n: String = ORE_CODE_TO_ID[int(crystal_props[pi]["ore"])]
 					State.add_r(o_n, 8)
 					spawn_popup(crystal_props[pi]["pos"], "+8 %s" % State.res_name(o_n), ore_col(o_n))
 					crystal_props.remove_at(pi)
 			for ci in touched_chunks.keys():
 				_bake_chunk(int(ci))
 		return carved
+	if kind == "extra_voxel":
+		var bid := String(tgt["body_id"])
+		if not extra_vox.has(bid): return false
+		var ev: Dictionary = extra_vox[bid]
+		var e_mat: PackedByteArray = ev["mat"]
+		var e_ore: PackedByteArray = ev["ore"]
+		var e_hp: PackedFloat32Array = ev["hp"]
+		var c0 := int(tgt["col"]); var r0 := int(tgt["row"])
+		var carved_e := false
+		var touched_e: Dictionary = {}
+		for dr in range(-1, 2):
+			var r := r0 + dr
+			if r < 4 or r >= EX_ROWS: continue
+			for dc in range(-1, 2):
+				if abs(dc) + abs(dr) > 2: continue
+				var wc := wrap_ex_col(c0 + dc)
+				if not is_extra_solid(bid, wc, r): continue
+				if is_drill_node_protected(wc, r, bid): continue
+				if factory != null and factory.is_foundation_protected(wc, r, bid): continue
+				var idx := r * EX_COLS + wc
+				e_hp[idx] -= dmg
+				if e_hp[idx] <= 0.0:
+					var oc := int(e_ore[idx])
+					var o_str := ORE_CODE_TO_ID[oc] if (oc > 0 and oc < ORE_CODE_TO_ID.size()) else String(ev["ore_id"])
+					e_mat[idx] = 4 if r < EX_ROWS - 3 else 0
+					e_ore[idx] = 0
+					e_hp[idx] = 0.0
+					touched_e[wc / EX_CHUNK_COLS] = true
+					touched_e[wrap_ex_col(wc - 1) / EX_CHUNK_COLS] = true
+					touched_e[wrap_ex_col(wc + 1) / EX_CHUNK_COLS] = true
+					carved_e = true
+					State.add_r(o_str, 4)
+					spawn_popup(lpos, "+4 %s" % State.res_name(o_str), ore_col(o_str))
+		if carved_e:
+			Sfx.play("mine")
+			spawn_sparks(lpos, ore_col(String(tgt.get("ore", "ti"))), 8)
+			for ci in touched_e.keys():
+				_bake_extra_chunk(bid, int(ci))
+		return carved_e
 	elif kind == "asteroid":
 		var i := int(tgt["idx"])
 		if i < 0 or i >= asteroids.size(): return false
@@ -873,14 +1203,6 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 			spawn_popup(lpos, "+22 %s" % State.res_name(o_n), ore_col(o_n))
 			asteroids.remove_at(i)
 			return true
-	elif kind == "body":
-		var o_n := String(tgt.get("ore", "ti"))
-		if randf() < dmg * 0.06:
-			State.add_r(o_n, 4)
-			Sfx.play("mine")
-			spawn_sparks(lpos, ore_col(o_n), 6)
-			spawn_popup(lpos, "+4 %s" % State.res_name(o_n), ore_col(o_n))
-			return true
 	return false
 
 static func ore_col(o: String) -> Color:
@@ -889,10 +1211,15 @@ static func ore_col(o: String) -> Color:
 		"cu": return Color(0.98, 0.68, 0.24)
 		"si": return Color(0.32, 0.88, 1.0)
 		"ti": return Color(0.76, 0.46, 1.0)
+		"ignis_ore": return Color(1.0, 0.44, 0.16)
 		"ice": return Color(0.64, 0.92, 1.0)
+		"astra_shard": return Color(0.88, 0.32, 1.0)
+		"plasma_cell": return Color(1.0, 0.72, 0.20)
+		"cryo_rod": return Color(0.38, 0.94, 1.0)
 		"quantum_core": return Color(0.48, 0.92, 1.0)
 		"antimatter": return Color(1.0, 0.32, 0.66)
 		"dyson_panel": return Color(1.0, 0.84, 0.28)
+		"sci_pack": return Color(0.36, 1.0, 0.76)
 		_: return Color(0.76, 0.82, 0.90)
 
 func spawn_sparks(local_pos: Vector2, col: Color, cnt: int = 8) -> void:
@@ -917,27 +1244,28 @@ func spawn_popup_world(world_pos: Vector2, txt: String, col: Color) -> void:
 	spawn_popup(to_terra_local(world_pos), txt, col)
 
 # ------------------------------------------------------------------------------
-# TERRA OVERLAYS: ATMOSPHERE, MAGMA CORE, CRYSTALS, DRILL NODES & DAY/NIGHT SHADOW
+# RENDERING: TERRA + EXTRA SLICED PLANET CORES, DRILL NODES, DAY/NIGHT & BASTIONS
 # ------------------------------------------------------------------------------
 func _draw() -> void:
 	var cam := get_viewport().get_camera_2d()
 	var cpos_l := to_terra_local(cam.global_position) if cam else Vector2(0, -R_SURFACE)
 	var vp := get_viewport_rect().size
 	var z := cam.zoom.x if cam else 1.0
-	var half := (vp * 0.5) / maxf(0.01, z) + Vector2(400, 400)
+	var half := (vp * 0.5) / maxf(0.008, z) + Vector2(600, 600)
 	var vrect := Rect2(cpos_l - half, half * 2.0)
 	var glow := ArtReg.get_t("glow")
 	var sun_dir := get_sun_dir()
 	var sun_ang := sun_dir.angle()
+	var terra_p := Vector2(bodies["terra"]["pos"])
 
-	# 1. Atmospheric Rayleigh Scattering Halo (brighter on sunlit hemisphere!)
+	# 1. Terra Atmospheric Halo
 	for b in range(6):
 		var t := float(b) / 6.0
 		draw_circle(Vector2.ZERO, lerpf(R_SURFACE, R_ATMOS, 1.0 - t), Color(0.11, 0.24, 0.46, 0.05 + t * 0.035))
 	draw_arc(Vector2.ZERO, R_ATMOS, sun_ang - PI * 0.55, sun_ang + PI * 0.55, 64, Color(0.36, 0.78, 1.0, 0.34), 3.0 / maxf(0.02, z))
 	draw_arc(Vector2.ZERO, R_ATMOS, sun_ang + PI * 0.55, sun_ang + PI * 1.45, 64, Color(0.14, 0.22, 0.36, 0.16), 2.0 / maxf(0.02, z))
 
-	# 2. Molten Magma Core Sea at center (r <= R_CORE)
+	# 2. Terra Molten Magma Core
 	if vrect.intersects(Rect2(-R_CORE - 400, -R_CORE - 400, (R_CORE + 400) * 2.0, (R_CORE + 400) * 2.0)):
 		if glow:
 			var gr := R_CORE * 1.55
@@ -947,9 +1275,44 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, R_CORE * 0.42, Color(1.0, 0.94, 0.62))
 		draw_arc(Vector2.ZERO, R_CORE, 0.0, TAU, 96, Color(1.0, 0.86, 0.36, 0.9), 8.0)
 
-	# 3. Glowing Crystal Spires
+	# 2b. Extra Sliced Voxel Planets' Glowing Inner Cores & Pollution Haze!
+	for bid in extra_vox.keys():
+		var b: Dictionary = bodies[bid]
+		var b_off := Vector2(b["pos"]) - terra_p
+		var r_surf := float(b["rad"])
+		var r_core := float(b["r_core"])
+		if not vrect.intersects(Rect2(b_off.x - r_surf * 1.5, b_off.y - r_surf * 1.5, r_surf * 3.0, r_surf * 3.0)):
+			continue
+		var c_col: Color = b["col"]
+		if glow:
+			draw_texture_rect(glow, Rect2(b_off.x - r_core * 1.5, b_off.y - r_core * 1.5, r_core * 3.0, r_core * 3.0), false, Color(c_col.r, c_col.g, c_col.b, 0.42))
+		draw_circle(b_off, r_core, c_col.darkened(0.15))
+		draw_circle(b_off, r_core * 0.65, c_col.lightened(0.35))
+		draw_circle(b_off, r_core * 0.35, Color(0.96, 0.98, 1.0))
+		# Pollution haze aura if factory pollution > 5% on this planet!
+		var pol := State.get_pollution(bid)
+		if pol > 2.0:
+			var pa := clampf(pol / 100.0, 0.08, 0.52)
+			draw_arc(b_off, r_surf + 95.0, 0.0, TAU, 64, Color(0.86, 0.22, 0.48, pa), 38.0)
+		# Enemy Stronghold Shield & 6 Bastions on ASTRA-V!
+		if bid == "astra" and not State.astra_liberated:
+			var sh_p := 0.55 + 0.25 * sin(anim_t * 4.5)
+			draw_arc(b_off, r_surf + 65.0, 0.0, TAU, 72, Color(1.0, 0.22, 0.36, sh_p), 12.0)
+			var et := ArtReg.get_t("enemy_station")
+			for bst in astra_bastions:
+				if not bool(bst["alive"]): continue
+				var bp_l := b_off + Vector2(bst["local_pos"])
+				var brot := float(bst["ang"]) + PI * 0.5
+				draw_set_transform(bp_l, brot, Vector2.ONE)
+				if et:
+					draw_texture_rect(et, Rect2(-56, -42, 112, 84), false)
+				var bf := clampf(float(bst["hp"]) / float(bst["max_hp"]), 0.0, 1.0)
+				draw_rect(Rect2(-36, -54, 72, 7), Color(0.08, 0.08, 0.12, 0.9))
+				draw_rect(Rect2(-35, -53, 70 * bf, 5), Color(1.0, 0.26, 0.34))
+				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+	# 3. Terra Crystal Spires
 	var pnames := ["", "ore_fe", "ore_cu", "crystal_si", "ore_ti"]
-	var onames := ["", "fe", "cu", "si", "ti"]
 	if z >= 0.14:
 		for pr in crystal_props:
 			var pp: Vector2 = pr["pos"]
@@ -957,7 +1320,7 @@ func _draw() -> void:
 			var oid := int(pr["ore"])
 			var sc := float(pr["sc"])
 			if glow:
-				var gc := ore_col(onames[oid])
+				var gc := ore_col(ORE_CODE_TO_ID[oid])
 				gc.a = 0.42 if oid == 3 else 0.26
 				var gr := 46.0 * sc
 				draw_texture_rect(glow, Rect2(pp.x - gr, pp.y - gr, gr * 2.0, gr * 2.0), false, gc)
@@ -968,10 +1331,10 @@ func _draw() -> void:
 				draw_texture_rect(pt, Rect2(-sz.x * 0.5, -sz.y * 0.75, sz.x, sz.y), false)
 				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# 3b. Indestructible Bedrock Drill-Only Ore Deposits
+	# 3b. Bedrock Drill-Only Ore Deposits across ALL 5 planets!
 	var font_dn := ArtReg.get_font()
 	var placing_drill := (State.selected_tool == "drill")
-	if z >= 0.12:
+	if z >= 0.10:
 		for dn in drill_nodes:
 			var dp: Vector2 = dn["pos"]
 			if not vrect.has_point(dp): continue
@@ -991,14 +1354,14 @@ func _draw() -> void:
 			if placing_drill:
 				var pr := 42.0 + sin(anim_t * 6.5) * 5.0
 				draw_arc(Vector2(0, -10), pr, 0.0, TAU, 28, Color(1.0, 0.88, 0.32, 0.92), 2.6)
-			if z >= 0.42:
+			if z >= 0.36:
 				var ic := ArtReg.get_icon(String(dn["ore"]))
 				if ic:
 					draw_texture_rect(ic, Rect2(-28, -42, 16, 16), false)
 				draw_string(font_dn, Vector2(-10, -29), "ドリル鉱床", HORIZONTAL_ALIGNMENT_LEFT, 82, 11, Color(1.0, 0.90, 0.44) if placing_drill else Color(0.86, 0.92, 1.0, 0.88))
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# 4. Real Geometric Day/Night Shadow Annulus on Terra's Nightside (keeps Magma Core glowing brightly!)
+	# 4. Real Geometric Day/Night Shadow Annulus on Terra's Nightside
 	var night_ang := sun_ang + PI
 	var sh_segs := 40
 	var sh_pts := PackedVector2Array()
@@ -1017,7 +1380,6 @@ func _draw() -> void:
 		var a := night_ang - PI * 0.38 + float(i) / float(sh_segs) * PI * 0.76
 		deep_pts.append(Vector2(cos(a), sin(a)) * (R_CORE + 16.0))
 	draw_colored_polygon(deep_pts, Color(0.006, 0.010, 0.028, 0.36))
-	# Warm golden-amber sunset/sunrise terminator arcs at dawn & dusk!
 	draw_arc(Vector2.ZERO, R_SURFACE + 14.0, sun_ang + PI * 0.44, sun_ang + PI * 0.56, 16, Color(1.0, 0.54, 0.22, 0.48), 28.0)
 	draw_arc(Vector2.ZERO, R_SURFACE + 14.0, sun_ang - PI * 0.56, sun_ang - PI * 0.44, 16, Color(1.0, 0.54, 0.22, 0.48), 28.0)
 

@@ -144,6 +144,8 @@ func _physics_process(delta: float) -> void:
 		var ground_ok := true
 		if anchored_body_id == "terra":
 			ground_ok = _has_terra_ground_below(rel, up)
+		elif planet.extra_vox.has(anchored_body_id):
+			ground_ok = _has_extra_ground_below(anchored_body_id, rel, up)
 		if wdir.length() > 0.08 or not ground_ok:
 			anchored = false
 			anchored_body_id = ""
@@ -228,10 +230,12 @@ func _physics_process(delta: float) -> void:
 			if atmos > 0.25 and velocity.length() > max_s * 1.45:
 				velocity = velocity.normalized() * lerpf(velocity.length(), max_s * 1.45, delta * 3.0)
 
-		# Collisions: Terra Voxels + ALL Moons/Other Planets (LUNA, IGNIS, CRYO, ASTRA)
+		# Collisions: Terra Voxels + ALL Sliced Voxel Planets (LUNA, IGNIS, CRYO, ASTRA)
 		on_ground = false
 		if active_body_id == "terra":
 			_resolve_terra_collision(delta, body_pos)
+		elif planet.extra_vox.has(active_body_id):
+			_resolve_extra_collision(delta, active_body_id, body_pos)
 
 		var chit := planet.check_celestial_hit(position, RADIUS)
 		if bool(chit.get("hit", false)):
@@ -239,23 +243,12 @@ func _physics_process(delta: float) -> void:
 			if hit_bid == "sun":
 				emergency_redrop()
 				return
-			position = Vector2(chit["push"])
-			var mn: Vector2 = chit["normal"]
-			var vn := velocity.dot(mn)
-			if vn < 0.0: velocity -= mn * vn
-			velocity *= exp(-7.0 * delta)
-			on_ground = true
-			if wdir.length() <= 0.08 and velocity.length() < 32.0:
-				velocity = Vector2.ZERO
-				anchored = true
-				anchored_body_id = hit_bid
-				anchor_rel = position - Vector2(chit["body"]["pos"])
 
-		# Magnetic surface anchor on Terra when resting with no input
-		if active_body_id == "terra" and on_ground and wdir.length() <= 0.08 and velocity.length() < 26.0:
+		# Magnetic surface anchor on ANY planet when resting with no input
+		if on_ground and wdir.length() <= 0.08 and velocity.length() < 28.0:
 			velocity = Vector2.ZERO
 			anchored = true
-			anchored_body_id = "terra"
+			anchored_body_id = active_body_id
 			anchor_rel = position - body_pos
 
 		# Check Patched-Conic SOI transition
@@ -281,12 +274,11 @@ func _physics_process(delta: float) -> void:
 		else:
 			orbit_info = {}
 
-	# 5. Grid pickup & recharge (when near Terra)
-	if grid and active_body_id == "terra":
+	# 5. Grid pickup & recharge (works on ALL planets!)
+	if grid:
 		grid.collect_near_player(position, 86.0)
 		grid.service_player(position, delta)
 	else:
-		# Solar battery recharge in deep space / on moons
 		var sun_l := planet.get_sunlight_world(position)
 		State.ion_bat = minf(State.max_ion_bat, State.ion_bat + (6.0 + 10.0 * sun_l) * delta)
 
@@ -335,6 +327,84 @@ func _has_terra_ground_below(rel_pos: Vector2, up: Vector2) -> bool:
 		if planet.is_solid(c.x, c.y):
 			return true
 	return false
+
+func _has_extra_ground_below(bid: String, rel_pos: Vector2, up: Vector2) -> bool:
+	if not planet or not planet.extra_vox.has(bid): return false
+	var ev: Dictionary = planet.extra_vox[bid]
+	var r_core := float(ev["r_core"]); var r_surf := float(ev["r_surf"]); var ch := float(ev["cell_h"])
+	var r := rel_pos.length()
+	if r <= r_core + 4.0 * ch + RADIUS + 2.0:
+		return true
+	if r > r_surf + RADIUS + 24.0:
+		return false
+	var tang := Vector2(-up.y, up.x)
+	for probe in [-up * (RADIUS + 2.5), (-up * 0.85 + tang * 0.45) * (RADIUS + 2.0), (-up * 0.85 - tang * 0.45) * (RADIUS + 2.0)]:
+		var c := planet.extra_local_to_cell(bid, rel_pos + probe)
+		if planet.is_extra_solid(bid, c.x, c.y):
+			return true
+	return false
+
+func _resolve_extra_collision(delta: float, bid: String, b_pos: Vector2) -> void:
+	if not planet or not planet.extra_vox.has(bid): return
+	var ev: Dictionary = planet.extra_vox[bid]
+	var r_core := float(ev["r_core"]); var r_surf := float(ev["r_surf"]); var ch := float(ev["cell_h"])
+	var rel := position - b_pos
+	var r := rel.length()
+	# If ASTRA-V is not yet liberated by Swarm Fleet, its planetary defense shield repels the player at r_surf + 68!
+	if bid == "astra" and not State.astra_liberated:
+		var sh_r := r_surf + 68.0 + RADIUS
+		if r < sh_r and r > 1.0:
+			var n_s := rel / r
+			position = b_pos + n_s * sh_r
+			var vn_s := velocity.dot(n_s)
+			if vn_s < 0.0: velocity -= n_s * (vn_s * 1.5)
+			velocity += n_s * 140.0
+			State.hp = maxf(15.0, State.hp - 18.0 * delta)
+		return
+	if r < r_core + 4.0 * ch + RADIUS:
+		var n := rel.normalized()
+		position = b_pos + n * (r_core + 4.0 * ch + RADIUS)
+		var vn := velocity.dot(n)
+		if vn < 0.0: velocity -= n * vn
+		on_ground = true
+		return
+	if r > r_surf + RADIUS + 24.0:
+		return
+	var up := rel.normalized()
+	var tang := Vector2(-up.y, up.x)
+	var foot_c := planet.extra_local_to_cell(bid, rel - up * RADIUS)
+	if planet.is_extra_solid(bid, foot_c.x, foot_c.y):
+		var exact_r := r_core + float(foot_c.y + 1) * ch + RADIUS
+		if rel.length() < exact_r:
+			rel = up * exact_r
+			position = b_pos + rel
+		var vn := velocity.dot(up)
+		if vn < 0.0: velocity -= up * vn
+		on_ground = true
+		var vt := velocity.dot(tang)
+		velocity -= tang * (vt * minf(1.0, delta * 8.0))
+	var side_pts: Array[Vector2] = [
+		tang * RADIUS, -tang * RADIUS, up * RADIUS,
+		(tang * 0.7 - up * 0.7) * RADIUS,
+		(-tang * 0.7 - up * 0.7) * RADIUS,
+	]
+	for _iter in range(3):
+		var hit_any := false
+		for off in side_pts:
+			var sp: Vector2 = (position - b_pos) + off
+			var c := planet.extra_local_to_cell(bid, sp)
+			if planet.is_extra_solid(bid, c.x, c.y):
+				hit_any = true
+				var pdir: Vector2 = (-off).normalized()
+				position += pdir * 1.4
+				var vn := velocity.dot(pdir)
+				if vn < 0.0: velocity -= pdir * vn
+				if off.dot(up) < -RADIUS * 0.4:
+					on_ground = true
+					var vt := velocity.dot(tang)
+					velocity -= tang * (vt * minf(1.0, delta * 8.0))
+		if not hit_any:
+			break
 
 func _resolve_terra_collision(delta: float, terra_pos: Vector2) -> void:
 	var rel := position - terra_pos

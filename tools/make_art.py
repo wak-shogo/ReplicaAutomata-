@@ -553,21 +553,23 @@ def make_crystals_and_celestials():
 
 
 def make_icons_and_glow():
-    # 15 crisp 16x16 icons:
+    # 19 crisp 16x16 icons:
     # 0..11: fe, cu, si, ti, plate_fe, wire_cu, wafer_si, circuit, alloy, sci_pack, probe_stock, ice
     # 12..14: quantum_core, antimatter, dyson_panel
-    im = Image.new("RGBA", (240, 16), (0, 0, 0, 0))
+    # 15..18: ignis_ore, plasma_cell, cryo_rod, astra_shard
+    im = Image.new("RGBA", (304, 16), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     cols = [
         (228, 64, 58, 255), (242, 158, 46, 255), (62, 214, 255, 255), (174, 98, 246, 255),
         (154, 174, 198, 255), (236, 134, 48, 255), (52, 164, 224, 255), (46, 206, 118, 255),
         (194, 162, 242, 255), (72, 240, 186, 255), (255, 214, 82, 255), (156, 232, 255, 255),
         (124, 236, 255, 255), (255, 76, 168, 255), (255, 206, 68, 255),
+        (255, 106, 34, 255), (255, 182, 46, 255), (86, 236, 255, 255), (218, 72, 255, 255),
     ]
     for i, c in enumerate(cols):
         x = i * 16
         hi = lerp_c(c, (255, 255, 255, 255), 0.55)
-        if i in (0, 2, 3, 11):
+        if i in (0, 2, 3, 11, 15, 18):
             d.polygon([(x + 4, 13), (x + 3, 7), (x + 8, 2), (x + 13, 7), (x + 12, 13)], fill=c, outline=DK)
             d.line([x + 7, 4, x + 6, 11], fill=hi)
         elif i in (1, 5, 6):
@@ -581,8 +583,8 @@ def make_icons_and_glow():
             d.ellipse([x + 2, 2, x + 13, 13], fill=(92, 54, 198, 255), outline=DK)
             d.ellipse([x + 4, 4, x + 11, 11], fill=c)
             d.ellipse([x + 6, 6, x + 9, 9], fill=(255, 255, 255, 255))
-        elif i == 13:
-            # Antimatter Cell: glowing crimson-magenta containment vial
+        elif i in (13, 16):
+            # Antimatter / Plasma Cell: glowing containment vial
             d.rectangle([x + 4, 1, x + 11, 14], fill=S2, outline=DK)
             d.rectangle([x + 5, 4, x + 10, 11], fill=c)
             d.line([x + 6, 5, x + 6, 10], fill=hi)
@@ -591,6 +593,10 @@ def make_icons_and_glow():
             d.polygon([(x + 8, 1), (x + 14, 5), (x + 14, 11), (x + 8, 14), (x + 2, 11), (x + 2, 5)], fill=c, outline=DK)
             d.line([x + 8, 2, x + 8, 13], fill=hi)
             d.line([x + 3, 8, x + 13, 8], fill=(184, 112, 18, 255))
+        elif i == 17:
+            # Cryo Rod: diagonal superconducting cylinder
+            d.polygon([(x + 3, 11), (x + 11, 3), (x + 13, 5), (x + 5, 13)], fill=c, outline=DK)
+            d.line([x + 5, 10, x + 11, 4], fill=hi)
         else:
             d.rectangle([x + 2, 3, x + 13, 12], fill=c, outline=DK)
             d.line([x + 3, 4, x + 12, 4], fill=hi)

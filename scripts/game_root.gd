@@ -31,6 +31,7 @@ func _ready() -> void:
 	grid.player = player
 	grid.swarm = swarm
 	swarm.planet = planet
+	swarm.grid = grid
 	orbital.planet = planet
 	orbital.player = player
 	orbital.grid = grid
@@ -107,8 +108,12 @@ func _publish_tel() -> void:
 		"drones": State.attached_drones, "prop": State.propulsion_tier,
 		"fe": State.get_r("fe"), "cu": State.get_r("cu"), "si": State.get_r("si"), "ti": State.get_r("ti"),
 		"plate_fe": State.get_r("plate_fe"), "wire_cu": State.get_r("wire_cu"), "wafer_si": State.get_r("wafer_si"),
-		"circuit": State.get_r("circuit"), "alloy": State.get_r("alloy"),
+		"circuit": State.get_r("circuit"), "alloy": State.get_r("alloy"), "sci_pack": State.get_r("sci_pack"),
+		"ignis_ore": State.get_r("ignis_ore"), "ice": State.get_r("ice"), "astra_shard": State.get_r("astra_shard"),
+		"plasma_cell": State.get_r("plasma_cell"), "cryo_rod": State.get_r("cryo_rod"),
 		"quantum_core": State.get_r("quantum_core"), "antimatter": State.get_r("antimatter"), "dyson_panel": State.get_r("dyson_panel"),
+		"pollution": snappedf(State.get_pollution(player.active_body_id), 0.1),
+		"astra_lib": State.astra_liberated, "item_tree_sel": hud.item_tree_sel,
 		"queue": State.craft_queue.size(),
 		"stock_solar": State.get_stock("solar"), "stock_tesla": State.get_stock("tesla"),
 		"tut_step": State.tut_step,
@@ -255,11 +260,79 @@ func _run_tests() -> void:
 	for _sm in range(25): grid._process(0.1)
 	_chk(int(sm_b["out_buf"].get("wire_cu", 0)) >= 1, "Smelter Cu x12 regression failed!")
 
-	# 4. EXACT ANALYTICAL KEPLERIAN ON-RAILS ORBIT (Eccentric e=0.20, 5 FULL REVOLUTIONS, ZERO DRIFT, VIS-VIVA SPEED!)
+	# 3b. Complete Item Tree Audit (100% of resources & active facilities in ITEM_TREE_NODES!)
+	var tree_ids: Dictionary = {}
+	for nd in State.ITEM_TREE_NODES:
+		tree_ids[String(nd["id"])] = true
+	for r_id in State.RES_NAMES.keys():
+		_chk(tree_ids.has(String(r_id)), "Resource %s missing from ITEM_TREE_NODES!" % String(r_id))
+	for b_id in State.BLD.keys():
+		if String(b_id) in ["belt", "lift"]: continue
+		_chk(tree_ids.has(String(b_id)), "Building %s missing from ITEM_TREE_NODES!" % String(b_id))
+
+	# 3c. Starter Planet TERRA-I Resource Gating + All 5 Planets Sliced Voxel Interiors!
+	var terra_ti_cnt := 0
+	for v_o in planet.ore:
+		if int(v_o) == 4: terra_ti_cnt += 1
+	_chk(terra_ti_cnt == 0, "Starter planet TERRA-I must NOT contain Titanium (ti)! Found=%d" % terra_ti_cnt)
+	for ex_id in ["luna", "ignis", "cryo", "astra"]:
+		_chk(planet.extra_vox.has(ex_id) and int(planet.extra_vox[ex_id]["mat"].size()) == SphericalPlanet.EX_COLS * SphericalPlanet.EX_ROWS,
+			"Extra planet %s missing sliced voxel interior!" % ex_id)
+
+	# 3d. Smart Demand-Driven Logistics (Depot -> Assembler crafting 'circuit' MUST send both plate_fe AND wire_cu!) + PCB Autorouter!
 	State.add_r("plate_fe", 260); State.add_r("wire_cu", 220); State.add_r("wafer_si", 180)
-	State.add_r("circuit", 160); State.add_r("alloy", 120); State.add_r("sci_pack", 60)
-	_chk(_craft_and_finish("propulsion", "1") and State.propulsion_tier == 1, "Orbital Booster craft failed")
+	State.add_r("circuit", 160); State.add_r("alloy", 120); State.add_r("plasma_cell", 40); State.add_r("cryo_rod", 40)
 	_chk(State.research("circuits_geo"), "Research circuits_geo failed")
+	_chk(_craft_and_finish("building", "assembler"), "Craft Assembler failed")
+	_chk(grid.try_place_at("assembler", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 3, SphericalPlanet.ROWS - 2)["pos"]), "Place Assembler failed")
+	var dep_b: Dictionary = grid.buildings[4]
+	var asm_b: Dictionary = grid.buildings[6]
+	dep_b["inv"] = {"plate_fe": 50, "wire_cu": 6, "si": 30}
+	asm_b["recipe"] = "circuit"
+	asm_b["in_buf"] = {}
+	asm_b["out_buf"] = {}
+	_chk(grid.toggle_conveyor(int(dep_b["uid"]), int(asm_b["uid"])), "Autoroute Depot->Assembler failed!")
+	_chk(grid.conveyors[0]["cells"].size() >= 2, "Autorouter did not generate grid cells!")
+	for _al in range(110):
+		grid._process(0.1)
+	_chk(int(asm_b["out_buf"].get("circuit", 0)) >= 2 and int(asm_b["in_buf"].get("si", 0)) == 0,
+		"Smart Depot->Assembler failed to balance plate_fe & wire_cu into circuit! in=%s out=%s" % [str(asm_b["in_buf"]), str(asm_b["out_buf"])])
+
+	# 3e. PCB Autorouter Non-Overlapping & Unroutable Rejection Test!
+	# Surround Smelter's port cell with a closed ring of occupied conveyor cells -> autoroute_conveyor MUST reject!
+	var sm_c := int(sm_b["col"]); var sm_r := int(sm_b["row"]) + 1
+	var ring_cells: Array[Vector2i] = [
+		Vector2i(SphericalPlanet.wrap_col(sm_c + 1), sm_r),
+		Vector2i(SphericalPlanet.wrap_col(sm_c - 1), sm_r),
+		Vector2i(sm_c, sm_r + 1),
+		Vector2i(sm_c, sm_r - 1),
+		Vector2i(sm_c, sm_r), # start dummy
+		Vector2i(sm_c, sm_r + 2), # end dummy
+	]
+	grid.conveyors.append({
+		"from": 9991, "to": 9992, "body_id": "terra", "cost_fe": 2, "filter": "auto",
+		"cells": [ring_cells[4], ring_cells[0], ring_cells[1], ring_cells[2], ring_cells[3], ring_cells[5]],
+		"local_pts": PackedVector2Array(), "pts": PackedVector2Array(), "total_len": 40.0,
+	})
+	var blocked_res: Dictionary = grid.autoroute_conveyor(dep_b, sm_b)
+	_chk(not bool(blocked_res.get("ok", true)) and bool(blocked_res.get("blocked_route", false)),
+		"PCB Autorouter MUST reject route when all non-overlapping grid paths are blocked! got=%s" % str(blocked_res))
+	grid.conveyors.pop_back()
+
+	# 3f. Building Durability HP, Non-Starter Planet Pollution & ASTRA-V Fleet Liberation + Research Points 1,000 Victory!
+	var sol_uid := int(grid.buildings[0]["uid"])
+	var hp_pre := float(grid.buildings[0]["hp"])
+	grid.damage_building_uid(sol_uid, 25.0)
+	_chk(float(grid.buildings[0]["hp"]) < hp_pre, "Building HP did not decrease on enemy damage!")
+	State.add_pollution("luna", 22.0)
+	State.add_pollution("terra", 22.0)
+	_chk(State.get_pollution("luna") >= 20.0 and State.get_pollution("terra") == 0.0, "Starter planet terra must stay 0 pollution while luna accumulates pollution!")
+	_chk(not State.astra_liberated and State.astra_bastions_left == 6, "ASTRA-V must start fortified with 6 bastions!")
+	planet.damage_astra_bastions(1000.0)
+	_chk(State.astra_liberated and State.astra_bastions_left == 0, "Swarm fleet assault failed to liberate ASTRA-V!")
+
+	# 4. EXACT ANALYTICAL KEPLERIAN ON-RAILS ORBIT (Eccentric e=0.14, 5 FULL REVOLUTIONS, ZERO DRIFT, VIS-VIVA SPEED!)
+	_chk(_craft_and_finish("propulsion", "1") and State.propulsion_tier == 1, "Orbital Booster craft failed")
 	_chk(State.research("deep_space"), "Research deep_space failed")
 
 	# Put player at Periapsis rp = 6150 (above atmos 5900), e = 0.14 -> a = 7151, ra = 8152 (clear of Luna SOI 8300!)
@@ -335,13 +408,13 @@ func _run_tests() -> void:
 	_chk(int(orbital.modules[2]["collected"]) >= 4 and State.get_r("quantum_core") >= 1,
 		"Orbital Collector -> Station pipeline failed! collected=%d qcore=%d" % [int(orbital.modules[2]["collected"]), State.get_r("quantum_core")])
 
-	# 6. Macro Swarm + Victory
+	# 6. Research Point (研究ポイント >= 1,000) Victory + Macro Swarm
 	_chk(State.research("macro_swarm"), "Research macro_swarm failed")
 	_chk(State.research("megastructures"), "Research megastructures failed")
-	for mid in ["elevator", "dyson", "citadel", "warpgate"]:
-		_chk(State.build_mega(mid), "Build mega %s failed" % mid)
-	swarm.damage_boss(5000.0)
-	_chk(State.boss_dead and State.game_won, "Victory trigger failed")
+	State.add_r("sci_pack", 1000)
+	_chk(State.game_won, "Reaching 1,000 Research Points (研究ポイント) must trigger game clear!")
+	swarm.spawn_raider_wave("luna", true)
+	_chk(not swarm.raiders.is_empty(), "Continuous off-map enemy raids must continue even after ASTRA-V liberation!")
 
 	if _test_failed:
 		print("TESTS FAILED!")

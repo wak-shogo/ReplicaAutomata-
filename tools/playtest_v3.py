@@ -143,10 +143,13 @@ def main():
         page.keyboard.press("Escape")
         time.sleep(0.2)
 
-        # 4. Open Visual Guide [H]
-        page.keyboard.press("KeyH")
-        time.sleep(0.3)
+        # 4. Open Complete Item & Facility Recipe Tree [I] -> Tap 'alloy' card to verify trace highlight!
+        page.keyboard.press("KeyI")
+        time.sleep(0.35)
+        t_it = tel(page)
+        print("ITEM TREE MODAL:", "modal=", t_it["modal"], "sel=", t_it["item_tree_sel"], flush=True)
         page.screenshot(path=os.path.join(SHOT_DIR, "v5_05_visual_guide.png"))
+        assert t_it["modal"] == 8, f"KeyI must open Complete Item & Facility Recipe Tree (modal==8)! {t_it}"
         page.keyboard.press("Escape")
         time.sleep(0.2)
 
