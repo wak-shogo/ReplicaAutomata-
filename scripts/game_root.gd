@@ -70,12 +70,16 @@ func _process(delta: float) -> void:
 func _publish_tel() -> void:
 	var d := {
 		"px": int(round(player.position.x)), "py": int(round(player.position.y)),
+		"vx": snappedf(player.velocity.x, 0.1), "vy": snappedf(player.velocity.y, 0.1),
 		"r": int(round(player.position.length())), "alt": int(round(player.get_altitude())),
 		"vel": int(round(player.velocity.length())), "grav": snappedf(player.local_g, 0.02),
 		"drones": State.attached_drones, "prop": State.propulsion_tier,
 		"fe": State.get_r("fe"), "cu": State.get_r("cu"), "si": State.get_r("si"), "ti": State.get_r("ti"),
 		"plate_fe": State.get_r("plate_fe"), "wire_cu": State.get_r("wire_cu"), "wafer_si": State.get_r("wafer_si"),
 		"circuit": State.get_r("circuit"), "alloy": State.get_r("alloy"),
+		"queue": State.craft_queue.size(),
+		"stock_solar": State.get_stock("solar"), "stock_tesla": State.get_stock("tesla"),
+		"tut_step": State.tut_step,
 		"pwr_prod": int(round(State.pwr_prod)), "pwr_use": int(round(State.pwr_use)),
 		"pwr_stored": int(round(State.pwr_stored)), "wires": State.wire_count, "teslas_on": State.active_teslas,
 		"bldg": grid.buildings.size(), "fleet": State.swarm_fleet, "launches": State.total_launches,
@@ -90,26 +94,55 @@ func _chk(ok: bool, msg: String) -> void:
 		push_error("FAIL: " + msg)
 		print("FAIL: " + msg)
 
+func _craft_and_finish(kind: String, id: String) -> bool:
+	if not State.enqueue_craft(kind, id):
+		return false
+	for _i in range(200):
+		if State.craft_queue.is_empty():
+			break
+		State._process(0.1)
+	return State.craft_queue.is_empty()
+
 func _run_tests() -> void:
-	print("=== STAR REPLICA: AUTOMA (V3 CONCEPT REBUILD) HEADLESS TESTS ===")
+	print("=== STAR REPLICA: AUTOMA (JP CRAFT QUEUE + SCREEN MOVE + TUTORIAL) HEADLESS TESTS ===")
 	_chk(grid.buildings.is_empty(), "Must start with 0 buildings")
 	_chk(State.attached_drones == 0 and State.propulsion_tier == 0, "Must start with 0 drones & tier 0")
 	_chk(Sfx.preset_count() >= 13, "Missing Sfx presets")
 	_chk(ArtReg.tex.size() >= 28, "Missing HD-2D sprites")
+	_chk(ArtReg.ui_font != null, "Japanese UI font NotoSansJP-Bold failed to load!")
 
-	# 1. Organic 24px voxel digging & docking Fabricator Drones!
-	State.add_r("fe", 300); State.add_r("cu", 240); State.add_r("si", 160); State.add_r("ti", 160)
-	_chk(State.dock_new_drone() and State.attached_drones == 1, "Dock Drone #1 failed")
-	_chk(State.dock_new_drone() and State.attached_drones == 2, "Dock Drone #2 failed")
+	# 1. Screen-space movement check at bottom-right of planet (+PI/4): pressing RIGHT (+X) must push +X, NOT -X or down-only!
+	var br_ang := PI * 0.25
+	player.position = Vector2(cos(br_ang), sin(br_ang)) * (SphericalPlanet.R_SURFACE + 45.0)
+	player.velocity = Vector2.ZERO
+	player.move_input = Vector2(1.0, 0.0) # Screen RIGHT
+	player.braking = false
+	for _m in range(10):
+		player._physics_process(0.05)
+	_chk(player.velocity.x > 20.0, "Screen-space RIGHT at bottom-right failed! vel=%s" % str(player.velocity))
+	player.spawn_north_pole()
+	player.move_input = Vector2.ZERO
 
-	# 2. Wired Local Power Grid + Night Battery
+	# 2. Timed Craft Queue + Cancel Refund + Auto-Docking Fabricator Drones!
+	State.add_r("fe", 320); State.add_r("cu", 240); State.add_r("si", 160); State.add_r("ti", 160)
+	var fe_before := State.get_r("fe")
+	_chk(State.enqueue_craft("drone", "fab_drone"), "Enqueue Drone failed")
+	_chk(State.attached_drones == 0 and State.craft_queue.size() == 1, "Craft must be timed (queued), NOT instant!")
+	_chk(State.cancel_craft(0) and State.get_r("fe") == fe_before, "Cancel craft refund failed!")
+	_chk(_craft_and_finish("drone", "fab_drone") and State.attached_drones == 1, "Craft Drone #1 failed")
+	_chk(_craft_and_finish("drone", "fab_drone") and State.attached_drones == 2, "Craft Drone #2 failed")
+
+	# 3. Research + Timed Building Craft -> Stock -> Place -> Salvage Refund Stock -> Wired Local Power Grid
 	_chk(State.research("power_grid"), "Research power_grid failed")
 	_chk(State.research("cave_logistics"), "Research cave_logistics failed")
 	_chk(State.research("smelting_booster"), "Research smelting_booster failed")
+	for b_req in ["solar", "tesla", "battery", "drill", "belt", "depot", "smelter"]:
+		_chk(_craft_and_finish("building", b_req) and State.get_stock(b_req) == 1, "Craft building %s failed" % b_req)
+
 	var p_sol: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL - 6, SphericalPlanet.ROWS - 2)["pos"]
 	var p_tes: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL, SphericalPlanet.ROWS - 2)["pos"]
 	var p_bat: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL - 3, SphericalPlanet.ROWS - 2)["pos"]
-	_chk(grid.try_place_at("solar", p_sol), "Place Solar failed")
+	_chk(grid.try_place_at("solar", p_sol) and State.get_stock("solar") == 0, "Place Solar failed")
 	grid._solve_power(0.1)
 	_chk(State.pwr_prod <= 0.1, "Unwired Solar must report 0W!")
 	_chk(grid.try_place_at("tesla", p_tes), "Place Tesla failed")
@@ -118,8 +151,9 @@ func _run_tests() -> void:
 	_chk(grid.toggle_wire(int(grid.buildings[2]["uid"]), int(grid.buildings[1]["uid"])), "Wire Battery<->Tesla failed")
 	grid._solve_power(0.5)
 	_chk(State.pwr_prod > 30.0 and State.active_teslas == 1, "Wired Solar+Tesla failed")
+	_chk(State.tut_step >= 6, "Interactive tutorial did not advance to step 6! step=%d" % State.tut_step)
 
-	# 3. Physical Connected Pipeline: Drill -> Belt -> Depot (4-way filter) -> Smelter + Night Survival!
+	# 4. Physical Connected Pipeline: Drill -> Belt -> Depot (4-way filter) -> Smelter + Night Survival!
 	_chk(grid.try_place_at("drill", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 3, SphericalPlanet.ROWS - 2)["pos"]), "Place Drill failed")
 	_chk(grid.try_place_at("belt", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 6, SphericalPlanet.ROWS - 2)["pos"]), "Place Belt failed")
 	_chk(grid.try_place_at("depot", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 10, SphericalPlanet.ROWS - 2)["pos"]), "Place Depot failed")
@@ -134,10 +168,10 @@ func _run_tests() -> void:
 	_chk(State.pwr_prod < 2.0 and float(grid.buildings[3]["pwr_ratio"]) > 0.9, "Battery failed during night!")
 	planet.sun_angle = -PI * 0.44
 
-	# 4. Zero-Drag Vacuum Keplerian Orbit Verification
+	# 5. Zero-Drag Vacuum Keplerian Orbit Verification (Timed Orbital Booster Craft!)
 	State.add_r("plate_fe", 160); State.add_r("wire_cu", 120); State.add_r("wafer_si", 80)
 	State.add_r("circuit", 100); State.add_r("alloy", 80); State.add_r("sci_pack", 40)
-	_chk(State.upgrade_propulsion() and State.propulsion_tier == 1, "Orbital Booster upgrade failed")
+	_chk(_craft_and_finish("propulsion", "1") and State.propulsion_tier == 1, "Timed Orbital Booster craft failed")
 	player.position = Vector2(0.0, -6800.0)
 	var vc := sqrt(SphericalPlanet.ORIGIN_GM / 6800.0)
 	player.velocity = Vector2(vc, 0.0)
@@ -145,11 +179,13 @@ func _run_tests() -> void:
 	for _k in range(100): player._physics_process(0.05)
 	_chk(absf(player.velocity.length() - vc) < 16.0, "Vacuum Keplerian orbit drifted! %.1f vs %.1f" % [player.velocity.length(), vc])
 
-	# 5. Macro Gantry Printer -> Mass Driver Launch -> 10k Swarm -> Boss Defeat & Victory!
+	# 6. Macro Gantry Printer -> Mass Driver Launch -> 10k Swarm -> Boss Defeat & Victory!
 	_chk(State.research("circuits_geo"), "Research circuits_geo failed")
 	_chk(State.research("deep_space"), "Research deep_space failed")
 	_chk(State.research("macro_swarm"), "Research macro_swarm failed")
 	_chk(State.research("megastructures"), "Research megastructures failed")
+	_chk(_craft_and_finish("building", "gantry_printer"), "Craft Gantry Printer failed")
+	_chk(_craft_and_finish("building", "mass_driver"), "Craft Mass Driver failed")
 	_chk(grid.try_place_at("gantry_printer", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 12, SphericalPlanet.ROWS - 2)["pos"]), "Place Gantry Printer failed")
 	_chk(grid.try_place_at("mass_driver", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 18, SphericalPlanet.ROWS - 2)["pos"]), "Place Mass Driver failed")
 	State.add_r("probe_stock", 2)
@@ -164,7 +200,7 @@ func _run_tests() -> void:
 		print("TESTS FAILED!")
 		get_tree().quit(1)
 		return
-	print("ALL V3 CONCEPT REBUILD TESTS PASSED! Bldgs=%d Wires=%d Drones=%d Fleet=%d Launches=%d" % [
-		grid.buildings.size(), State.wire_count, State.attached_drones, State.swarm_fleet, State.total_launches
+	print("ALL V4 JP CRAFT-QUEUE + SCREEN-MOVE + TUTORIAL TESTS PASSED! Bldgs=%d Wires=%d Drones=%d Fleet=%d Launches=%d TutStep=%d" % [
+		grid.buildings.size(), State.wire_count, State.attached_drones, State.swarm_fleet, State.total_launches, State.tut_step
 	])
 	get_tree().quit(0)

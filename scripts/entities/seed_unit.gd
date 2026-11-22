@@ -45,7 +45,7 @@ func emergency_redrop() -> void:
 	State.ion_bat = State.max_ion_bat
 	State.fuel = State.max_fuel * 0.6
 	spawn_north_pole()
-	State.add_log("Emergency Seed Re-Drop complete at North Pole.", "warn")
+	State.add_log("北極拠点へ緊急再降下しました。", "warn")
 
 func get_altitude() -> float:
 	return position.length() - SphericalPlanet.R_SURFACE
@@ -64,12 +64,12 @@ func _physics_process(delta: float) -> void:
 	local_g = grav.length() / SphericalPlanet.GRAV_SURF
 	velocity += grav * delta
 
-	# 2. Movement vector (local curved horizon below 650m alt; world space above)
+	# 2. Movement vector: ALWAYS aligned with screen direction (intuitive at ALL 360 degrees!)
 	var inp := move_input
 	if inp.length() > 1.0: inp = inp.normalized()
 	var wdir := Vector2.ZERO
 	if inp.length() > 0.08:
-		wdir = (tang * inp.x + up * (-inp.y)).normalized() if r <= SphericalPlanet.R_SURFACE + 650.0 else inp.normalized()
+		wdir = inp.normalized()
 
 	var tinfo: Dictionary = State.PROPULSION_TIERS[State.propulsion_tier]
 	var chem_t := float(tinfo["thrust"])
@@ -92,7 +92,9 @@ func _physics_process(delta: float) -> void:
 			var tdir := wdir
 			if State.propulsion_tier == 0 and alt > 95.0:
 				var oc := tdir.dot(up)
-				if oc > 0.0: tdir = (tdir - up * oc).normalized()
+				if oc > 0.0:
+					tdir = tdir - up * oc
+					tdir = tdir.normalized() if tdir.length() > 0.05 else Vector2.ZERO
 			velocity += tdir * (ion_t * mag) * delta
 			State.ion_bat = maxf(0.0, State.ion_bat - 22.0 * mag * delta)
 	else:
@@ -131,7 +133,7 @@ func _physics_process(delta: float) -> void:
 	# 5. Multi-Beam Mining & Combat Laser (1 Core Beam + N Docked Fabricator Drone Beams!)
 	mine_target = {}
 	if firing_mine and State.selected_tool == "mine":
-		var aim_dir := (aim_world - position).normalized() if aim_world.distance_to(position) > 8.0 else wdir
+		var aim_dir := (aim_world - position).normalized() if (aim_world != Vector2.ZERO and aim_world.distance_to(position) > 8.0) else (wdir if wdir.length() > 0.1 else -up)
 		var reach := 220.0 + float(State.attached_drones) * 24.0
 		var tgt := planet.find_mine_target(position, aim_dir, reach)
 		if not tgt.is_empty():

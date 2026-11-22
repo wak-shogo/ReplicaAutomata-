@@ -117,18 +117,22 @@ func try_place_at(bid: String, world_pos: Vector2) -> bool:
 	if not planet or not State.BLD.has(bid): return false
 	if not State.is_unlocked(bid):
 		Sfx.play("error")
-		State.add_log("Unlock required Tech in Tech Tree [T].", "warn")
+		State.add_log("先に【研究】で必要な技術を解放してください。", "warn")
+		return false
+	if State.get_stock(bid) <= 0:
+		Sfx.play("error")
+		State.add_log("%sの在庫がありません。【クラフト】で製造してください。" % State.BLD[bid]["name"], "warn")
 		return false
 	var pose := compute_snap_pose(world_pos, bid)
 	if pose.is_empty(): return false
 	if _too_close_to_existing(pose["pos"], bid):
 		Sfx.play("error")
+		State.add_log("既存の装置と近すぎます。少し離れた地面をタップしてください。", "warn")
 		return false
 	var info: Dictionary = State.BLD[bid]
-	if not State.spend(info["cost"]):
-		Sfx.play("error")
-		State.add_log("Insufficient resources for %s." % info["name"], "warn")
-		return false
+	State.add_stock(bid, -1)
+	if State.get_stock(bid) <= 0 and State.selected_tool == bid:
+		State.selected_tool = "mine"
 
 	var ore_t := _find_local_ore(int(pose["col"]), int(pose["row"])) if bid == "drill" else ""
 	var b := {
@@ -159,7 +163,8 @@ func try_place_at(bid: String, world_pos: Vector2) -> bool:
 	planet.spawn_sparks(pose["pos"], Color(0.36, 0.94, 1.0), 10)
 	_solve_power(0.0)
 	Sfx.play("build")
-	State.add_log("Constructed %s%s" % [info["name"], " (wire to Tesla Relay)" if (bid in POWER_NODES) else ""], "good")
+	State.note_building_placed(bid)
+	State.add_log("設置完了: %s%s" % [info["name"], "（【配線】でテスラリレーへ接続しよう）" if (bid in POWER_NODES) else ""], "good")
 	return true
 
 func _find_local_ore(c: int, r: int) -> String:
@@ -177,9 +182,9 @@ func try_salvage_at(world_pos: Vector2) -> bool:
 	if bi < 0: return false
 	var b := buildings[bi]
 	var dead_u := int(b["uid"])
-	var info: Dictionary = State.BLD[b["id"]]
-	for k in info["cost"].keys():
-		State.add_r(String(k), maxi(1, int(info["cost"][k]) / 2))
+	var bid := String(b["id"])
+	var info: Dictionary = State.BLD[bid]
+	State.add_stock(bid, 1)
 	for wi in range(wires.size() - 1, -1, -1):
 		if int(wires[wi][0]) == dead_u or int(wires[wi][1]) == dead_u:
 			wires.remove_at(wi)
@@ -188,7 +193,7 @@ func try_salvage_at(world_pos: Vector2) -> bool:
 	buildings.remove_at(bi)
 	_solve_power(0.0)
 	Sfx.play("pop")
-	State.add_log("Salvaged %s." % info["name"], "info")
+	State.add_log("回収完了: %s（所持リストに戻りました）" % info["name"], "info")
 	return true
 
 # ------------------------------------------------------------------------------
@@ -222,14 +227,15 @@ func toggle_wire(u1: int, u2: int) -> bool:
 			return true
 	if Vector2(b1["pos"]).distance_to(Vector2(b2["pos"])) > WIRE_RANGE:
 		Sfx.play("error")
-		State.add_log("Wire out of range (> %dpx)." % int(WIRE_RANGE), "warn")
+		State.add_log("電線の距離が長すぎます（最大 %dpx）。" % int(WIRE_RANGE), "warn")
 		return false
 	wires.append([u1, u2])
 	if planet:
 		planet.spawn_sparks((Vector2(b1["pos"]) + Vector2(b2["pos"])) * 0.5, Color(0.32, 0.94, 1.0), 10)
 	_solve_power(0.0)
 	Sfx.play("wire")
-	State.add_log("POWER WIRED: %s <-> %s" % [State.BLD[b1["id"]]["name"], State.BLD[b2["id"]]["name"]], "good")
+	State.update_tutorial()
+	State.add_log("電線接続: %s ⇔ %s" % [State.BLD[b1["id"]]["name"], State.BLD[b2["id"]]["name"]], "good")
 	return true
 
 func try_wire_at(pos: Vector2) -> bool:
@@ -241,7 +247,7 @@ func try_wire_at(pos: Vector2) -> bool:
 	if wire_pick_uid == -1:
 		wire_pick_uid = u1
 		Sfx.play("click")
-		State.add_log("WIRE PICKED: %s -> Tap target node (or click again to auto-link)" % State.BLD[pn["id"]]["name"], "info")
+		State.add_log("接続元選択: %s → つなぐ先の電力装置をタップ" % State.BLD[pn["id"]]["name"], "info")
 		return true
 	elif wire_pick_uid == u1:
 		var best_u := -1; var best_s := 1e9
@@ -279,6 +285,8 @@ func handle_world_click(world_pos: Vector2) -> bool:
 		return try_wire_at(world_pos)
 	elif bid == "depot":
 		selected_depot_uid = int(b["uid"])
+		State.tut_opened_depot = true
+		State.update_tutorial()
 		Sfx.play("select")
 		depot_opened.emit(selected_depot_uid)
 		return true
@@ -291,7 +299,7 @@ func handle_world_click(world_pos: Vector2) -> bool:
 		b["recipe"] = RECIPES[ri]
 		_collect_out(b)
 		Sfx.play("select")
-		State.add_log("Assembler recipe: %s" % String(b["recipe"]).to_upper(), "info")
+		State.add_log("自動組立機レシピ変更: %s" % State.res_name(String(b["recipe"])), "info")
 		return true
 	elif bid in ["drill", "smelter", "gantry_printer"]:
 		if _collect_out(b) == 0:
@@ -305,6 +313,8 @@ func interact_near_player(pos: Vector2) -> bool:
 	var bid := String(b["id"])
 	if bid == "depot":
 		selected_depot_uid = int(b["uid"])
+		State.tut_opened_depot = true
+		State.update_tutorial()
 		Sfx.play("select")
 		depot_opened.emit(selected_depot_uid)
 		return true
@@ -322,7 +332,7 @@ func _collect_out(b: Dictionary) -> int:
 			out.erase(k)
 			got += cnt
 			if planet:
-				planet.spawn_popup(Vector2(b["pos"]), "+%d %s" % [cnt, String(k).to_upper()], Color(0.45, 0.96, 1.0))
+				planet.spawn_popup(Vector2(b["pos"]), "+%d %s" % [cnt, State.res_name(String(k))], Color(0.45, 0.96, 1.0))
 	if got > 0: Sfx.play("pop")
 	return got
 
@@ -710,21 +720,22 @@ func _fire_railgun(b: Dictionary) -> void:
 func _draw() -> void:
 	if not planet: return
 	var glow := ArtReg.get_t("glow")
-	var font := ThemeDB.fallback_font
+	var font := ArtReg.get_font()
 	var fi := int(floor(anim_t * 10.0)) % 4
 
 	# 1. Placement Hologram Ghost under cursor/player
-	if show_ghost and State.BLD.has(State.selected_tool):
+	if show_ghost and State.BLD.has(State.selected_tool) and State.get_stock(State.selected_tool) > 0:
 		var pose := compute_snap_pose(hover_world, State.selected_tool)
 		if not pose.is_empty():
 			var info: Dictionary = State.BLD[State.selected_tool]
-			var ok := not _too_close_to_existing(pose["pos"], State.selected_tool) and State.can_afford(info["cost"])
-			var gcol := Color(0.32, 0.96, 1.0, 0.68) if ok else Color(1.0, 0.36, 0.34, 0.65)
+			var ok := not _too_close_to_existing(pose["pos"], State.selected_tool)
+			var gcol := Color(0.32, 0.98, 0.72, 0.78) if ok else Color(1.0, 0.36, 0.34, 0.75)
 			draw_set_transform(pose["pos"], float(pose["rot"]), Vector2.ONE)
 			var t := ArtReg.get_t(String(info["tex"]))
 			var bw := float(info["w"]); var bh := float(info["h"])
 			if t: draw_texture_rect(t, Rect2(-bw * 0.5, -bh, bw, bh), false, gcol)
-			draw_rect(Rect2(-bw * 0.5, -bh, bw, bh), gcol, false, 2.0)
+			draw_rect(Rect2(-bw * 0.5, -bh, bw, bh), gcol, false, 2.2)
+			draw_string(font, Vector2(-56, -bh - 10), "ここへ設置" if ok else "近すぎます", HORIZONTAL_ALIGNMENT_CENTER, 112, 11, gcol)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# 2. Tesla Power Domes
@@ -771,14 +782,17 @@ func _draw() -> void:
 			draw_rect(Rect2(-24, -bh - 10, 48, 6), Color(0.08, 0.12, 0.18, 0.92))
 			draw_rect(Rect2(-23, -bh - 9, 46 * pct, 4), Color(0.28, 0.96, 0.66))
 		elif bid == "assembler":
-			draw_string(font, Vector2(-34, -bh - 10), String(b["recipe"]).to_upper(), HORIZONTAL_ALIGNMENT_CENTER, 68, 10, Color(0.46, 0.96, 1.0))
+			draw_string(font, Vector2(-38, -bh - 10), State.res_name(String(b["recipe"])), HORIZONTAL_ALIGNMENT_CENTER, 76, 10, Color(0.46, 0.96, 1.0))
 
 		if int(b["uid"]) == wire_pick_uid:
-			draw_arc(Vector2(0, -bh * 0.5), 34.0, 0.0, TAU, 24, Color(0.45, 1.0, 1.0), 2.5)
+			draw_arc(Vector2(0, -bh * 0.5), 36.0, 0.0, TAU, 24, Color(0.45, 1.0, 1.0), 2.8)
+		elif State.tut_enabled and State.tut_step == 5 and (bid in POWER_NODES) and not bool(b["wired"]):
+			var pulse := 34.0 + sin(anim_t * 6.0) * 5.0
+			draw_arc(Vector2(0, -bh * 0.5), pulse, 0.0, TAU, 24, Color(1.0, 0.86, 0.28, 0.92), 2.6)
 		elif float(info["use"]) > 0.0 and pwr <= 0.05:
-			draw_string(font, Vector2(-28, -bh - 12), "NO PWR", HORIZONTAL_ALIGNMENT_CENTER, 56, 10, Color(1.0, 0.42, 0.36))
+			draw_string(font, Vector2(-34, -bh - 12), "未通電", HORIZONTAL_ALIGNMENT_CENTER, 68, 10, Color(1.0, 0.42, 0.36))
 		elif bool(b["blocked"]):
-			draw_string(font, Vector2(-20, -bh - 12), "FULL", HORIZONTAL_ALIGNMENT_CENTER, 40, 10, Color(1.0, 0.84, 0.32))
+			draw_string(font, Vector2(-28, -bh - 12), "満杯", HORIZONTAL_ALIGNMENT_CENTER, 56, 10, Color(1.0, 0.84, 0.32))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# 4. Glowing Power Cables with Animated Pulses (snapped to per-building junction height!)

@@ -5,6 +5,7 @@ var tex: Dictionary = {}
 var icons: Dictionary = {}
 var belt_frames: Array[Texture2D] = []
 var lift_frames: Array[Texture2D] = []
+var ui_font: Font = null
 
 const ICON_IDS: Array[String] = [
 	"fe", "cu", "si", "ti",
@@ -13,6 +14,10 @@ const ICON_IDS: Array[String] = [
 ]
 
 func _ready() -> void:
+	if ResourceLoader.exists("res://assets/fonts/NotoSansJP-Bold.ttf"):
+		var f = load("res://assets/fonts/NotoSansJP-Bold.ttf")
+		if f is Font:
+			ui_font = f
 	var names := [
 		"seed_core", "fab_drone", "orbital_booster",
 		"depot", "gantry_printer", "smelter", "assembler", "mass_driver",
@@ -58,3 +63,6 @@ func get_t(key: String) -> Texture2D:
 
 func get_icon(item_id: String) -> Texture2D:
 	return icons.get(item_id, null)
+
+func get_font() -> Font:
+	return ui_font if ui_font != null else ThemeDB.fallback_font

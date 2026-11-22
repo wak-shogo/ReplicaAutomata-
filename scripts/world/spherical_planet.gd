@@ -532,7 +532,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 					carved = true
 					if o_str != "":
 						State.add_r(o_str, 4)
-						spawn_popup(cell_world_pos(wc, r), "+4 %s" % o_str.to_upper(), ore_col(o_str))
+						spawn_popup(cell_world_pos(wc, r), "+4 %s" % State.res_name(o_str), ore_col(o_str))
 					elif randf() < 0.35:
 						State.add_r("fe", 1)
 		if carved:
@@ -543,7 +543,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 				if Vector2(crystal_props[pi]["pos"]).distance_to(Vector2(tgt["pos"])) <= 52.0:
 					var o_n: String = ["", "fe", "cu", "si", "ti"][int(crystal_props[pi]["ore"])]
 					State.add_r(o_n, 8)
-					spawn_popup(crystal_props[pi]["pos"], "+8 %s" % o_n.to_upper(), ore_col(o_n))
+					spawn_popup(crystal_props[pi]["pos"], "+8 %s" % State.res_name(o_n), ore_col(o_n))
 					crystal_props.remove_at(pi)
 			for ci in touched_chunks.keys():
 				_bake_chunk(int(ci))
@@ -558,7 +558,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 			State.add_r(o_n, 22)
 			Sfx.play("mine")
 			spawn_sparks(asteroids[i]["pos"], ore_col(o_n), 14)
-			spawn_popup(asteroids[i]["pos"], "+22 %s" % o_n.to_upper(), ore_col(o_n))
+			spawn_popup(asteroids[i]["pos"], "+22 %s" % State.res_name(o_n), ore_col(o_n))
 			asteroids.remove_at(i)
 			return true
 	elif kind == "moon":
@@ -567,7 +567,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 			State.add_r(o_n, 3)
 			Sfx.play("mine")
 			spawn_sparks(tgt["pos"], ore_col(o_n), 6)
-			spawn_popup(tgt["pos"], "+3 %s" % o_n.to_upper(), ore_col(o_n))
+			spawn_popup(tgt["pos"], "+3 %s" % State.res_name(o_n), ore_col(o_n))
 			return true
 	return false
 
@@ -676,7 +676,7 @@ func _draw() -> void:
 		var c: Color = sp["col"]; c.a = clampf(float(sp["life"]) * 2.0, 0.0, 1.0)
 		var sz := float(sp["sz"])
 		draw_rect(Rect2(sp["pos"] - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), c)
-	var font := ThemeDB.fallback_font
+	var font := ArtReg.get_font()
 	for pp in popups:
 		var c: Color = pp["col"]; c.a = clampf(float(pp["life"]), 0.0, 1.0)
-		draw_string(font, pp["pos"], String(pp["txt"]), HORIZONTAL_ALIGNMENT_CENTER, -1, 14, c)
+		draw_string(font, pp["pos"], String(pp["txt"]), HORIZONTAL_ALIGNMENT_CENTER, -1, 13, c)

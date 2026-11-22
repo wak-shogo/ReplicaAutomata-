@@ -101,7 +101,7 @@ func damage_boss(dmg: float) -> void:
 		State.boss_dead = true
 		if planet: planet.spawn_sparks(boss_pos, Color(1.0, 0.56, 0.22), 40)
 		Sfx.play("boom")
-		State.add_log("CORRUPTED ORBITAL FORTRESS SHATTERED!", "good")
+		State.add_log("汚染軌道要塞を撃破しました！", "good")
 		State.check_victory()
 
 func _process(delta: float) -> void:

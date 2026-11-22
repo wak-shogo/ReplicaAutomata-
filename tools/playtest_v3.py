@@ -1,140 +1,177 @@
-"""
-STAR REPLICA: AUTOMA (V3 Concept Rebuild) - Live WebGL Playthrough & Visual Audit
-Plays the exported Web build via real mouse/keyboard inputs on Desktop (1280x720)
-and Touch/Portrait Mobile (412x915), capturing screenshots for visual inspection.
-"""
+"""Live WebGL Chromium playtest for STAR REPLICA: AUTOMA (V4 Japanese Craft Queue, Minimal HUD, Screen-Space Move & Interactive Tutorial)."""
+
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from playwright.sync_api import sync_playwright
 import functools
-import http.server
 import os
-import socketserver
 import threading
 import time
-from playwright.sync_api import sync_playwright
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCS = os.path.join(ROOT, "docs")
-SHOT_DIR = os.path.join(
-    os.path.expanduser("~"),
-    ".gemini", "antigravity", "brain", "a952e86c-2824-4a0b-8f37-837ef56179e4", "scratch", "v3_shots"
-)
+DOCS_DIR = os.path.join(ROOT, "docs")
+SHOT_DIR = r"C:\Users\wakazaki shogo\.gemini\antigravity\brain\a952e86c-2824-4a0b-8f37-837ef56179e4\scratch\v4_shots"
 os.makedirs(SHOT_DIR, exist_ok=True)
 
 
-class Quiet(http.server.SimpleHTTPRequestHandler):
+class COOPHandler(SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def log_message(self, format, *args):
         pass
 
 
-def start_srv():
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=DOCS))
-    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+def start_server():
+    handler = functools.partial(COOPHandler, directory=DOCS_DIR)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
-    return httpd, httpd.server_address[1]
+    return srv, port
 
 
 def tel(page):
-    return page.evaluate("window.__star_tel || null")
+    try:
+        return page.evaluate("() => window.__star_tel || null")
+    except Exception:
+        return None
 
 
 def wait_tel(page, timeout=25.0):
     t0 = time.time()
     while time.time() - t0 < timeout:
         v = tel(page)
-        if v:
+        if v is not None:
             return v
         time.sleep(0.2)
-    raise RuntimeError("Timed out waiting for __star_tel")
+    raise RuntimeError("Telemetry never appeared")
 
 
-def click_xy(page, x, y, hold=0.08):
+def click_xy(page, x, y, hold=0.06):
     page.mouse.move(x, y)
     page.mouse.down()
     time.sleep(hold)
     page.mouse.up()
-    time.sleep(0.14)
-
-
-def hold_key(page, key, dur):
-    page.keyboard.down(key)
-    time.sleep(dur)
-    page.keyboard.up(key)
-    time.sleep(0.1)
 
 
 def main():
-    httpd, port = start_srv()
+    httpd, port = start_server()
     url = f"http://127.0.0.1:{port}/index.html"
     errors = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            channel="msedge", headless=True,
-            args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
-        )
+        try:
+            browser = p.chromium.launch(
+                channel="chrome",
+                headless=True,
+                args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist"],
+            )
+        except Exception:
+            browser = p.chromium.launch(
+                channel="msedge",
+                headless=True,
+                args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist"],
+            )
+
+        # === DESKTOP (1280x720) ===
         ctx = browser.new_context(viewport={"width": 1280, "height": 720})
         page = ctx.new_page()
         page.on("pageerror", lambda e: errors.append(f"PAGEERR: {e}"))
-        page.on("console", lambda m: errors.append(f"CONERR: {m.text}") if m.type == "error" else None)
+        page.on("console", lambda m: errors.append(f"CONSOLE_ERR: {m.text}") if m.type == "error" else None)
 
         print("Opening:", url, flush=True)
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_selector("#canvas", timeout=25000)
-        t0 = wait_tel(page, 30.0)
+        t0 = wait_tel(page, 25.0)
         time.sleep(1.2)
-        page.screenshot(path=os.path.join(SHOT_DIR, "v3_01_concept_start.png"))
         print("START:", t0, flush=True)
-        assert t0["bldg"] == 0 and t0["drones"] == 0, f"Bad start: {t0}"
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_01_jp_start.png"))
 
-        # 1. Organic Tunnel Mining & Crystal Harvesting with Seed Unit (WASD + Space/Mouse!)
-        for step in range(10):
+        # 1. Surface Mining for Fe & Cu
+        for step in range(14):
             t = tel(page)
-            if t["fe"] >= 36 and t["cu"] >= 20:
+            if t["fe"] >= 46 and t["cu"] >= 30:
                 break
-            dir_k = "KeyD" if step < 6 else "KeyA"
+            dir_k = "KeyD" if step < 7 else "KeyA"
             page.keyboard.down(dir_k)
             page.keyboard.down("KeyW")
-            time.sleep(0.55)
+            time.sleep(0.5)
             page.keyboard.up("KeyW")
             page.keyboard.up(dir_k)
             page.mouse.move(680 if dir_k == "KeyD" else 590, 440)
             page.mouse.down()
-            time.sleep(1.5)
+            time.sleep(1.4)
             page.mouse.up()
         t_m = tel(page)
-        print("AFTER MINING:", "fe=", t_m["fe"], "cu=", t_m["cu"], "si=", t_m["si"], "px=", t_m["px"], flush=True)
-        assert t_m["fe"] >= 20 and t_m["cu"] >= 12, f"Mining failed: {t_m}"
+        print("AFTER MINING:", "fe=", t_m["fe"], "cu=", t_m["cu"], "tut_step=", t_m["tut_step"], flush=True)
+        assert t_m["fe"] >= 32 and t_m["cu"] >= 20 and t_m["tut_step"] >= 1, f"Mining failed: {t_m}"
 
-        # 2. Physically Dock Fabricator Drone #1 onto Seed Unit! (Left sidebar +DOCK DRONE button ~ x=106, y=168)
-        click_xy(page, 106, 168)
+        # 2. Open Craft Modal [C] & Enqueue Fabricator Drone (verify TIMED queue, NOT instant!)
+        page.keyboard.press("KeyC")
         time.sleep(0.35)
-        t_d = tel(page)
-        print("AFTER DOCK DRONE:", "drones=", t_d["drones"], flush=True)
-        assert t_d["drones"] >= 1, f"Drone docking failed: {t_d}"
-        page.screenshot(path=os.path.join(SHOT_DIR, "v3_02_drone_docked_caves.png"))
+        # Drone craft button in 1280x720 Craft modal (mw=820 -> x=230..1050, mh=610 -> y=55..665, card1 y=129..217, btn right edge x=916..1028, y=151..195)
+        click_xy(page, 972, 173)
+        time.sleep(0.3)
+        t_q = tel(page)
+        print("DRONE QUEUED:", "queue=", t_q["queue"], "drones=", t_q["drones"], flush=True)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_02_craft_queue.png"))
+        assert t_q["queue"] >= 1 and t_q["drones"] == 0, f"Craft queue must be timed, not instant: {t_q}"
 
-        # 3. Open Factorio Tech Tree [T], inspect & research Power & Tesla!
-        page.keyboard.press("KeyT")
-        time.sleep(0.35)
-        page.screenshot(path=os.path.join(SHOT_DIR, "v3_03_tech_tree.png"))
-        # Click RESEARCH button on bottom-right of Tech modal (x=990, y=545)
-        click_xy(page, 990, 545)
-        time.sleep(0.35)
-        page.keyboard.press("KeyT")
-        time.sleep(0.25)
-        print("TECHS:", tel(page)["techs"], flush=True)
-        assert "power_grid" in tel(page)["techs"], f"power_grid research failed: {tel(page)}"
-
-        # 4. Build Solar Array & Tesla Relay via bottom hotbar POWER & DEF tab + Wire them!
-        # Gather a little more Fe/Cu if needed for Solar(10,6) + Tesla(10,8)
-        for step in range(8):
-            t = tel(page)
-            if t["fe"] >= 24 and t["cu"] >= 16:
+        # Wait ~4.4s for Drone fabrication to finish & auto-dock!
+        t_wait0 = time.time()
+        while time.time() - t_wait0 < 8.0:
+            if tel(page)["drones"] >= 1:
                 break
-            page.keyboard.down("KeyA"); page.keyboard.down("KeyW"); time.sleep(0.5)
-            page.keyboard.up("KeyW"); page.keyboard.up("KeyA")
-            page.mouse.move(580, 440); page.mouse.down(); time.sleep(1.4); page.mouse.up()
+            time.sleep(0.25)
+        t_d = tel(page)
+        print("AFTER DRONE CRAFT COMPLETE:", "drones=", t_d["drones"], "tut_step=", t_d["tut_step"], flush=True)
+        assert t_d["drones"] >= 1 and t_d["tut_step"] >= 2, f"Drone auto-dock failed: {t_d}"
+        page.keyboard.press("Escape")
+        time.sleep(0.2)
 
-        # Fly back up onto the surface if we dug into a subterranean cavern!
+        # 3. Open Japanese Tech Tree [T] & Research Power Grid!
+        page.keyboard.press("KeyT")
+        time.sleep(0.35)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_03_jp_tech.png"))
+        # Research button on bottom-right of Tech modal (mw=880 -> x=200..1080, mh=540 -> y=90..630, dr y=496..620, rb x=902..1058, y=518..598)
+        click_xy(page, 980, 558)
+        time.sleep(0.35)
+        page.keyboard.press("Escape")
+        time.sleep(0.2)
+        t_tech = tel(page)
+        print("TECHS:", t_tech["techs"], "tut_step=", t_tech["tut_step"], flush=True)
+        assert "power_grid" in t_tech["techs"], f"power_grid research failed: {t_tech}"
+
+        # 4. Open Craft Modal [C] -> Click 電力・防衛 tab -> Enqueue Solar & Tesla -> Wait for Stock!
+        page.keyboard.press("KeyC")
+        time.sleep(0.3)
+        # Tab 1 (電力・防衛): Craft modal x=230..1050, tw=(820-24)/4=199, tab1 x=242+199=441..636, y=93..121
+        click_xy(page, 538, 107)
+        time.sleep(0.25)
+        # Row 0 (Solar): list_y=129, list_h=610-74-94-14=428, 5 items -> row_h=78, row0 y=129..207, mk_r x=946..1030
+        click_xy(page, 988, 168)
+        time.sleep(0.2)
+        # Row 1 (Tesla): y=213..291, mk_r x=946..1030
+        click_xy(page, 988, 252)
+        time.sleep(0.25)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_04_craft_power_queue.png"))
+        # Wait for Solar & Tesla to finish crafting!
+        t_wait1 = time.time()
+        while time.time() - t_wait1 < 10.0:
+            tw = tel(page)
+            if tw["stock_solar"] >= 1 and tw["stock_tesla"] >= 1:
+                break
+            time.sleep(0.25)
+        t_st = tel(page)
+        print("CRAFTED STOCK:", "solar=", t_st["stock_solar"], "tesla=", t_st["stock_tesla"], "tut_step=", t_st["tut_step"], flush=True)
+        assert t_st["stock_solar"] >= 1 and t_st["stock_tesla"] >= 1, f"Building craft failed: {t_st}"
+
+        # Close modal & fly up to surface if underground
+        page.keyboard.press("Escape")
+        time.sleep(0.2)
         for _ in range(10):
             if tel(page)["alt"] >= -70:
                 break
@@ -143,40 +180,50 @@ def main():
             page.keyboard.up("KeyW")
             time.sleep(0.15)
 
-        # Click POWER & DEF tab on bottom hotbar (tab 2 -> right third of hotbar, y=642, x=758)
-        click_xy(page, 758, 642)
+        # 5. Place Solar & Tesla via Craft modal '配置する' or Bottom Dock, then Wire them!
+        # Open Craft modal -> Tab 1 -> Click Solar '配置する' (x=856..940, y=168)
+        page.keyboard.press("KeyC")
         time.sleep(0.25)
-        # Equip Solar [2], click surface left of player
-        page.keyboard.press("Digit2")
-        time.sleep(0.2)
-        click_xy(page, 500, 385)
-        time.sleep(0.3)
-        # Equip Tesla [3], click surface right of player
-        page.keyboard.press("Digit3")
-        time.sleep(0.2)
-        click_xy(page, 760, 385)
-        time.sleep(0.3)
-        # Equip Wire [7], click Solar -> click Tesla!
-        page.keyboard.press("Digit7")
-        time.sleep(0.2)
-        click_xy(page, 500, 365)
+        click_xy(page, 898, 168)
         time.sleep(0.25)
-        click_xy(page, 760, 365)
+        # Tap surface left of player to place Solar!
+        click_xy(page, 500, 380)
+        time.sleep(0.3)
+
+        # Open Craft modal -> Click Tesla '配置する' (x=856..940, y=252)
+        page.keyboard.press("KeyC")
+        time.sleep(0.25)
+        click_xy(page, 898, 252)
+        time.sleep(0.25)
+        # Tap surface right of player to place Tesla!
+        click_xy(page, 760, 380)
+        time.sleep(0.35)
+
+        # Bottom dock now has [採掘, 配線, +製造, 回収] (4 slots -> bar_w=4*60+16=256, bx=512, slot1 配線 x=580..634, y=651..705)
+        click_xy(page, 607, 678)
+        time.sleep(0.25)
+        click_xy(page, 500, 360)
+        time.sleep(0.25)
+        click_xy(page, 760, 360)
         time.sleep(0.4)
         page.keyboard.press("Escape")
         t_w = tel(page)
-        print("WIRED GRID:", "bldg=", t_w["bldg"], "wires=", t_w["wires"], "pwr=", t_w["pwr_prod"], "teslas=", t_w["teslas_on"], flush=True)
-        page.screenshot(path=os.path.join(SHOT_DIR, "v3_04_wired_surface.png"))
+        print("WIRED GRID:", "bldg=", t_w["bldg"], "wires=", t_w["wires"], "pwr=", t_w["pwr_prod"], "tut_step=", t_w["tut_step"], flush=True)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_05_wired_surface.png"))
         assert t_w["bldg"] >= 2 and t_w["wires"] >= 1 and t_w["pwr_prod"] >= 25, f"Wired grid failed: {t_w}"
 
-        # 5. Toggle Full-Planet Orbital Macro View [M]
-        page.keyboard.press("KeyM")
-        time.sleep(1.0)
-        page.screenshot(path=os.path.join(SHOT_DIR, "v3_05_orbital_macro.png"))
-        page.keyboard.press("KeyM")
+        # 6. Open Command Modal (指令・地図 at top-right x=1223, y=105) & Guide Modal [H]
+        click_xy(page, 1223, 105)
+        time.sleep(0.35)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_06_command_modal.png"))
+        page.keyboard.press("Escape")
+        time.sleep(0.2)
+        page.keyboard.press("KeyH")
+        time.sleep(0.35)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_07_guide_modal.png"))
         ctx.close()
 
-        # 6. Portrait Mobile (412x915, DPR 2.625) Touch HUD & Tech Tree
+        # === PORTRAIT MOBILE (412x915, DPR 2.625) ===
         mctx = browser.new_context(viewport={"width": 412, "height": 915}, device_scale_factor=2.625, has_touch=True, is_mobile=True)
         mpage = mctx.new_page()
         mpage.on("pageerror", lambda e: errors.append(f"MOBERR: {e}"))
@@ -184,17 +231,17 @@ def main():
         mpage.wait_for_selector("#canvas", timeout=25000)
         wait_tel(mpage, 25.0)
         time.sleep(1.2)
-        mpage.screenshot(path=os.path.join(SHOT_DIR, "v3_06_mobile_hud.png"))
-        mpage.keyboard.press("KeyT")
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_08_mobile_hud.png"))
+        mpage.keyboard.press("KeyC")
         time.sleep(0.4)
-        mpage.screenshot(path=os.path.join(SHOT_DIR, "v3_07_mobile_tech.png"))
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_09_mobile_craft.png"))
         mctx.close()
         browser.close()
 
     httpd.shutdown()
-    print("V3_PLAYTEST_ERRORS:", errors, flush=True)
+    print("V4_PLAYTEST_ERRORS:", errors, flush=True)
     assert len(errors) == 0, f"Browser runtime errors: {errors}"
-    print("ALL V3 LIVE WEBGL PLAYTEST CHECKS PASSED!", flush=True)
+    print("ALL V4 JP LIVE WEBGL PLAYTEST CHECKS PASSED!", flush=True)
 
 
 if __name__ == "__main__":

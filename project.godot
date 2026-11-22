@@ -23,6 +23,10 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=4
 
+[gui]
+
+theme/custom_font="res://assets/fonts/NotoSansJP-Bold.ttf"
+
 [input_devices]
 
 pointing/emulate_touch_from_mouse=false
