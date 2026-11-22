@@ -144,6 +144,14 @@ func _run_tests() -> void:
 	_chk(player.velocity.x > 20.0, "Screen-space RIGHT at bottom-right failed! vel=%s" % str(player.velocity))
 	player.spawn_north_pole()
 	player.move_input = Vector2.ZERO
+	# 1a. Zero-jitter surface anchor test: let Seed Unit land & verify it locks completely still (0.0px jitter)!
+	for _s in range(60):
+		player._physics_process(0.05)
+	var settled_pos := player.position
+	for _s2 in range(30):
+		player._physics_process(0.05)
+	_chk(player.anchored and player.velocity.length() < 0.01 and player.position.distance_to(settled_pos) < 0.01,
+		"Seed Unit still jittering on surface! anchored=%s vel=%.2f drift=%.3f" % [str(player.anchored), player.velocity.length(), player.position.distance_to(settled_pos)])
 
 	# 1b. Directional raycast mining test: aiming UP into empty sky must NOT auto-snap to ground below; aiming DOWN hits crust!
 	var up_hit := planet.find_mine_target(player.position, Vector2.UP, 220.0)
@@ -216,6 +224,14 @@ func _run_tests() -> void:
 	_chk(grid.toggle_conveyor(u_depot, u_smelt) and grid.conveyors.size() == 2, "Free-link Depot->Smelter conveyor failed!")
 	for _k in range(110): grid._process(0.1)
 	_chk(grid.buildings[4]["inv"].size() > 0 or grid.buildings[5]["in_buf"].size() > 0 or grid.buildings[5]["out_buf"].size() > 0, "Free-linked Conveyor pipeline produced nothing!")
+	# Regression test for Smelter with 12 Cu: MUST smelt 12 -> 10 Cu and produce wire_cu on VERY FIRST cycle!
+	var sm_b: Dictionary = grid.buildings[5]
+	sm_b["in_buf"] = {"cu": 12}
+	sm_b["out_buf"] = {}
+	sm_b["timer"] = 0.0
+	for _sm in range(25): grid._process(0.1)
+	_chk(int(sm_b["out_buf"].get("wire_cu", 0)) >= 1 and int(sm_b["in_buf"].get("cu", 0)) <= 10,
+		"Smelter failed to smelt Cu x12! in=%s out=%s" % [str(sm_b["in_buf"]), str(sm_b["out_buf"])])
 
 	# Nighttime battery test
 	planet.sun_angle = PI * 0.5

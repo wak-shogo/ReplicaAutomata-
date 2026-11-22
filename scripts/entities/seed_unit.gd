@@ -11,6 +11,7 @@ var swarm: Node2D = null
 
 var velocity: Vector2 = Vector2.ZERO
 var on_ground: bool = false
+var anchored: bool = false
 var move_input: Vector2 = Vector2.ZERO
 var aim_world: Vector2 = Vector2.ZERO
 var manual_aim_dir: Vector2 = Vector2.ZERO
@@ -39,6 +40,7 @@ func spawn_north_pole() -> void:
 	velocity = Vector2.ZERO
 	rotation = 0.0
 	on_ground = false
+	anchored = false
 	mine_target = {}
 
 func emergency_redrop() -> void:
@@ -62,72 +64,86 @@ func _physics_process(delta: float) -> void:
 	var up := position.normalized() if r > 1.0 else Vector2.UP
 	var tang := Vector2(-up.y, up.x)
 
-	# 1. Multi-body Newtonian Gravity
-	var grav := planet.compute_gravity(position)
-	local_g = grav.length() / SphericalPlanet.GRAV_SURF
-	velocity += grav * delta
-
-	# 2. Movement vector: ALWAYS aligned with screen direction (intuitive at ALL 360 degrees!)
+	# 1. Input vector (screen-space) & Surface Anchor Lock (ZERO jitter when parked on ground!)
 	var inp := move_input
 	if inp.length() > 1.0: inp = inp.normalized()
-	var wdir := Vector2.ZERO
-	if inp.length() > 0.08:
-		wdir = inp.normalized()
+	var wdir := inp.normalized() if inp.length() > 0.08 else Vector2.ZERO
+	var grav := planet.compute_gravity(position)
+	local_g = grav.length() / SphericalPlanet.GRAV_SURF
 
-	var tinfo: Dictionary = State.PROPULSION_TIERS[State.propulsion_tier]
-	var chem_t := float(tinfo["thrust"])
-	var ion_t := float(tinfo["ion"])
-	var max_s := float(tinfo["max_spd"])
-	var alt := r - SphericalPlanet.R_SURFACE
+	if anchored:
+		# Release anchor immediately if player thrusts OR if ground beneath is mined away!
+		if wdir.length() > 0.08 or not _has_ground_below(position, up):
+			anchored = false
+		else:
+			velocity = Vector2.ZERO
+			on_ground = true
+			var urot_a := up.angle() + PI * 0.5
+			rotation = wrapf(rotation + clampf(wrapf(urot_a - rotation, -PI, PI), -8.0 * delta, 8.0 * delta), -PI, PI)
 
-	if wdir.length() > 0.08:
-		var mag := inp.length()
-		var target_rot := (wdir.angle() + PI * 0.5) if State.propulsion_tier >= 1 and alt > 80.0 else (up.angle() + PI * 0.5)
-		var diff := wrapf(target_rot - rotation, -PI, PI)
-		rotation = wrapf(rotation + clampf(diff, -6.5 * delta, 6.5 * delta), -PI, PI)
+	if not anchored:
+		# Multi-body Newtonian Gravity
+		velocity += grav * delta
 
-		if State.propulsion_tier >= 1 and State.fuel > 0.1:
-			firing_chem = true
-			velocity += wdir * (chem_t * mag) * delta
-			State.fuel = maxf(0.0, State.fuel - (4.2 if State.propulsion_tier == 1 else 2.8) * mag * delta)
-		elif State.ion_bat > 0.5:
-			firing_ion = true
-			var tdir := wdir
-			if State.propulsion_tier == 0 and alt > 95.0:
-				var oc := tdir.dot(up)
-				if oc > 0.0:
-					tdir = tdir - up * oc
-					tdir = tdir.normalized() if tdir.length() > 0.05 else Vector2.ZERO
-			velocity += tdir * (ion_t * mag) * delta
-			State.ion_bat = maxf(0.0, State.ion_bat - 22.0 * mag * delta)
-	else:
-		var urot := up.angle() + PI * 0.5
-		rotation = wrapf(rotation + clampf(wrapf(urot - rotation, -PI, PI), -5.0 * delta, 5.0 * delta), -PI, PI)
+		var tinfo: Dictionary = State.PROPULSION_TIERS[State.propulsion_tier]
+		var chem_t := float(tinfo["thrust"])
+		var ion_t := float(tinfo["ion"])
+		var max_s := float(tinfo["max_spd"])
+		var alt := r - SphericalPlanet.R_SURFACE
 
-	if braking:
-		velocity *= exp(-7.0 * delta)
-		if velocity.length() < 6.0: velocity = Vector2.ZERO
+		if wdir.length() > 0.08:
+			var mag := inp.length()
+			var target_rot := (wdir.angle() + PI * 0.5) if State.propulsion_tier >= 1 and alt > 80.0 else (up.angle() + PI * 0.5)
+			var diff := wrapf(target_rot - rotation, -PI, PI)
+			rotation = wrapf(rotation + clampf(diff, -6.5 * delta, 6.5 * delta), -PI, PI)
 
-	# 3. Atmospheric Drag ONLY inside atmosphere; STRICTLY ZERO in Vacuum Space!
-	var atmos := planet.get_atmos_density(position)
-	if atmos > 0.0:
-		var dk := 0.85 if State.propulsion_tier == 0 else (0.36 * atmos)
-		velocity *= exp(-dk * delta)
-		if atmos > 0.25 and velocity.length() > max_s * 1.45:
-			velocity = velocity.normalized() * lerpf(velocity.length(), max_s * 1.45, delta * 3.0)
+			if State.propulsion_tier >= 1 and State.fuel > 0.1:
+				firing_chem = true
+				velocity += wdir * (chem_t * mag) * delta
+				State.fuel = maxf(0.0, State.fuel - (4.2 if State.propulsion_tier == 1 else 2.8) * mag * delta)
+			elif State.ion_bat > 0.5:
+				firing_ion = true
+				var tdir := wdir
+				if State.propulsion_tier == 0 and alt > 95.0:
+					var oc := tdir.dot(up)
+					if oc > 0.0:
+						tdir = tdir - up * oc
+						tdir = tdir.normalized() if tdir.length() > 0.05 else Vector2.ZERO
+				velocity += tdir * (ion_t * mag) * delta
+				State.ion_bat = maxf(0.0, State.ion_bat - 22.0 * mag * delta)
+		else:
+			var urot := up.angle() + PI * 0.5
+			rotation = wrapf(rotation + clampf(wrapf(urot - rotation, -PI, PI), -5.0 * delta, 5.0 * delta), -PI, PI)
 
-	# 4. Integrate & Smooth Fine-Voxel Collision Resolution
-	position += velocity * delta
-	on_ground = false
-	_resolve_collision(delta)
+		if braking:
+			velocity *= exp(-7.0 * delta)
+			if velocity.length() < 6.0: velocity = Vector2.ZERO
 
-	var mhit := planet.check_moon_hit(position, RADIUS)
-	if bool(mhit.get("hit", false)):
-		position = mhit["push"]
-		var mn: Vector2 = mhit["normal"]
-		var vn := velocity.dot(mn)
-		if vn < 0.0: velocity -= mn * vn; velocity *= 0.88
-		on_ground = true
+		# Atmospheric Drag ONLY inside atmosphere; STRICTLY ZERO in Vacuum Space!
+		var atmos := planet.get_atmos_density(position)
+		if atmos > 0.0:
+			var dk := 0.85 if State.propulsion_tier == 0 else (0.36 * atmos)
+			velocity *= exp(-dk * delta)
+			if atmos > 0.25 and velocity.length() > max_s * 1.45:
+				velocity = velocity.normalized() * lerpf(velocity.length(), max_s * 1.45, delta * 3.0)
+
+		# Integrate & Exact Zero-Bounce Voxel Collision Resolution
+		position += velocity * delta
+		on_ground = false
+		_resolve_collision(delta)
+
+		var mhit := planet.check_moon_hit(position, RADIUS)
+		if bool(mhit.get("hit", false)):
+			position = mhit["push"]
+			var mn: Vector2 = mhit["normal"]
+			var vn := velocity.dot(mn)
+			if vn < 0.0: velocity -= mn * vn; velocity *= 0.88
+			on_ground = true
+
+		# Engage magnetic surface attach when resting steadily on planet surface with no input!
+		if on_ground and wdir.length() <= 0.08 and velocity.length() < 26.0:
+			velocity = Vector2.ZERO
+			anchored = true
 
 	if grid:
 		grid.collect_near_player(position, 86.0)
@@ -165,6 +181,20 @@ func _physics_process(delta: float) -> void:
 
 	queue_redraw()
 
+func _has_ground_below(pos: Vector2, up: Vector2) -> bool:
+	if not planet: return false
+	var r := pos.length()
+	if r <= SphericalPlanet.R_CORE + 6.0 * SphericalPlanet.CELL_H + RADIUS + 2.0:
+		return true
+	if r > SphericalPlanet.R_SURFACE + RADIUS + 24.0:
+		return false
+	var tang := Vector2(-up.y, up.x)
+	for probe in [-up * (RADIUS + 2.5), (-up * 0.85 + tang * 0.45) * (RADIUS + 2.0), (-up * 0.85 - tang * 0.45) * (RADIUS + 2.0)]:
+		var c := planet.world_to_cell(pos + probe)
+		if planet.is_solid(c.x, c.y):
+			return true
+	return false
+
 func _resolve_collision(delta: float) -> void:
 	var r := position.length()
 	if r < SphericalPlanet.R_CORE + 6.0 * SphericalPlanet.CELL_H + RADIUS:
@@ -179,24 +209,42 @@ func _resolve_collision(delta: float) -> void:
 
 	var up := position.normalized()
 	var tang := Vector2(-up.y, up.x)
-	var pts: Array[Vector2] = [
-		-up * RADIUS,
+
+	# 1. Exact radial snap for floor contact (zero hardcoded 4.2px jump / zero bounce!)
+	var foot_c := planet.world_to_cell(position - up * RADIUS)
+	if planet.is_solid(foot_c.x, foot_c.y):
+		var exact_r := SphericalPlanet.R_CORE + float(foot_c.y + 1) * SphericalPlanet.CELL_H + RADIUS
+		if position.length() < exact_r:
+			position = up * exact_r
+		var vn := velocity.dot(up)
+		if vn < 0.0: velocity -= up * vn
+		on_ground = true
+		var vt := velocity.dot(tang)
+		velocity -= tang * (vt * minf(1.0, delta * 8.0))
+
+	# 2. Gentle micro-step resolution for walls & ceilings (zero bounce!)
+	var side_pts: Array[Vector2] = [
+		tang * RADIUS, -tang * RADIUS, up * RADIUS,
 		(tang * 0.7 - up * 0.7) * RADIUS,
 		(-tang * 0.7 - up * 0.7) * RADIUS,
-		tang * RADIUS, -tang * RADIUS, up * RADIUS,
 	]
-	for off in pts:
-		var sp: Vector2 = position + off
-		var c := planet.world_to_cell(sp)
-		if planet.is_solid(c.x, c.y):
-			var pdir: Vector2 = (-off).normalized()
-			position += pdir * 4.2
-			var vn := velocity.dot(pdir)
-			if vn < 0.0: velocity -= pdir * vn * 1.02
-			if off.dot(up) < -RADIUS * 0.4:
-				on_ground = true
-				var vt := velocity.dot(tang)
-				velocity -= tang * (vt * minf(1.0, delta * 4.2))
+	for _iter in range(3):
+		var hit_any := false
+		for off in side_pts:
+			var sp: Vector2 = position + off
+			var c := planet.world_to_cell(sp)
+			if planet.is_solid(c.x, c.y):
+				hit_any = true
+				var pdir: Vector2 = (-off).normalized()
+				position += pdir * 1.4
+				var vn := velocity.dot(pdir)
+				if vn < 0.0: velocity -= pdir * vn
+				if off.dot(up) < -RADIUS * 0.4:
+					on_ground = true
+					var vt := velocity.dot(tang)
+					velocity -= tang * (vt * minf(1.0, delta * 8.0))
+		if not hit_any:
+			break
 
 # ------------------------------------------------------------------------------
 # SEED UNIT + PHYSICALLY DOCKED FABRICATOR DRONES + MULTI-BEAM LASERS

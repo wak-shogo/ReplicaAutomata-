@@ -1138,7 +1138,13 @@ func _draw_building_modal(vp: Vector2, font: Font) -> void:
 			sub_info = "現在の製造レシピ: %s" % State.res_name(String(snap["recipe"]))
 		else:
 			sub_info = "電力効率: %d%%" % int(round(pwr * 100.0))
-		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 43), sub_info, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 10, Color(0.76, 0.90, 1.0))
+		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 43), sub_info, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 126), 10, Color(0.76, 0.90, 1.0))
+		if bool(snap.get("has_prog", false)):
+			var pg := clampf(float(snap.get("prog", 0.0)), 0.0, 1.0)
+			var pgr := Rect2(st_r.end.x - 112, st_r.position.y + 33, 102, 12)
+			root_ctrl.draw_rect(pgr, Color(0.08, 0.14, 0.22))
+			root_ctrl.draw_rect(Rect2(pgr.position, Vector2(pgr.size.x * pg, pgr.size.y)), Color(1.0, 0.72, 0.22) if bid == "smelter" else Color(0.36, 0.96, 0.74))
+			root_ctrl.draw_rect(pgr, Color(0.38, 0.56, 0.72), false, 1.0)
 
 	y += 66.0
 	# 中身（入力バッファ＆出力バッファ）表示

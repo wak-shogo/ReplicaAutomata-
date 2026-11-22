@@ -96,19 +96,19 @@ def main():
         t_tap = tel(page)
         assert t_tap["beam_x"] == 0 and t_tap["beam_y"] == 0, f"Tap-to-mine should be abolished! {t_tap}"
 
-        for step in range(14):
+        for step in range(20):
             t = tel(page)
             if t["fe"] >= 46 and t["cu"] >= 30:
                 break
-            dir_k = "KeyD" if step < 7 else "KeyA"
+            dir_k = "KeyD" if step < 8 else "KeyA"
             page.keyboard.down(dir_k)
             page.keyboard.down("KeyW")
-            time.sleep(0.5)
+            time.sleep(0.45)
             page.keyboard.up("KeyW")
             page.keyboard.up(dir_k)
-            page.mouse.move(760 if dir_k == "KeyD" else 520, 368)
+            page.mouse.move(745 if dir_k == "KeyD" else 535, 402)
             page.keyboard.down("Space")
-            time.sleep(0.85)
+            time.sleep(0.95)
             page.keyboard.up("Space")
         t_m = tel(page)
         print("AFTER MINING:", "fe=", t_m["fe"], "cu=", t_m["cu"], "tut_step=", t_m["tut_step"], flush=True)
@@ -191,8 +191,8 @@ def main():
         time.sleep(0.25)
         click_xy(page, 898, 168)
         time.sleep(0.25)
-        # Tap surface left of player to place Solar!
-        click_xy(page, 500, 380)
+        # Tap surface left of player (click skyward at y=160 so it always snaps to top surface!)
+        click_xy(page, 500, 160)
         time.sleep(0.3)
 
         # Open Craft modal -> Click Tesla '配置する' (x=856..940, y=252)
@@ -200,16 +200,17 @@ def main():
         time.sleep(0.25)
         click_xy(page, 898, 252)
         time.sleep(0.25)
-        # Tap surface right of player to place Tesla!
-        click_xy(page, 760, 380)
+        # Tap surface right of player (skyward at y=160 so it snaps to top surface!)
+        click_xy(page, 760, 160)
         time.sleep(0.35)
 
-        # Bottom dock now has [採掘, 配線, +製造, 回収] (4 slots -> bar_w=4*60+16=256, bx=512, slot1 配線 x=580..634, y=651..705)
+        # Bottom dock now has [通常, 配線, 削除, +製造] (4 slots -> bar_w=256, bx=512, slot1 配線 x=580..634, y=651..705)
+        sol_y = max(130, min(520, 360 + int((tel(page)["alt"] + 30) * 0.88)))
         click_xy(page, 607, 678)
         time.sleep(0.25)
-        click_xy(page, 500, 360)
+        click_xy(page, 500, sol_y)
         time.sleep(0.25)
-        click_xy(page, 760, 360)
+        click_xy(page, 500, sol_y) # Double-click Solar in wire mode auto-links to nearest Tesla!
         time.sleep(0.4)
         page.keyboard.press("Escape")
         t_w = tel(page)
@@ -218,7 +219,7 @@ def main():
         assert t_w["bldg"] >= 2 and t_w["wires"] >= 1 and t_w["pwr_prod"] >= 25, f"Wired grid failed: {t_w}"
 
         # 6. Tap Solar facility in normal mode -> Opens Universal Facility Inspector Modal (modal==6)!
-        click_xy(page, 500, 360)
+        click_xy(page, 500, sol_y)
         time.sleep(0.35)
         t_insp = tel(page)
         print("INSPECT SOLAR:", "modal=", t_insp["modal"], "insp_uid=", t_insp["insp_uid"], flush=True)
@@ -232,13 +233,13 @@ def main():
         click_xy(page, 667, 678)
         time.sleep(0.25)
         # 1st tap on Solar -> MUST ARM only, NOT delete!
-        click_xy(page, 500, 360)
+        click_xy(page, 500, sol_y)
         time.sleep(0.25)
         t_arm = tel(page)
         print("DELETE 1ST TAP (ARM):", "bldg=", t_arm["bldg"], "armed=", t_arm["armed_del"], flush=True)
         assert t_arm["bldg"] == 2 and t_arm["armed_del"] > 0, f"1st tap in delete mode should arm only! {t_arm}"
         # 2nd tap on Solar -> DELETES & refunds stock_solar == 1!
-        click_xy(page, 500, 360)
+        click_xy(page, 500, sol_y)
         time.sleep(0.3)
         t_del = tel(page)
         print("DELETE 2ND TAP (DONE):", "bldg=", t_del["bldg"], "stock_solar=", t_del["stock_solar"], flush=True)

@@ -495,10 +495,12 @@ func get_building_snap(uid: int) -> Dictionary:
 		if int(cv["from"]) == uid:
 			var ob := _by_uid(int(cv["to"]))
 			if not ob.is_empty(): conv_out.append("→" + String(State.BLD[ob["id"]]["name"]))
+	var cyc_t := 1.2 if bid == "drill" else (1.8 if bid == "smelter" else (2.1 if bid == "assembler" else (2.6 if bid == "gantry_printer" else 0.0)))
+	var prog := clampf(float(b["timer"]) / cyc_t, 0.0, 1.0) if cyc_t > 0.0 else 0.0
 	return {
 		"uid": uid, "id": bid, "name": String(info["name"]), "tex": String(info["tex"]),
 		"desc": String(info["desc"]), "is_power": (bid in POWER_NODES), "is_logi": (bid in LOGI_NODES),
-		"gen": live_gen, "use": float(info["use"]),
+		"gen": live_gen, "use": float(info["use"]), "prog": prog, "has_prog": (cyc_t > 0.0),
 		"pwr_ratio": float(b["pwr_ratio"]), "wired": bool(b["wired"]), "links": links, "conv_out": conv_out,
 		"battery_kj": float(b["battery_kj"]), "battery_cap": BATTERY_CAP_KJ,
 		"ore_target": String(b["ore_target"]), "dir": int(b["dir"]),
@@ -864,14 +866,27 @@ func _process(delta: float) -> void:
 			"smelter":
 				if pwr <= 0.05: continue
 				if _buf_sum(b["out_buf"]) >= OUT_CAP: b["blocked"] = true; continue
-				if planet and float(b["smoke_t"]) >= 0.55 and not b["in_buf"].is_empty():
+				var ib_s: Dictionary = b["in_buf"]
+				var has_ore := int(ib_s.get("fe", 0)) >= 2 or int(ib_s.get("cu", 0)) >= 2 or int(ib_s.get("si", 0)) >= 2
+				if not has_ore:
+					b["timer"] = 0.0
+					continue
+				if planet and float(b["smoke_t"]) >= 0.55:
 					b["smoke_t"] = 0.0; planet.spawn_smoke(Vector2(b["pos"]) + n * 76.0 - tang * 16.0, n, Color(0.76, 0.80, 0.88, 0.44))
 				if float(b["timer"]) >= 1.8:
 					b["timer"] = 0.0
-					var ib: Dictionary = b["in_buf"]
-					if int(ib.get("fe", 0)) >= 2: ib["fe"] -= 2; if ib["fe"] <= 0: ib.erase("fe"); _buf_add(b["out_buf"], "plate_fe", 1)
-					elif int(ib.get("cu", 0)) >= 2: ib["cu"] -= 2; if ib["cu"] <= 0: ib.erase("cu"); _buf_add(b["out_buf"], "wire_cu", 1)
-					elif int(ib.get("si", 0)) >= 2: ib["si"] -= 2; if ib["si"] <= 0: ib.erase("si"); _buf_add(b["out_buf"], "wafer_si", 1)
+					if int(ib_s.get("fe", 0)) >= 2:
+						ib_s["fe"] = int(ib_s["fe"]) - 2
+						if int(ib_s["fe"]) <= 0: ib_s.erase("fe")
+						_buf_add(b["out_buf"], "plate_fe", 1)
+					elif int(ib_s.get("cu", 0)) >= 2:
+						ib_s["cu"] = int(ib_s["cu"]) - 2
+						if int(ib_s["cu"]) <= 0: ib_s.erase("cu")
+						_buf_add(b["out_buf"], "wire_cu", 1)
+					elif int(ib_s.get("si", 0)) >= 2:
+						ib_s["si"] = int(ib_s["si"]) - 2
+						if int(ib_s["si"]) <= 0: ib_s.erase("si")
+						_buf_add(b["out_buf"], "wafer_si", 1)
 			"assembler":
 				if pwr <= 0.05: continue
 				if _buf_sum(b["out_buf"]) >= OUT_CAP: b["blocked"] = true; continue
