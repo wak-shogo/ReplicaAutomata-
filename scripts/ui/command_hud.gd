@@ -284,6 +284,10 @@ func _pick_tool(tid: String) -> void:
 		Sfx.play("error")
 		State.add_log("先に【研究】で「電力とテスラ」を解放してください。", "warn")
 		return
+	if tid == "conveyor" and not State.is_unlocked("conveyor"):
+		Sfx.play("error")
+		State.add_log("先に【研究】で「洞窟物流ライン」を解放してください。", "warn")
+		return
 	if State.BLD.has(tid) and State.get_stock(tid) <= 0:
 		Sfx.play("error")
 		State.add_log("在庫がありません。【クラフト】で製造してください。", "warn")
@@ -291,6 +295,7 @@ func _pick_tool(tid: String) -> void:
 	State.selected_tool = tid
 	if grid:
 		if tid != "wire": grid.wire_pick_uid = -1
+		if tid != "conveyor": grid.conveyor_pick_uid = -1
 		if tid != "salvage": grid.salvage_armed_uid = -1
 	Sfx.play("select")
 
@@ -337,7 +342,10 @@ func _exec(h: Dictionary) -> void:
 			_pick_tool(String(h["v"]))
 		"cancel_tool":
 			State.selected_tool = "mine"
-			if grid: grid.wire_pick_uid = -1
+			if grid:
+				grid.wire_pick_uid = -1
+				grid.conveyor_pick_uid = -1
+				grid.salvage_armed_uid = -1
 			Sfx.play("click")
 		"flip_dir":
 			State.build_dir = -State.build_dir; Sfx.play("click")
@@ -369,6 +377,12 @@ func _exec(h: Dictionary) -> void:
 			if grid: grid.depot_deposit_all(depot_uid)
 		"depot_flt":
 			if grid: grid.depot_cycle_filter(depot_uid, String(h["v"]))
+		"depot_link_flt":
+			if grid: grid.depot_cycle_link_filter(int(h["v"]))
+		"depot_conv":
+			if grid:
+				grid.start_conveyor_from(depot_uid)
+				modal = Modal.NONE
 		"depot_take":
 			if grid: grid.depot_transfer(depot_uid, String(h["v"]), false, 5)
 		"bld_collect":
@@ -382,6 +396,10 @@ func _exec(h: Dictionary) -> void:
 		"bld_wire":
 			if grid:
 				grid.start_wire_from(inspect_uid)
+				modal = Modal.NONE
+		"bld_conv":
+			if grid:
+				grid.start_conveyor_from(inspect_uid)
 				modal = Modal.NONE
 		"bld_salvage":
 			if grid and grid.salvage_by_uid(inspect_uid):
@@ -587,11 +605,13 @@ func _draw_bottom_right_telemetry(vp: Vector2, portrait: bool, font: Font) -> vo
 		root_ctrl.draw_string(font, Vector2(r.position.x + 8, y), "・" + String(lg["msg"]), HORIZONTAL_ALIGNMENT_LEFT, int(w - 14), 9, c)
 		y += 16.0
 
-# 6. 下部スッキリ所持ツールバー（採掘・配線・削除を常設固定 ＋ クラフト済みの所持装置！）
+# 6. 下部スッキリ所持ツールバー（通常・配線・搬送・削除を常設固定 ＋ クラフト済みの所持装置！）
 func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 	var slots: Array[Dictionary] = [{"id": "mine", "label": "通常"}]
 	if State.is_unlocked("wire"):
 		slots.append({"id": "wire", "label": "配線"})
+	if State.is_unlocked("conveyor"):
+		slots.append({"id": "conveyor", "label": "搬送"})
 	slots.append({"id": "salvage", "label": "削除"})
 	var owned := State.get_owned_buildings()
 	for bid in owned:
@@ -607,24 +627,24 @@ func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 	var bx := (vp.x - bar_w) * 0.5
 	var by := vp.y - bar_h - 8.0
 
-	# 配置モード／配線モード／削除モード中の明快ガイドバー
+	# 配置モード／配線モード／搬送モード／削除モード中の明快ガイドバー
 	if modal == Modal.NONE and State.selected_tool != "mine":
-		var mw := minf(vp.x - 16.0, 490.0)
+		var mw := minf(vp.x - 16.0, 510.0)
 		var mr := Rect2((vp.x - mw) * 0.5, by - 36.0, mw, 30.0)
-		_panel(mr, Color(0.06, 0.16, 0.24, 0.94), Color(1.0, 0.44, 0.42) if State.selected_tool == "salvage" else Color(0.40, 0.96, 0.82), 1.5)
+		var bar_col := Color(1.0, 0.44, 0.42) if State.selected_tool == "salvage" else (Color(1.0, 0.80, 0.30) if State.selected_tool == "conveyor" else Color(0.40, 0.96, 0.82))
+		_panel(mr, Color(0.06, 0.16, 0.24, 0.94), bar_col, 1.5)
 		var msg := ""
 		if State.selected_tool == "wire":
 			msg = "【配線モード】 発電機 → テスラリレーの順にタップして電線を接続"
+		elif State.selected_tool == "conveyor":
+			msg = "【搬送モード】 送り元 → 送り先施設をタップで自由接続（距離分の鉄消費）"
 		elif State.selected_tool == "salvage":
 			msg = "【削除モード】 削除したい施設をダブルタップ（2回タップで回収）"
+		elif State.selected_tool == "drill":
+			msg = "【配置: 採掘ドリル (残%d)】 光る「硬質鉱床」をタップして設置" % State.get_stock("drill")
 		elif State.BLD.has(State.selected_tool):
 			msg = "【配置: %s (残%d)】 地面をタップして設置" % [State.BLD[State.selected_tool]["name"], State.get_stock(State.selected_tool)]
-		root_ctrl.draw_string(font, Vector2(mr.position.x + 10, mr.position.y + 19), msg, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 108), 10, Color(0.92, 1.0, 0.96))
-		if State.selected_tool == "belt":
-			var fr := Rect2(mr.end.x - 106, mr.position.y + 4, 48, 22)
-			_panel(fr, Color(0.10, 0.20, 0.30, 0.95), Color(0.46, 0.92, 1.0), 1.2)
-			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 15), "反転", HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 10, Color.WHITE)
-			_add_hit(fr, "flip_dir")
+		root_ctrl.draw_string(font, Vector2(mr.position.x + 10, mr.position.y + 19), msg, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 70), 10, Color(0.92, 1.0, 0.96))
 		var cr := Rect2(mr.end.x - 54, mr.position.y + 4, 48, 22)
 		_panel(cr, Color(0.28, 0.09, 0.11, 0.94), Color(1.0, 0.44, 0.44), 1.2)
 		root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 15), "解除", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
@@ -651,8 +671,8 @@ func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 			var pad := 6.0
 			root_ctrl.draw_texture_rect(t, Rect2(sx + pad, sy + 4.0, slot_sz - pad * 2.0, slot_sz - 18.0), false)
 		else:
-			var sym := "電線" if tid == "wire" else ("削除" if tid == "salvage" else "＋")
-			var sc := Color(0.42, 0.96, 1.0) if tid == "wire" else (Color(1.0, 0.46, 0.42) if tid == "salvage" else Color(0.45, 1.0, 0.76))
+			var sym := "電線" if tid == "wire" else ("搬送" if tid == "conveyor" else ("削除" if tid == "salvage" else "＋"))
+			var sc := Color(0.42, 0.96, 1.0) if tid == "wire" else (Color(1.0, 0.80, 0.28) if tid == "conveyor" else (Color(1.0, 0.46, 0.42) if tid == "salvage" else Color(0.45, 1.0, 0.76)))
 			root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz * 0.52), sym, HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 12, sc)
 
 		root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz - 4), String(s["label"]), HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 9, Color.WHITE)
@@ -1015,26 +1035,36 @@ func _draw_depot_modal(vp: Vector2, font: Font) -> void:
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var dr := Rect2(r.position.x + 14, r.position.y + 40, mw - 28, 30)
+	var dr := Rect2(r.position.x + 14, r.position.y + 40, (mw - 34) * 0.56, 30)
 	_panel(dr, Color(0.08, 0.22, 0.30, 0.95), Color(0.42, 0.94, 1.0), 1.4)
-	root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 20), "所持している鉱石をすべて倉庫へ預ける", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 11, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 20), "鉱石をすべて預ける", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 11, Color.WHITE)
 	_add_hit(dr, "depot_all")
 
+	var cvr := Rect2(dr.end.x + 6, r.position.y + 40, (mw - 34) * 0.44, 30)
+	_panel(cvr, Color(0.22, 0.16, 0.06, 0.95), Color(1.0, 0.80, 0.30), 1.4)
+	root_ctrl.draw_string(font, Vector2(cvr.position.x, cvr.position.y + 20), "ここから搬送接続", HORIZONTAL_ALIGNMENT_CENTER, cvr.size.x, 11, Color.WHITE)
+	_add_hit(cvr, "depot_conv")
+
 	var y := r.position.y + 84.0
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 10), "4方向ベルト出力フィルタ（タップで出力する資源を切替）：", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 10, Color(1.0, 0.84, 0.36))
+	var out_links: Array = snap.get("out_links", [])
+	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 10), "接続中の搬送ライン出力フィルタ（タップで出力資源を切替）：", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 10, Color(1.0, 0.84, 0.36))
 	y += 18.0
-	var dirs: Array[String] = ["left", "right", "up", "down"]
-	var dlabels: Array[String] = ["左へ出力", "右へ出力", "上へ出力", "下へ出力"]
-	var fw := (mw - 28.0) / 4.0; var flts: Dictionary = snap["out_filters"]
-	for i in range(4):
-		var dk: String = dirs[i]
-		var fr := Rect2(r.position.x + 14 + float(i) * fw, y, fw - 6, 38)
-		var raw_f := String(flts.get(dk, "none"))
-		var fv := "なし" if raw_f == "none" else ("自動" if raw_f == "auto" else State.res_name(raw_f))
-		_panel(fr, Color(0.10, 0.22, 0.32, 0.95) if raw_f != "none" else Color(0.06, 0.09, 0.15, 0.9), Color(0.42, 0.94, 1.0) if raw_f != "none" else Color(0.28, 0.38, 0.50), 1.3)
-		root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 15), dlabels[i], HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 9, Color(0.72, 0.82, 0.94))
-		root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 31), fv, HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 11, Color.WHITE)
-		_add_hit(fr, "depot_flt", dk)
+	if out_links.is_empty():
+		var er := Rect2(r.position.x + 14, y, mw - 28, 36)
+		_panel(er, Color(0.06, 0.09, 0.15, 0.9), Color(0.28, 0.38, 0.50), 1.2)
+		root_ctrl.draw_string(font, Vector2(er.position.x, er.position.y + 22), "出力先の搬送ラインなし（「ここから搬送接続」で溶鉱炉等へ接続）", HORIZONTAL_ALIGNMENT_CENTER, er.size.x, 10, Color(0.68, 0.78, 0.90))
+	else:
+		var show_n := mini(out_links.size(), 4)
+		var fw := (mw - 28.0) / float(show_n)
+		for i in range(show_n):
+			var lk: Dictionary = out_links[i]
+			var fr := Rect2(r.position.x + 14 + float(i) * fw, y, fw - 6, 38)
+			var raw_f := String(lk.get("filter", "auto"))
+			var fv := "停止" if raw_f == "none" else ("自動" if raw_f == "auto" else State.res_name(raw_f))
+			_panel(fr, Color(0.10, 0.22, 0.32, 0.95) if raw_f != "none" else Color(0.06, 0.09, 0.15, 0.9), Color(1.0, 0.80, 0.30) if raw_f != "none" else Color(0.28, 0.38, 0.50), 1.3)
+			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 15), "→" + String(lk["to_name"]), HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 9, Color(0.76, 0.88, 1.0))
+			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 31), fv, HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 11, Color.WHITE)
+			_add_hit(fr, "depot_link_flt", int(lk["idx"]))
 
 	y += 48.0
 	var inv: Dictionary = snap["inv"]
@@ -1122,7 +1152,9 @@ func _draw_building_modal(vp: Vector2, font: Font) -> void:
 	for k in out_d.keys(): out_parts.append("%s ×%d" % [State.res_name(String(k)), int(out_d[k])])
 	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 22), "内部の材料（入力）: " + ("  ".join(in_parts) if not in_parts.is_empty() else "空"), HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 11, Color(0.88, 0.94, 1.0))
 	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 52), "内部の完成品（出力）: " + ("  ".join(out_parts) if not out_parts.is_empty() else "空"), HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 11, Color(0.46, 0.98, 0.78) if not out_parts.is_empty() else Color(0.60, 0.68, 0.78))
-	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 78), "※隣にベルトを繋ぐと自動で入出力されます。", HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 9, Color(0.64, 0.74, 0.86))
+	var conv_out: Array = snap.get("conv_out", [])
+	var conv_hint := ("搬送ライン接続先: " + "  ".join(conv_out)) if not conv_out.is_empty() else "※【搬送】で他施設と自由結束すると自動で入出力されます。"
+	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 78), conv_hint, HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 9, Color(1.0, 0.84, 0.42) if not conv_out.is_empty() else Color(0.64, 0.74, 0.86))
 
 	# 操作アクションボタン列
 	y += 102.0
@@ -1133,8 +1165,8 @@ func _draw_building_modal(vp: Vector2, font: Font) -> void:
 		acts.append({"lbl": "材料を手動投入", "a": "bld_feed", "c": Color(0.42, 0.90, 1.0)})
 	if bid == "assembler":
 		acts.append({"lbl": "レシピ切替", "a": "bld_recipe", "c": Color(1.0, 0.84, 0.36)})
-	if bid == "belt" or bid == "lift":
-		acts.append({"lbl": "向きを反転", "a": "bld_flip", "c": Color(0.42, 0.92, 1.0)})
+	if bool(snap.get("is_logi", false)):
+		acts.append({"lbl": "搬送ライン接続", "a": "bld_conv", "c": Color(1.0, 0.80, 0.30)})
 	if bool(snap["is_power"]):
 		acts.append({"lbl": "電線をつなぐ", "a": "bld_wire", "c": Color(0.42, 0.96, 1.0)})
 
@@ -1179,7 +1211,7 @@ func _draw_touch_controls(font: Font) -> void:
 	else:
 		root_ctrl.draw_circle(act_center, 36.0, Color(0.06, 0.16, 0.14, 0.82))
 		root_ctrl.draw_arc(act_center, 36.0, 0.0, TAU, 24, Color(0.35, 0.96, 0.68), 2.2)
-		var act_lbl := "接続" if State.selected_tool == "wire" else ("削除" if State.selected_tool == "salvage" else "設置")
+		var act_lbl := "接続" if State.selected_tool == "wire" else ("搬送" if State.selected_tool == "conveyor" else ("削除" if State.selected_tool == "salvage" else "設置"))
 		root_ctrl.draw_string(font, act_center + Vector2(-30, 5), act_lbl, HORIZONTAL_ALIGNMENT_CENTER, 60, 12, Color.WHITE)
 
 	root_ctrl.draw_circle(brk_center, 25.0, Color(0.18, 0.07, 0.09, 0.80))

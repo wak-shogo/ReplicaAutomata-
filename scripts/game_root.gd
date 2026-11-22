@@ -164,12 +164,12 @@ func _run_tests() -> void:
 	_chk(State.research("power_grid"), "Research power_grid failed")
 	_chk(State.research("cave_logistics"), "Research cave_logistics failed")
 	_chk(State.research("smelting_booster"), "Research smelting_booster failed")
-	for b_req in ["solar", "tesla", "battery", "drill", "belt", "depot", "smelter"]:
+	for b_req in ["solar", "tesla", "battery", "drill", "depot", "smelter"]:
 		_chk(_craft_and_finish("building", b_req) and State.get_stock(b_req) == 1, "Craft building %s failed" % b_req)
 
 	var p_sol: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL - 6, SphericalPlanet.ROWS - 2)["pos"]
-	var p_tes: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL, SphericalPlanet.ROWS - 2)["pos"]
-	var p_bat: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL - 3, SphericalPlanet.ROWS - 2)["pos"]
+	var p_tes: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL + 8, SphericalPlanet.ROWS - 2)["pos"]
+	var p_bat: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL, SphericalPlanet.ROWS - 2)["pos"]
 	_chk(grid.try_place_at("solar", p_sol) and State.get_stock("solar") == 0, "Place Solar failed")
 	# Double-tap delete check: 1st tap only arms, 2nd tap deletes & refunds stock!
 	_chk(grid.try_double_tap_salvage(p_sol) and grid.buildings.size() == 1 and grid.salvage_armed_uid > 0, "1st tap in delete mode must only arm, not delete!")
@@ -193,14 +193,29 @@ func _run_tests() -> void:
 	_chk(State.pwr_prod > 30.0 and State.active_teslas == 1, "Wired Solar+Tesla failed")
 	_chk(State.tut_step >= 6, "Interactive tutorial did not advance to step 6! step=%d" % State.tut_step)
 
-	# 4. Physical Connected Pipeline: Drill -> Belt -> Depot (4-way filter) -> Smelter + Night Survival!
-	_chk(grid.try_place_at("drill", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 3, SphericalPlanet.ROWS - 2)["pos"]), "Place Drill failed")
-	_chk(grid.try_place_at("belt", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 6, SphericalPlanet.ROWS - 2)["pos"]), "Place Belt failed")
-	_chk(grid.try_place_at("depot", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 10, SphericalPlanet.ROWS - 2)["pos"]), "Place Depot failed")
-	_chk(grid.try_place_at("smelter", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 14, SphericalPlanet.ROWS - 2)["pos"]), "Place Smelter failed")
-	grid.depot_cycle_filter(int(grid.buildings[5]["uid"]), "right")
-	for _k in range(100): grid._process(0.1)
-	_chk(grid.buildings[5]["inv"].size() > 0 or grid.buildings[6]["in_buf"].size() > 0 or grid.buildings[6]["out_buf"].size() > 0, "Logistics pipeline produced nothing")
+	# 4. Indestructible Drill-Only Bedrock Nodes + Free-Linking Conveyor Tubes (length-scaled Iron cost + red shortage!)
+	_chk(planet.drill_nodes.size() >= 8, "Missing bedrock drill nodes!")
+	var dn_pos: Vector2 = planet.drill_nodes[1]["pos"] # Starter Fe bedrock node at SPAWN_COL + 12 (inside Tesla dome!)
+	_chk(not planet.damage_target({"kind": "drill_node", "pos": dn_pos, "ore": "fe"}, 999.0), "Player hand laser must NOT break bedrock drill nodes!")
+	var ordinary_pos: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL + 2, SphericalPlanet.ROWS - 2)["pos"]
+	_chk(not grid.try_place_at("drill", ordinary_pos), "Drill must NOT be placeable on ordinary rock!")
+	_chk(grid.try_place_at("drill", dn_pos), "Place Drill on Bedrock Ore Node failed!")
+	_chk(grid.try_place_at("depot", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 16, SphericalPlanet.ROWS - 2)["pos"]), "Place Depot failed")
+	_chk(grid.try_place_at("smelter", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 21, SphericalPlanet.ROWS - 2)["pos"]), "Place Smelter failed")
+	var u_drill := int(grid.buildings[3]["uid"])
+	var u_depot := int(grid.buildings[4]["uid"])
+	var u_smelt := int(grid.buildings[5]["uid"])
+
+	# Verify insufficient Iron blocks conveyor & triggers red split shortage flash!
+	var saved_fe := State.get_r("fe")
+	State.res["fe"] = 0
+	_chk(not grid.toggle_conveyor(u_drill, u_depot) and not grid.conveyor_fail_flash.is_empty(), "Conveyor with 0 Fe must fail & show red shortage flash!")
+	State.res["fe"] = saved_fe
+	var fe_pre_conv := State.get_r("fe")
+	_chk(grid.toggle_conveyor(u_drill, u_depot) and State.get_r("fe") < fe_pre_conv, "Free-link Drill->Depot conveyor failed or didn't cost Fe!")
+	_chk(grid.toggle_conveyor(u_depot, u_smelt) and grid.conveyors.size() == 2, "Free-link Depot->Smelter conveyor failed!")
+	for _k in range(110): grid._process(0.1)
+	_chk(grid.buildings[4]["inv"].size() > 0 or grid.buildings[5]["in_buf"].size() > 0 or grid.buildings[5]["out_buf"].size() > 0, "Free-linked Conveyor pipeline produced nothing!")
 
 	# Nighttime battery test
 	planet.sun_angle = PI * 0.5
@@ -226,8 +241,8 @@ func _run_tests() -> void:
 	_chk(State.research("megastructures"), "Research megastructures failed")
 	_chk(_craft_and_finish("building", "gantry_printer"), "Craft Gantry Printer failed")
 	_chk(_craft_and_finish("building", "mass_driver"), "Craft Mass Driver failed")
-	_chk(grid.try_place_at("gantry_printer", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 12, SphericalPlanet.ROWS - 2)["pos"]), "Place Gantry Printer failed")
-	_chk(grid.try_place_at("mass_driver", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 18, SphericalPlanet.ROWS - 2)["pos"]), "Place Mass Driver failed")
+	_chk(grid.try_place_at("gantry_printer", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 3, SphericalPlanet.ROWS - 2)["pos"]), "Place Gantry Printer failed")
+	_chk(grid.try_place_at("mass_driver", planet.get_pose_at(SphericalPlanet.SPAWN_COL + 4, SphericalPlanet.ROWS - 2)["pos"]), "Place Mass Driver failed")
 	State.add_r("probe_stock", 2)
 	for _k in range(40): grid._process(0.1)
 	_chk(State.total_launches >= 1 and State.swarm_fleet >= 6, "Mass Driver failed to launch!")

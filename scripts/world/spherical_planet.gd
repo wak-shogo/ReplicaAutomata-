@@ -37,6 +37,10 @@ var dirty_chunks: Array[int] = []
 # Large glowing decorative/mineable crystal clusters embedded in caves & crust
 var crystal_props: Array[Dictionary] = []
 
+# Indestructible Bedrock Drill-Only Ore Deposits (cannot be hand-mined; Mining Drills ONLY!)
+var drill_nodes: Array[Dictionary] = []
+var _last_bounce_ms: int = -2000
+
 # Celestials & VFX
 var factory: Node2D = null
 var sun_angle: float = -PI * 0.44
@@ -201,6 +205,59 @@ func generate_planet() -> void:
 		var sr := get_surface_row(wc)
 		var oid := 2 if (int(dc) in [-16, -7, 4, 14, 25]) else 1
 		crystal_props.append({"col": wc, "row": sr + 1, "pos": cell_world_pos(wc, sr + 1), "rot": col_angle(wc) + PI * 0.5, "ore": oid, "sc": 0.92})
+
+	# 3b. Spawn Indestructible Bedrock Drill-Only Ore Deposits (Player CANNOT hand-mine; Mining Drills ONLY!)
+	drill_nodes.clear()
+	var next_dn_id := 1
+	# Starter surface Drill Nodes right near North Pole so player immediately recognizes them!
+	var starter_surf := [[-14, "fe"], [12, "fe"], [-23, "cu"], [23, "cu"]]
+	for st in starter_surf:
+		var wc := wrap_col(SPAWN_COL + int(st[0]))
+		var sr := get_surface_row(wc) + 1
+		var pose := get_pose_at(wc, sr)
+		drill_nodes.append({
+			"id": next_dn_id, "col": wc, "row": sr,
+			"pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
+			"ore": String(st[1]),
+		})
+		next_dn_id += 1
+	# Starter subterranean cave Drill Nodes (Si & Ti) directly below North Pole!
+	var starter_cave := [[-11, 74, "si"], [14, 75, "si"], [2, 69, "fe"], [-2, 46, "ti"]]
+	for scv in starter_cave:
+		var wc := wrap_col(SPAWN_COL + int(scv[0]))
+		var fr := int(scv[1])
+		# Snap onto cavern floor below target row
+		while fr > 8 and not is_solid(wc, fr - 1):
+			fr -= 1
+		while fr < ROWS - 6 and is_solid(wc, fr):
+			fr += 1
+		var pose := get_pose_at(wc, fr)
+		drill_nodes.append({
+			"id": next_dn_id, "col": wc, "row": fr,
+			"pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
+			"ore": String(scv[2]),
+		})
+		next_dn_id += 1
+	# Global distributed Drill Nodes around all 360 degrees (surface + deep caverns!)
+	var g_ores: Array[String] = ["fe", "cu", "si", "ti"]
+	for i in range(36):
+		var c := wrap_col(SPAWN_COL + 42 + i * 24)
+		var o_id: String = g_ores[i % g_ores.size()]
+		var r := get_surface_row(c) + 1
+		if o_id == "si" or o_id == "ti":
+			var target_r := 62 if o_id == "si" else 34
+			var found_r := -1
+			for rr in range(target_r - 12, target_r + 14):
+				if rr > 8 and rr < ROWS - 8 and mat[rr * COLS + c] == 4 and is_solid(c, rr - 1):
+					found_r = rr; break
+			if found_r > 0: r = found_r
+		var pose := get_pose_at(c, r)
+		drill_nodes.append({
+			"id": next_dn_id, "col": c, "row": r,
+			"pos": pose["pos"], "normal": pose["normal"], "rot": float(pose["rot"]),
+			"ore": o_id,
+		})
+		next_dn_id += 1
 
 	# 4. Bake spawn-visible chunks immediately (< 45ms!), queue remaining chunks lazily
 	dirty_chunks.clear()
@@ -462,6 +519,25 @@ func check_moon_hit(pos: Vector2, rad: float = 20.0) -> Dictionary:
 			return {"hit": true, "normal": diff / d, "push": mp + (diff / d) * lim, "moon": m}
 	return {"hit": false}
 
+func is_drill_node_protected(col: int, row: int) -> bool:
+	var wc := wrap_col(col)
+	for dn in drill_nodes:
+		var dr := int(dn["row"])
+		if row < dr - 3 or row > dr: continue
+		var dc := absi(wrap_col(wc - int(dn["col"]) + COLS / 2) - COLS / 2)
+		if dc <= 2:
+			return true
+	return false
+
+func find_nearest_drill_node(world_pos: Vector2, max_d: float = 175.0) -> Dictionary:
+	var best: Dictionary = {}
+	var bd := max_d
+	for dn in drill_nodes:
+		var d := Vector2(dn["pos"]).distance_to(world_pos)
+		if d < bd:
+			bd = d; best = dn
+	return best
+
 # ------------------------------------------------------------------------------
 # DIRECTIONAL RAYCAST MULTI-BEAM MINING (AIMS STRICTLY ALONG INPUT DIRECTION!)
 # ------------------------------------------------------------------------------
@@ -473,6 +549,12 @@ func find_mine_target(pos: Vector2, aim_dir: Vector2, max_range: float = 260.0) 
 
 	while d <= space_reach:
 		var rp := pos + dir * d
+
+		# 0. Indestructible Bedrock Drill-Only Ore Deposits deflect hand mining laser!
+		if d <= max_range + 12.0:
+			for dn in drill_nodes:
+				if Vector2(dn["pos"]).distance_to(rp) <= 26.0:
+					return {"kind": "drill_node", "pos": dn["pos"], "ore": dn["ore"]}
 
 		# 1. Surface & cavern crystal spires along the beam ray
 		if d <= max_range + 16.0:
@@ -486,6 +568,8 @@ func find_mine_target(pos: Vector2, aim_dir: Vector2, max_range: float = 260.0) 
 		if d <= max_range and rp.length() <= R_SURFACE + 28.0:
 			var cell := world_to_cell(rp)
 			if is_solid(cell.x, cell.y):
+				if is_drill_node_protected(cell.x, cell.y):
+					return {"kind": "drill_node", "pos": rp, "ore": "fe"}
 				if factory == null or not factory.is_foundation_protected(cell.x, cell.y):
 					return {"kind": "voxel", "col": cell.x, "row": cell.y, "pos": rp, "ore": get_ore_id(cell.x, cell.y)}
 				return {} # Protected building foundation blocks beam cleanly
@@ -507,6 +591,16 @@ func find_mine_target(pos: Vector2, aim_dir: Vector2, max_range: float = 260.0) 
 func damage_target(tgt: Dictionary, dmg: float) -> bool:
 	if tgt.is_empty(): return false
 	var kind := String(tgt["kind"])
+	if kind == "drill_node":
+		# Player hand laser bounces off indestructible bedrock drill deposits!
+		if randf() < 0.35:
+			spawn_sparks(tgt["pos"], Color(0.86, 0.92, 1.0), 3)
+		var now := Time.get_ticks_msec()
+		if now - _last_bounce_ms > 950:
+			_last_bounce_ms = now
+			Sfx.play("click")
+			spawn_popup(tgt["pos"], "硬質鉱床（採掘ドリル専用）", Color(1.0, 0.84, 0.36))
+		return false
 	if kind == "crystal":
 		var pi := int(tgt["idx"])
 		if pi < 0 or pi >= crystal_props.size(): return false
@@ -535,6 +629,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 				if abs(dc) + abs(dr) > 2: continue
 				var wc := wrap_col(c0 + dc)
 				if not is_solid(wc, r): continue
+				if is_drill_node_protected(wc, r): continue
 				if factory != null and factory.is_foundation_protected(wc, r): continue
 				var idx := r * COLS + wc
 				cell_hp[idx] -= dmg
@@ -659,6 +754,35 @@ func _draw() -> void:
 			draw_set_transform(pp, float(pr["rot"]), Vector2.ONE)
 			draw_texture_rect(pt, Rect2(-sz.x * 0.5, -sz.y * 0.75, sz.x, sz.y), false)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+	# 3b. Indestructible Bedrock Drill-Only Ore Deposits (distinct metallic industrial mineral seams!)
+	var font_dn := ArtReg.get_font()
+	var placing_drill := (State.selected_tool == "drill")
+	for dn in drill_nodes:
+		var dp: Vector2 = dn["pos"]
+		if not vrect.has_point(dp): continue
+		var oc := ore_col(String(dn["ore"]))
+		var pulse := 0.72 + 0.28 * sin(anim_t * 3.8 + float(dn["id"]))
+		if glow:
+			var gc := oc; gc.a = (0.52 if placing_drill else 0.32) * pulse
+			draw_texture_rect(glow, Rect2(dp.x - 54, dp.y - 54, 108, 108), false, gc)
+		draw_set_transform(dp, float(dn["rot"]), Vector2.ONE)
+		# Heavy metallic indestructible bedrock rim + crystalline mineral vent seam
+		draw_rect(Rect2(-30, -4, 60, 14), Color(0.11, 0.14, 0.20, 0.96))
+		draw_rect(Rect2(-30, -4, 60, 3), Color(0.56, 0.64, 0.76))
+		draw_rect(Rect2(-24, -10, 48, 8), Color(0.18, 0.22, 0.30))
+		draw_rect(Rect2(-20, -9, 40, 5), oc * pulse)
+		# Crystalline mineral prongs protruding from bedrock vent
+		draw_polygon(PackedVector2Array([Vector2(-14, -9), Vector2(-9, -22), Vector2(-3, -9)]), PackedColorArray([oc]))
+		draw_polygon(PackedVector2Array([Vector2(-4, -9), Vector2(2, -26), Vector2(8, -9)]), PackedColorArray([oc.lightened(0.28)]))
+		draw_polygon(PackedVector2Array([Vector2(6, -9), Vector2(13, -20), Vector2(18, -9)]), PackedColorArray([oc]))
+		if placing_drill:
+			var pr := 42.0 + sin(anim_t * 6.5) * 5.0
+			draw_arc(Vector2(0, -10), pr, 0.0, TAU, 28, Color(1.0, 0.88, 0.32, 0.92), 2.6)
+		if z >= 0.45:
+			var lbl := "【%s鉱床】ドリル専用" % State.res_name(String(dn["ore"]))
+			draw_string(font_dn, Vector2(-72, -32), lbl, HORIZONTAL_ALIGNMENT_CENTER, 144, 10, Color(1.0, 0.90, 0.44) if placing_drill else Color(0.86, 0.92, 1.0, 0.86))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# 4. Orbiting Moons & Orbital Rings
 	for m in moons:

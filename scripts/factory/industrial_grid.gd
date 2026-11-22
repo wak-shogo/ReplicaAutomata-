@@ -9,7 +9,11 @@ signal depot_opened(uid: int)
 signal building_inspected(uid: int)
 
 const POWER_NODES: Array[String] = ["solar", "geothermal", "tesla", "battery"]
+const LOGI_NODES: Array[String] = ["drill", "depot", "smelter", "assembler", "gantry_printer", "mass_driver"]
 const WIRE_RANGE: float = 680.0
+const CONVEYOR_MAX_RANGE: float = 1250.0
+const CONVEYOR_SEG_LEN: float = 70.0
+const CONVEYOR_FE_PER_SEG: int = 2
 const TESLA_DOME_R: float = 480.0
 const BATTERY_CAP_KJ: float = 18000.0
 const DRILL_BUF: int = 6
@@ -24,11 +28,14 @@ var swarm: Node2D = null
 
 var buildings: Array[Dictionary] = []
 var wires: Array[Array] = []
+var conveyors: Array[Dictionary] = [] # {"from": uid, "to": uid, "cost_fe": int, "filter": String}
 var belt_items: Array[Dictionary] = []
 var launch_trails: Array[Dictionary] = []
 var turret_beams: Array[Dictionary] = []
 
 var wire_pick_uid: int = -1
+var conveyor_pick_uid: int = -1
+var conveyor_fail_flash: Dictionary = {} # {"p1": Vec2, "p2": Vec2, "ratio": float, "need": int, "have": int, "life": float}
 var selected_depot_uid: int = -1
 var salvage_armed_uid: int = -1
 var salvage_armed_ms: int = 0
@@ -41,9 +48,10 @@ func _ready() -> void:
 	z_index = 10
 
 func clear_all() -> void:
-	buildings.clear(); wires.clear(); belt_items.clear()
+	buildings.clear(); wires.clear(); conveyors.clear(); belt_items.clear()
 	launch_trails.clear(); turret_beams.clear()
-	wire_pick_uid = -1; selected_depot_uid = -1; salvage_armed_uid = -1; salvage_armed_ms = 0; next_uid = 1
+	wire_pick_uid = -1; conveyor_pick_uid = -1; conveyor_fail_flash = {}
+	selected_depot_uid = -1; salvage_armed_uid = -1; salvage_armed_ms = 0; next_uid = 1
 
 func _by_uid(uid: int) -> Dictionary:
 	for b in buildings:
@@ -85,12 +93,34 @@ func is_foundation_protected(col: int, row: int) -> bool:
 			return true
 	return false
 
+func _is_drill_node_occupied(dn_id: int) -> bool:
+	for b in buildings:
+		if int(b.get("drill_node_id", -1)) == dn_id:
+			return true
+	return false
+
 # ------------------------------------------------------------------------------
-# PLACEMENT ON CURVED SURFACE OR INSIDE EXCAVATED CAVERNS
+# PLACEMENT ON CURVED SURFACE OR INSIDE EXCAVATED CAVERNS (DRILLS ONLY ON BEDROCK NODES!)
 # ------------------------------------------------------------------------------
 func compute_snap_pose(world_pos: Vector2, bid: String) -> Dictionary:
 	if not planet or not State.BLD.has(bid):
 		return {}
+	if bid == "drill":
+		var dn := planet.find_nearest_drill_node(world_pos, 175.0)
+		if not dn.is_empty() and not _is_drill_node_occupied(int(dn["id"])):
+			return {
+				"col": int(dn["col"]), "row": int(dn["row"]),
+				"pos": dn["pos"], "normal": dn["normal"], "rot": float(dn["rot"]),
+				"drill_node_id": int(dn["id"]), "ore_target": String(dn["ore"]),
+				"valid": true, "reason": "",
+			}
+		# Not near an open bedrock ore node -> return preview pose marked invalid!
+		var p_cell := planet.world_to_cell(world_pos)
+		var p_pose := planet.get_pose_at(p_cell.x, planet.get_surface_row(p_cell.x) + 1)
+		p_pose["valid"] = false
+		p_pose["reason"] = "硬質鉱床の上のみ設置可"
+		return p_pose
+
 	var cell := planet.world_to_cell(world_pos)
 	var c := cell.x
 	var r := cell.y
@@ -105,7 +135,10 @@ func compute_snap_pose(world_pos: Vector2, bid: String) -> Dictionary:
 	else:
 		# Cursor inside rock: snap to top of local surface above it
 		r = planet.get_surface_row(c) + 1
-	return planet.get_pose_at(c, r)
+	var pose := planet.get_pose_at(c, r)
+	pose["valid"] = true
+	pose["reason"] = ""
+	return pose
 
 func _too_close_to_existing(pos: Vector2, bid: String) -> bool:
 	var min_d := 34.0 if (bid == "belt" or bid == "lift") else 54.0
@@ -128,6 +161,10 @@ func try_place_at(bid: String, world_pos: Vector2) -> bool:
 		return false
 	var pose := compute_snap_pose(world_pos, bid)
 	if pose.is_empty(): return false
+	if not bool(pose.get("valid", true)):
+		Sfx.play("error")
+		State.add_log("採掘ドリルは【ドリル専用の硬質鉱床】の上にのみ設置できます！", "warn")
+		return false
 	if _too_close_to_existing(pose["pos"], bid):
 		Sfx.play("error")
 		State.add_log("既存の装置と近すぎます。少し離れた地面をタップしてください。", "warn")
@@ -137,7 +174,7 @@ func try_place_at(bid: String, world_pos: Vector2) -> bool:
 	if State.get_stock(bid) <= 0 and State.selected_tool == bid:
 		State.selected_tool = "mine"
 
-	var ore_t := _find_local_ore(int(pose["col"]), int(pose["row"])) if bid == "drill" else ""
+	var ore_t := String(pose.get("ore_target", "fe")) if bid == "drill" else ""
 	var b := {
 		"uid": next_uid,
 		"id": bid,
@@ -147,6 +184,7 @@ func try_place_at(bid: String, world_pos: Vector2) -> bool:
 		"normal": pose["normal"],
 		"rot": float(pose["rot"]),
 		"dir": State.build_dir,
+		"drill_node_id": int(pose.get("drill_node_id", -1)),
 		"pwr_ratio": 0.0,
 		"wired": false,
 		"timer": 0.0,
@@ -167,7 +205,8 @@ func try_place_at(bid: String, world_pos: Vector2) -> bool:
 	_solve_power(0.0)
 	Sfx.play("build")
 	State.note_building_placed(bid)
-	State.add_log("設置完了: %s%s" % [info["name"], "（【配線】でテスラリレーへ接続しよう）" if (bid in POWER_NODES) else ""], "good")
+	var extra := "（【配線】でテスラリレーへ接続しよう）" if (bid in POWER_NODES) else ("（%s鉱床へ設置！）" % State.res_name(ore_t) if bid == "drill" else "")
+	State.add_log("設置完了: %s%s" % [info["name"], extra], "good")
 	return true
 
 func _find_local_ore(c: int, r: int) -> String:
@@ -195,7 +234,13 @@ func salvage_by_uid(uid: int) -> bool:
 	for wi in range(wires.size() - 1, -1, -1):
 		if int(wires[wi][0]) == dead_u or int(wires[wi][1]) == dead_u:
 			wires.remove_at(wi)
+	for ci in range(conveyors.size() - 1, -1, -1):
+		var cv: Dictionary = conveyors[ci]
+		if int(cv["from"]) == dead_u or int(cv["to"]) == dead_u:
+			State.add_r("fe", int(cv["cost_fe"]))
+			conveyors.remove_at(ci)
 	if wire_pick_uid == dead_u: wire_pick_uid = -1
+	if conveyor_pick_uid == dead_u: conveyor_pick_uid = -1
 	if selected_depot_uid == dead_u: selected_depot_uid = -1
 	if salvage_armed_uid == dead_u: salvage_armed_uid = -1
 	buildings.remove_at(bi)
@@ -297,15 +342,99 @@ func try_wire_at(pos: Vector2) -> bool:
 		wire_pick_uid = -1
 		return toggle_wire(u0, u1)
 
+func _conv_anchor(b: Dictionary) -> Vector2:
+	var h := float(State.BLD[b["id"]]["h"]) * 0.42
+	return Vector2(b["pos"]) + Vector2(b["normal"]) * h
+
+func calc_conveyor_cost(p1: Vector2, p2: Vector2) -> int:
+	var segs := maxi(1, int(ceil(p1.distance_to(p2) / CONVEYOR_SEG_LEN)))
+	return segs * CONVEYOR_FE_PER_SEG
+
+func toggle_conveyor(u_from: int, u_to: int) -> bool:
+	if u_from <= 0 or u_to <= 0 or u_from == u_to: return false
+	var b1 := _by_uid(u_from); var b2 := _by_uid(u_to)
+	if b1.is_empty() or b2.is_empty(): return false
+	if not (b1["id"] in LOGI_NODES) or not (b2["id"] in LOGI_NODES): return false
+
+	# 既存ラインなら切断＆鉄100%返却！
+	for i in range(conveyors.size()):
+		var cv: Dictionary = conveyors[i]
+		if int(cv["from"]) == u_from and int(cv["to"]) == u_to:
+			var ref_fe := int(cv["cost_fe"])
+			State.add_r("fe", ref_fe)
+			conveyors.remove_at(i)
+			Sfx.play("pop")
+			State.add_log("搬送ライン撤去: 鉄+%d 返却" % ref_fe, "info")
+			return true
+
+	var p1 := _conv_anchor(b1); var p2 := _conv_anchor(b2)
+	var dist := p1.distance_to(p2)
+	var need_fe := calc_conveyor_cost(p1, p2)
+	var have_fe := State.get_r("fe")
+	if dist > CONVEYOR_MAX_RANGE:
+		Sfx.play("error")
+		conveyor_fail_flash = {"p1": p1, "p2": p2, "ratio": clampf(CONVEYOR_MAX_RANGE / dist, 0.0, 1.0), "need": need_fe, "have": have_fe, "too_far": true, "life": 3.0}
+		State.add_log("搬送ラインが長すぎます（最大 %dpx）" % int(CONVEYOR_MAX_RANGE), "warn")
+		return false
+	if have_fe < need_fe:
+		Sfx.play("error")
+		var ratio := clampf(float(have_fe) / maxf(1.0, float(need_fe)), 0.0, 1.0)
+		conveyor_fail_flash = {"p1": p1, "p2": p2, "ratio": ratio, "need": need_fe, "have": have_fe, "too_far": false, "life": 3.2}
+		State.add_log("鉄不足！搬送ラインに鉄%d必要（あと鉄%d不足）" % [need_fe, need_fe - have_fe], "warn")
+		return false
+
+	State.spend({"fe": need_fe})
+	conveyors.append({"from": u_from, "to": u_to, "cost_fe": need_fe, "filter": "auto"})
+	conveyor_fail_flash = {}
+	if planet:
+		planet.spawn_sparks((p1 + p2) * 0.5, Color(1.0, 0.78, 0.28), 10)
+	Sfx.play("wire")
+	State.add_log("搬送ライン接続: %s → %s（鉄%d消費）" % [State.BLD[b1["id"]]["name"], State.BLD[b2["id"]]["name"], need_fe], "good")
+	return true
+
+func try_conveyor_at(pos: Vector2) -> bool:
+	var ln := find_nearest(pos, 150.0, LOGI_NODES)
+	if ln.is_empty():
+		conveyor_pick_uid = -1
+		return false
+	var u1 := int(ln["uid"])
+	if conveyor_pick_uid == -1:
+		conveyor_pick_uid = u1
+		Sfx.play("click")
+		State.add_log("搬送元選択: %s → 送り先の施設をタップ" % State.BLD[ln["id"]]["name"], "info")
+		return true
+	elif conveyor_pick_uid == u1:
+		conveyor_pick_uid = -1
+		Sfx.play("click")
+		return true
+	else:
+		var u0 := conveyor_pick_uid
+		conveyor_pick_uid = -1
+		return toggle_conveyor(u0, u1)
+
+func start_conveyor_from(uid: int) -> void:
+	var b := _by_uid(uid)
+	if b.is_empty() or not (b["id"] in LOGI_NODES): return
+	State.selected_tool = "conveyor"
+	conveyor_pick_uid = uid
+	wire_pick_uid = -1
+	salvage_armed_uid = -1
+	Sfx.play("click")
+	State.add_log("搬送元選択: %s → 送り先の施設をタップ" % State.BLD[b["id"]]["name"], "info")
+
 func handle_world_click(world_pos: Vector2) -> bool:
 	var tool := State.selected_tool
 	if tool == "wire":
-		salvage_armed_uid = -1
+		salvage_armed_uid = -1; conveyor_pick_uid = -1
 		return try_wire_at(world_pos)
+	if tool == "conveyor":
+		salvage_armed_uid = -1; wire_pick_uid = -1
+		return try_conveyor_at(world_pos)
 	if tool == "salvage":
+		wire_pick_uid = -1; conveyor_pick_uid = -1
 		return try_double_tap_salvage(world_pos)
 	if State.BLD.has(tool):
-		salvage_armed_uid = -1
+		salvage_armed_uid = -1; wire_pick_uid = -1; conveyor_pick_uid = -1
 		return try_place_at(tool, world_pos)
 
 	# 通常モード：施設をタップすると中身・詳細パネルを開く（タップ採掘は廃止！）
@@ -361,11 +490,16 @@ func get_building_snap(uid: int) -> Dictionary:
 		live_gen = float(info["gen"]) * (planet.get_sunlight(b["pos"]) if planet else 1.0)
 	elif bid == "geothermal":
 		live_gen = float(info["gen"])
+	var conv_out: Array[String] = []
+	for cv in conveyors:
+		if int(cv["from"]) == uid:
+			var ob := _by_uid(int(cv["to"]))
+			if not ob.is_empty(): conv_out.append("→" + String(State.BLD[ob["id"]]["name"]))
 	return {
 		"uid": uid, "id": bid, "name": String(info["name"]), "tex": String(info["tex"]),
-		"desc": String(info["desc"]), "is_power": (bid in POWER_NODES),
+		"desc": String(info["desc"]), "is_power": (bid in POWER_NODES), "is_logi": (bid in LOGI_NODES),
 		"gen": live_gen, "use": float(info["use"]),
-		"pwr_ratio": float(b["pwr_ratio"]), "wired": bool(b["wired"]), "links": links,
+		"pwr_ratio": float(b["pwr_ratio"]), "wired": bool(b["wired"]), "links": links, "conv_out": conv_out,
 		"battery_kj": float(b["battery_kj"]), "battery_cap": BATTERY_CAP_KJ,
 		"ore_target": String(b["ore_target"]), "dir": int(b["dir"]),
 		"recipe": String(b["recipe"]), "blocked": bool(b["blocked"]),
@@ -450,12 +584,37 @@ func _hand_feed(b: Dictionary) -> bool:
 	return fed
 
 # ------------------------------------------------------------------------------
-# DEPOT 4-WAY OUTPUT FILTER INTERFACE
+# DEPOT OUTPUT FILTER INTERFACE (PER CONNECTED CONVEYOR LINE!)
 # ------------------------------------------------------------------------------
 func get_depot_snap(uid: int) -> Dictionary:
 	var d := _by_uid(uid)
 	if d.is_empty(): return {}
-	return {"uid": uid, "inv": d["inv"].duplicate(), "out_filters": d["out_filters"].duplicate(), "total": _buf_sum(d["inv"]), "cap": DEPOT_CAP}
+	var out_links: Array[Dictionary] = []
+	for ci in range(conveyors.size()):
+		var cv: Dictionary = conveyors[ci]
+		if int(cv["from"]) == uid:
+			var tb := _by_uid(int(cv["to"]))
+			if not tb.is_empty():
+				out_links.append({
+					"idx": ci, "to_uid": int(cv["to"]),
+					"to_name": String(State.BLD[tb["id"]]["name"]),
+					"filter": String(cv.get("filter", "auto")),
+				})
+	return {
+		"uid": uid, "inv": d["inv"].duplicate(),
+		"out_filters": d["out_filters"].duplicate(),
+		"out_links": out_links,
+		"total": _buf_sum(d["inv"]), "cap": DEPOT_CAP,
+	}
+
+func depot_cycle_link_filter(link_idx: int) -> String:
+	if link_idx < 0 or link_idx >= conveyors.size(): return "auto"
+	var cyc: Array[String] = ["auto", "fe", "cu", "si", "ti", "plate_fe", "wire_cu", "wafer_si", "circuit", "alloy", "sci_pack", "probe_stock", "none"]
+	var cur := String(conveyors[link_idx].get("filter", "auto"))
+	var nxt := cyc[(cyc.find(cur) + 1) % cyc.size()]
+	conveyors[link_idx]["filter"] = nxt
+	Sfx.play("click")
+	return nxt
 
 func depot_transfer(uid: int, item: String, to_depot: bool, qty: int = 5) -> bool:
 	var d := _by_uid(uid)
@@ -666,6 +825,25 @@ func _process(delta: float) -> void:
 
 		if float(b["push_t"]) >= 0.45:
 			b["push_t"] = 0.0
+			# 1) 自由結束搬送ライン (Conveyor Tubes) による高速自動輸送！
+			var buid := int(b["uid"])
+			var src_buf: Dictionary = b["inv"] if bid == "depot" else b["out_buf"]
+			if not src_buf.is_empty():
+				for cv in conveyors:
+					if int(cv["from"]) != buid: continue
+					var flt := String(cv.get("filter", "auto"))
+					if flt == "none": continue
+					var tb := _by_uid(int(cv["to"]))
+					if tb.is_empty(): continue
+					var it_c := _buf_take(src_buf, flt)
+					if it_c == "": continue
+					var p1 := _conv_anchor(b); var p2 := _conv_anchor(tb)
+					belt_items.append({
+						"from": p1, "to": p2, "from_uid": buid, "target_uid": int(tb["uid"]),
+						"item": it_c, "t": 0.02, "dist": maxf(40.0, p1.distance_to(p2)), "free": true,
+					})
+					break
+			# 2) 互換用：隣接直接受け渡し
 			if bid == "depot":
 				var flts: Dictionary = b["out_filters"]
 				for pair in [["right", tang], ["left", -tang], ["up", n], ["down", -n]]:
@@ -751,11 +929,25 @@ func _process(delta: float) -> void:
 
 	State.active_printers = act_p; State.total_printers = tot_p
 
-	# Advance physical items traveling along belts/lifts
+	# Advance physical items traveling along free-linked conveyor tubes & belts
 	for i in range(belt_items.size() - 1, -1, -1):
 		var it := belt_items[i]
 		var tb := _by_uid(int(it["target_uid"]))
 		if tb.is_empty(): belt_items.remove_at(i); continue
+		if bool(it.get("free", false)):
+			var dist := maxf(40.0, float(it.get("dist", 100.0)))
+			it["t"] = minf(1.02, float(it["t"]) + (210.0 / dist) * delta)
+			if float(it["t"]) >= 1.0:
+				if _deliver(tb, String(it["item"])):
+					belt_items.remove_at(i)
+				else:
+					# 送り先が満杯なら送り元バッファへ安全に戻す（資源ロストゼロ！）
+					var fb := _by_uid(int(it.get("from_uid", -1)))
+					if not fb.is_empty():
+						var fbuf: Dictionary = fb["inv"] if String(fb["id"]) == "depot" else fb["out_buf"]
+						_buf_add(fbuf, String(it["item"]), 1)
+					belt_items.remove_at(i)
+			continue
 		var bp := float(tb["pwr_ratio"])
 		if bp <= 0.05: continue
 		it["t"] = minf(1.02, float(it["t"]) + delta * 1.45 * bp)
@@ -772,6 +964,11 @@ func _process(delta: float) -> void:
 					it["t"] = 0.96
 			else:
 				it["t"] = 0.96
+
+	if not conveyor_fail_flash.is_empty():
+		conveyor_fail_flash["life"] = float(conveyor_fail_flash["life"]) - delta
+		if float(conveyor_fail_flash["life"]) <= 0.0:
+			conveyor_fail_flash = {}
 
 	for i in range(launch_trails.size() - 1, -1, -1):
 		launch_trails[i]["pos"] += launch_trails[i]["vel"] * delta
@@ -813,14 +1010,16 @@ func _draw() -> void:
 		var pose := compute_snap_pose(hover_world, State.selected_tool)
 		if not pose.is_empty():
 			var info: Dictionary = State.BLD[State.selected_tool]
-			var ok := not _too_close_to_existing(pose["pos"], State.selected_tool)
-			var gcol := Color(0.32, 0.98, 0.72, 0.78) if ok else Color(1.0, 0.36, 0.34, 0.75)
+			var pose_ok := bool(pose.get("valid", true))
+			var ok := pose_ok and not _too_close_to_existing(pose["pos"], State.selected_tool)
+			var gcol := Color(0.32, 0.98, 0.72, 0.78) if ok else Color(1.0, 0.30, 0.28, 0.80)
 			draw_set_transform(pose["pos"], float(pose["rot"]), Vector2.ONE)
 			var t := ArtReg.get_t(String(info["tex"]))
 			var bw := float(info["w"]); var bh := float(info["h"])
 			if t: draw_texture_rect(t, Rect2(-bw * 0.5, -bh, bw, bh), false, gcol)
 			draw_rect(Rect2(-bw * 0.5, -bh, bw, bh), gcol, false, 2.2)
-			draw_string(font, Vector2(-56, -bh - 10), "ここへ設置" if ok else "近すぎます", HORIZONTAL_ALIGNMENT_CENTER, 112, 11, gcol)
+			var glbl := ("ここへ設置" if State.selected_tool != "drill" else "鉱床へ設置OK") if ok else (String(pose.get("reason", "")) if not pose_ok else "近すぎます")
+			draw_string(font, Vector2(-78, -bh - 10), glbl, HORIZONTAL_ALIGNMENT_CENTER, 156, 11, gcol)
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# 2. Tesla Power Domes
@@ -875,6 +1074,9 @@ func _draw() -> void:
 			draw_string(font, Vector2(-68, -bh - 18), "もう一度タップで削除！", HORIZONTAL_ALIGNMENT_CENTER, 136, 11, Color(1.0, 0.42, 0.38))
 		elif int(b["uid"]) == wire_pick_uid:
 			draw_arc(Vector2(0, -bh * 0.5), 36.0, 0.0, TAU, 24, Color(0.45, 1.0, 1.0), 2.8)
+		elif int(b["uid"]) == conveyor_pick_uid:
+			draw_arc(Vector2(0, -bh * 0.5), 38.0, 0.0, TAU, 24, Color(1.0, 0.80, 0.28), 3.0)
+			draw_string(font, Vector2(-58, -bh - 16), "搬送元 選択中", HORIZONTAL_ALIGNMENT_CENTER, 116, 10, Color(1.0, 0.86, 0.36))
 		elif State.tut_enabled and State.tut_step == 5 and (bid in POWER_NODES) and not bool(b["wired"]):
 			var pulse := 34.0 + sin(anim_t * 6.0) * 5.0
 			draw_arc(Vector2(0, -bh * 0.5), pulse, 0.0, TAU, 24, Color(1.0, 0.86, 0.28, 0.92), 2.6)
@@ -899,7 +1101,55 @@ func _draw() -> void:
 		if hot:
 			draw_circle(p1.lerp(p2, fposmod(anim_t * 0.85, 1.0)), 4.0, Color(0.90, 1.0, 1.0))
 
-	# 5. Physical Items Moving on Belts
+	# 4b. Free-Linked Conveyor Tubes (Sleek Industrial Rails + Animated Directional Chevrons!)
+	for cv in conveyors:
+		var b1 := _by_uid(int(cv["from"])); var b2 := _by_uid(int(cv["to"]))
+		if b1.is_empty() or b2.is_empty(): continue
+		var p1 := _conv_anchor(b1); var p2 := _conv_anchor(b2)
+		var dv := p2 - p1
+		var dist := dv.length()
+		if dist < 4.0: continue
+		var dir := dv / dist
+		var perp := Vector2(-dir.y, dir.x)
+		# Steel conveyor tube housing
+		draw_line(p1, p2, Color(0.11, 0.14, 0.20, 0.92), 11.0)
+		draw_line(p1 + perp * 4.5, p2 + perp * 4.5, Color(0.42, 0.50, 0.62, 0.88), 1.6)
+		draw_line(p1 - perp * 4.5, p2 - perp * 4.5, Color(0.42, 0.50, 0.62, 0.88), 1.6)
+		# Animated amber directional chevrons showing exact flow (from -> to)
+		var step := 36.0
+		var off := fposmod(anim_t * 72.0, step)
+		var d_c := off
+		while d_c < dist - 8.0:
+			var cp := p1 + dir * d_c
+			var tip := cp + dir * 5.0
+			draw_line(cp - dir * 3.0 + perp * 3.2, tip, Color(1.0, 0.78, 0.28, 0.88), 1.8)
+			draw_line(cp - dir * 3.0 - perp * 3.2, tip, Color(1.0, 0.78, 0.28, 0.88), 1.8)
+			d_c += step
+
+	# 4c. Live Split-Color Conveyor Preview (Affordable=Cyan/Green, Unaffordable Excess=Pulsing RED!)
+	if State.selected_tool == "conveyor" and conveyor_pick_uid != -1:
+		var src_b := _by_uid(conveyor_pick_uid)
+		if not src_b.is_empty():
+			var p1 := _conv_anchor(src_b)
+			var snap_t := find_nearest(hover_world, 120.0, LOGI_NODES)
+			var p2 := _conv_anchor(snap_t) if (not snap_t.is_empty() and int(snap_t["uid"]) != conveyor_pick_uid) else hover_world
+			if p1.distance_to(p2) > 20.0:
+				var dist := p1.distance_to(p2)
+				var need_fe := calc_conveyor_cost(p1, p2)
+				var have_fe := State.get_r("fe")
+				var too_far := dist > CONVEYOR_MAX_RANGE
+				var ratio := clampf((CONVEYOR_MAX_RANGE / dist) if too_far else (float(have_fe) / maxf(1.0, float(need_fe))), 0.0, 1.0)
+				_draw_split_conveyor_preview(p1, p2, ratio, need_fe, have_fe, too_far, font)
+
+	# 4d. Mobile/PC Shortage Flash (when tapping a target without enough Iron!)
+	if not conveyor_fail_flash.is_empty():
+		_draw_split_conveyor_preview(
+			Vector2(conveyor_fail_flash["p1"]), Vector2(conveyor_fail_flash["p2"]),
+			float(conveyor_fail_flash["ratio"]), int(conveyor_fail_flash["need"]),
+			int(conveyor_fail_flash["have"]), bool(conveyor_fail_flash.get("too_far", false)), font
+		)
+
+	# 5. Physical Items Moving on Belts & Conveyor Tubes
 	for it in belt_items:
 		var ip := Vector2(it["from"]).lerp(Vector2(it["to"]), float(it["t"]))
 		var ic := ArtReg.get_icon(String(it["item"]))
@@ -913,3 +1163,27 @@ func _draw() -> void:
 		if glow: draw_texture_rect(glow, Rect2(p.x - 42, p.y - 42, 84, 84), false, Color(1.0, 0.82, 0.36, 0.65))
 	for bm in turret_beams:
 		draw_line(bm["a"], bm["b"], Color(0.34, 0.94, 1.0, 0.88), 3.0)
+
+func _draw_split_conveyor_preview(p1: Vector2, p2: Vector2, ratio: float, need_fe: int, have_fe: int, too_far: bool, font: Font) -> void:
+	var ok := (not too_far) and (have_fe >= need_fe)
+	var mid := p1.lerp(p2, 0.5)
+	if ok:
+		draw_line(p1, p2, Color(0.06, 0.22, 0.20, 0.80), 10.0)
+		draw_line(p1, p2, Color(0.34, 0.98, 0.76, 0.94), 4.0)
+		var lbl := "搬送ライン: 鉄%d消費（接続OK）" % need_fe
+		draw_rect(Rect2(mid.x - 102, mid.y - 26, 204, 22), Color(0.04, 0.14, 0.16, 0.92))
+		draw_rect(Rect2(mid.x - 102, mid.y - 26, 204, 22), Color(0.36, 0.98, 0.76), false, 1.4)
+		draw_string(font, Vector2(mid.x - 102, mid.y - 11), lbl, HORIZONTAL_ALIGNMENT_CENTER, 204, 11, Color(0.88, 1.0, 0.94))
+	else:
+		var split_p := p1.lerp(p2, clampf(ratio, 0.0, 1.0))
+		var pulse_r := 0.72 + 0.28 * sin(anim_t * 10.0)
+		if ratio > 0.02:
+			draw_line(p1, split_p, Color(0.06, 0.20, 0.26, 0.82), 10.0)
+			draw_line(p1, split_p, Color(0.34, 0.92, 1.0, 0.90), 4.0)
+		draw_line(split_p, p2, Color(0.36, 0.04, 0.04, 0.88), 11.0)
+		draw_line(split_p, p2, Color(1.0, 0.22, 0.22, pulse_r), 5.0)
+		draw_circle(split_p, 6.5, Color(1.0, 0.36, 0.28))
+		var lbl := "距離オーバー！（最大 %dpx）" % int(CONVEYOR_MAX_RANGE) if too_far else ("鉄不足！あと 鉄%d 必要（%d/%d）" % [need_fe - have_fe, have_fe, need_fe])
+		draw_rect(Rect2(mid.x - 122, mid.y - 28, 244, 24), Color(0.24, 0.04, 0.06, 0.94))
+		draw_rect(Rect2(mid.x - 122, mid.y - 28, 244, 24), Color(1.0, 0.30, 0.28), false, 1.6)
+		draw_string(font, Vector2(mid.x - 122, mid.y - 12), lbl, HORIZONTAL_ALIGNMENT_CENTER, 244, 11, Color(1.0, 0.88, 0.86))

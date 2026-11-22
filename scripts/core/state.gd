@@ -132,9 +132,9 @@ const TECHS: Dictionary = {
 	"cave_logistics": {
 		"name": "洞窟物流ライン", "col": 1, "row": 2, "req": ["power_grid"],
 		"cost": {"fe": 16, "cu": 8},
-		"unlocks": ["採掘ドリル", "コンベアベルト", "縦リフト", "カーゴデポ"],
-		"summary": "採掘ドリルで自動採掘し、ベルトやリフトで4方向フィルタ付きカーゴデポへ運びます。",
-		"flow": "採掘ドリル → ベルト/リフト → カーゴデポ(4方向出力設定)",
+		"unlocks": ["採掘ドリル", "自由搬送ライン", "カーゴデポ"],
+		"summary": "硬質鉱床に採掘ドリルを設置し、自由結束の搬送ラインで施設同士を繋いで自動運搬します。",
+		"flow": "硬質鉱床＋ドリル ─(自由搬送ライン)→ カーゴデポ(出力フィルタ)",
 	},
 	"smelting_booster": {
 		"name": "精錬と軌道進出", "col": 2, "row": 1, "req": ["cave_logistics"],
@@ -176,7 +176,7 @@ const TECHS: Dictionary = {
 const CRAFT_TABS: Array[Dictionary] = [
 	{"id": "unit",  "label": "機体・増設"},
 	{"id": "power", "label": "電力・防衛", "items": ["solar", "tesla", "battery", "geothermal", "turret"]},
-	{"id": "logi",  "label": "採掘・物流", "items": ["drill", "belt", "lift", "depot"]},
+	{"id": "logi",  "label": "採掘・物流", "items": ["drill", "depot"]},
 	{"id": "fact",  "label": "加工・艦隊", "items": ["smelter", "assembler", "gantry_printer", "mass_driver"]},
 ]
 
@@ -209,22 +209,22 @@ const BLD: Dictionary = {
 	"drill": {
 		"name": "採掘ドリル", "short": "ドリル", "tex": "drill", "req": "cave_logistics",
 		"cost": {"fe": 12, "cu": 6}, "craft_time": 3.0, "gen": 0.0, "use": 12.0, "w": 58, "h": 78,
-		"desc": "足元の鉱脈を自動採掘(12W)。隣にベルトを置くと自動で流れます。",
+		"desc": "【硬質鉱床】専用(12W)。手で掘れない永久鉱床から自動採掘します。",
 	},
 	"belt": {
 		"name": "コンベアベルト", "short": "ベルト", "tex": "belt", "req": "cave_logistics",
 		"cost": {"fe": 2}, "craft_time": 1.2, "gen": 0.0, "use": 1.0, "w": 48, "h": 18,
-		"desc": "資源を横へ運びます。設置後タップまたは[R]で向き反転。",
+		"desc": "旧ベルト（現在は自由搬送ラインに統合）。",
 	},
 	"lift": {
 		"name": "縦リフト", "short": "リフト", "tex": "lift", "req": "cave_logistics",
 		"cost": {"fe": 3}, "craft_time": 1.5, "gen": 0.0, "use": 1.0, "w": 24, "h": 54,
-		"desc": "地下洞窟から地表へ資源を垂直搬送するエレベーター。",
+		"desc": "旧リフト（現在は自由搬送ラインに統合）。",
 	},
 	"depot": {
 		"name": "カーゴデポ", "short": "倉庫", "tex": "depot", "req": "cave_logistics",
 		"cost": {"fe": 16, "cu": 6}, "craft_time": 3.5, "gen": 0.0, "use": 0.0, "w": 100, "h": 60,
-		"desc": "資源を240個保管。タップすると上下左右の出力フィルタを設定可能！",
+		"desc": "資源を240個保管。タップして各搬送ライン毎の出力フィルタを設定！",
 	},
 	"smelter": {
 		"name": "溶鉱炉", "short": "溶鉱炉", "tex": "smelter", "req": "smelting_booster",
@@ -291,11 +291,12 @@ const GUIDE_TOPICS: Array[Dictionary] = [
 		],
 	},
 	{
-		"title": "5. 物流ラインとカーゴデポ",
+		"title": "5. 硬質鉱床と自由搬送ライン",
 		"lines": [
-			"・採掘ドリルは6個溜まると停止します。隣にコンベアベルトを置くと自動搬出します。",
-			"・ベルト先のカーゴデポ（倉庫）をタップすると在庫確認と4方向出力フィルタを設定可能！",
-			"・例：右出力を『鉄』に設定→右のベルト経由で溶鉱炉へ鉄だけを自動供給できます。",
+			"・採掘ドリルは手で掘れない【硬質鉱床（ドリル専用）】の上にのみ設置できます。",
+			"・下部バーの【搬送】を選び、送り元施設→送り先施設をタップすると自由結束で接続！",
+			"・距離に応じて鉄を消費します（不足時は届かない部分が赤く表示され必要数を案内）。",
+			"・カーゴデポをタップすると、接続した搬送ラインごとに出力する資源を設定できます。",
 		],
 	},
 	{
@@ -347,7 +348,7 @@ func reset_all() -> void:
 	tut_opened_depot = false
 	tut_opened_orbit = false
 	logs.clear()
-	add_log("シード・ユニット降下完了。地面や鉱石をタップして採掘しよう！", "info")
+	add_log("シード・ユニット降下完了。右下スティック（PCはSPACE）で採掘しよう！", "info")
 
 func res_name(id: String) -> String:
 	return String(RES_NAMES.get(id, id))
@@ -424,6 +425,7 @@ func research(tid: String) -> bool:
 func is_unlocked(tool_id: String) -> bool:
 	if tool_id == "mine" or tool_id == "salvage": return true
 	if tool_id == "wire": return has_tech("power_grid")
+	if tool_id == "conveyor": return has_tech("cave_logistics")
 	if not BLD.has(tool_id): return false
 	return has_tech(String(BLD[tool_id]["req"]))
 
@@ -650,8 +652,8 @@ func get_tutorial_info() -> Dictionary:
 			}
 		6:
 			return {
-				"step": "7/9", "title": "自動採掘とカーゴデポ",
-				"hint": "『洞窟物流ライン』を研究→ドリル・ベルト・カーゴデポを製造設置し、デポをタップで出力設定！",
+				"step": "7/9", "title": "硬質鉱床と自由搬送ライン",
+				"hint": "『洞窟物流ライン』研究→【硬質鉱床】にドリル＆倉庫を置き、【搬送】で施設同士を繋ごう！",
 				"focus": "logistics",
 			}
 		7:
