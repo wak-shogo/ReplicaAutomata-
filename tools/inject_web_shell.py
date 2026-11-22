@@ -7,6 +7,8 @@ html, body, #canvas { touch-action: none; overscroll-behavior: none; user-select
 </style>
 <script>
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
+document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
 if ('wakeLock' in navigator) {
   window.addEventListener('pointerdown', function _w() {
     navigator.wakeLock.request('screen').catch(function(){});

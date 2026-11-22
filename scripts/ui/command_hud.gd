@@ -3,22 +3,24 @@ extends CanvasLayer
 # STAR REPLICA: AUTOMA - ミニマル日本語HUD・クラフト製造キュー・研究ツリー・指令パネル・インタラクティブチュートリアル
 # すべての主要行動を2〜3タップ以内に収め、メイン画面のボタン数を最小限に整理。
 
-enum Modal { NONE, CRAFT, TECH, COMMAND, DEPOT, GUIDE }
+enum Modal { NONE, CRAFT, TECH, COMMAND, DEPOT, GUIDE, BUILDING }
 
 var planet: SphericalPlanet = null
 var grid: Node2D = null
 var player: Node2D = null
 var swarm: Node2D = null
+var game_root: Node2D = null
 
 var modal: int = Modal.NONE
 var craft_tab: int = 0
 var tech_sel: int = 1
 var guide_tab: int = 0
 var depot_uid: int = -1
+var inspect_uid: int = -1
 var redrop_armed: bool = false
 var anim_t: float = 0.0
 
-# モバイル／タッチ端末専用仮想コントロール（左：移動スティック / 右：方向指定採掘スティック）
+# モバイル／タッチ端末専用仮想コントロール（左：移動スティック / 右：方向指定採掘スティック / 2本指ピンチズーム）
 var touch_ui_active: bool = false
 var _last_touch_ms: int = -10000
 var joy_center: Vector2 = Vector2.ZERO
@@ -31,8 +33,14 @@ var mine_vec: Vector2 = Vector2.ZERO
 var act_pid: int = -1
 var brk_center: Vector2 = Vector2.ZERO
 var brk_pid: int = -1
-var world_mine_pid: int = -1
-var mouse_mine_held: bool = false
+
+# 2本指ピンチズーム & ワールド単タップ判定（ピンチ中に誤タップ・誤採掘しない！）
+var _pinch_pts: Dictionary = {} # touch_index -> raw screen pos
+var _pinch_dist: float = 0.0
+var _pinch_active: bool = false
+var _tap_pid: int = -1
+var _tap_start_raw: Vector2 = Vector2.ZERO
+var _tap_moved: bool = false
 
 var _hits: Array[Dictionary] = []
 var root_ctrl: Control = null
@@ -48,6 +56,11 @@ func _ready() -> void:
 func open_depot(uid: int) -> void:
 	depot_uid = uid
 	modal = Modal.DEPOT
+	root_ctrl.queue_redraw()
+
+func open_building(uid: int) -> void:
+	inspect_uid = uid
+	modal = Modal.BUILDING
 	root_ctrl.queue_redraw()
 
 func _hud_vp() -> Vector2:
@@ -84,20 +97,20 @@ func _process(delta: float) -> void:
 		player.braking = (brk_pid != -1) or Input.is_key_pressed(KEY_SHIFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
 		var cam := get_viewport().get_camera_2d()
 		if cam:
-			if not touch_ui_active or mouse_mine_held:
+			if not touch_ui_active:
 				var mpos := get_viewport().get_mouse_position()
 				var wp := cam.get_canvas_transform().affine_inverse() * mpos
 				player.aim_world = wp
 				if grid:
 					grid.hover_world = wp
 			else:
-				if world_mine_pid == -1:
-					player.aim_world = Vector2.ZERO
+				player.aim_world = Vector2.ZERO
 				if grid:
 					grid.hover_world = player.position
 			if grid:
 				grid.show_ghost = (modal == Modal.NONE and State.BLD.has(State.selected_tool) and State.get_stock(State.selected_tool) > 0)
-		player.firing_mine = (modal == Modal.NONE and State.selected_tool == "mine" and (mouse_mine_held or act_pid != -1 or world_mine_pid != -1 or Input.is_key_pressed(KEY_SPACE)))
+		# タップ採掘は廃止！右下採掘スティック（またはPCはSPACEキー）でのみ照射
+		player.firing_mine = (modal == Modal.NONE and State.selected_tool == "mine" and (act_pid != -1 or Input.is_key_pressed(KEY_SPACE)))
 
 	root_ctrl.queue_redraw()
 
@@ -111,7 +124,7 @@ func _input(event: InputEvent) -> void:
 		_last_touch_ms = Time.get_ticks_msec()
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if event.pressed: _on_down(event.index, p, event.position)
-		else: _on_up(event.index)
+		else: _on_up(event.index, event.position)
 	elif event is InputEventScreenDrag:
 		touch_ui_active = true
 		_last_touch_ms = Time.get_ticks_msec()
@@ -122,10 +135,18 @@ func _input(event: InputEvent) -> void:
 		elif event.index == act_pid:
 			_upd_mine_stick(p)
 			get_viewport().set_input_as_handled()
-		elif event.index == world_mine_pid and player:
-			var cam := get_viewport().get_camera_2d()
-			if cam:
-				player.aim_world = cam.get_canvas_transform().affine_inverse() * event.position
+		elif _pinch_pts.has(event.index):
+			_pinch_pts[event.index] = event.position
+			if _pinch_pts.size() >= 2:
+				var ks := _pinch_pts.keys()
+				var new_d: float = Vector2(_pinch_pts[ks[0]]).distance_to(Vector2(_pinch_pts[ks[1]]))
+				if _pinch_dist > 12.0 and new_d > 12.0 and game_root:
+					game_root.adjust_zoom(new_d / _pinch_dist)
+				_pinch_dist = new_d
+				_pinch_active = true
+				_tap_pid = -1
+			elif event.index == _tap_pid and event.position.distance_to(_tap_start_raw) > 22.0:
+				_tap_moved = true
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton:
 		# モバイル実機でタッチ直後に発生するエミュレート／ゴーストマウスイベントを完全に無視！
@@ -134,13 +155,15 @@ func _input(event: InputEvent) -> void:
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed: _on_down(-10, p, event.position)
-			else: _on_up(-10)
+			else: _on_up(-10, event.position)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if modal != Modal.NONE:
 				modal = Modal.NONE; Sfx.play("click")
 			elif State.selected_tool != "mine":
 				State.selected_tool = "mine"
-				if grid: grid.wire_pick_uid = -1
+				if grid:
+					grid.wire_pick_uid = -1
+					grid.salvage_armed_uid = -1
 				Sfx.play("click")
 	elif event is InputEventMouseMotion:
 		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
@@ -193,10 +216,7 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 			_upd_mine_stick(pos)
 			if grid and player:
 				if State.selected_tool == "mine":
-					if mine_vec.length() < 0.25 and grid.interact_near_player(player.position):
-						act_pid = -1; mine_vec = Vector2.ZERO
-					else:
-						player.firing_mine = true
+					player.firing_mine = true
 				else:
 					grid.handle_world_click(player.position)
 			get_viewport().set_input_as_handled(); return
@@ -210,27 +230,44 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
-	# 3. ワールド直接タップ（採掘／設置／配線／デポや機械の操作）
+	# 3. ワールド入力：タッチはピンチズーム対応（単タップ離し時に施設詳細／設置／配線／ダブルタップ削除）
 	if modal == Modal.NONE and grid:
-		var cam := get_viewport().get_camera_2d()
-		if cam:
-			var wp := cam.get_canvas_transform().affine_inverse() * raw_pos
-			if player: player.aim_world = wp
-			if grid.handle_world_click(wp):
-				get_viewport().set_input_as_handled()
-				return
-			if State.selected_tool == "mine":
-				if pid == -10: mouse_mine_held = true
-				else:
-					world_mine_pid = pid
-					if player: player.firing_mine = true
+		if pid == -10:
+			var cam := get_viewport().get_camera_2d()
+			if cam:
+				var wp := cam.get_canvas_transform().affine_inverse() * raw_pos
+				if grid.handle_world_click(wp):
+					get_viewport().set_input_as_handled()
+		else:
+			_pinch_pts[pid] = raw_pos
+			if _pinch_pts.size() >= 2:
+				var ks := _pinch_pts.keys()
+				_pinch_dist = Vector2(_pinch_pts[ks[0]]).distance_to(Vector2(_pinch_pts[ks[1]]))
+				_pinch_active = true
+				_tap_pid = -1
+			else:
+				_tap_pid = pid
+				_tap_start_raw = raw_pos
+				_tap_moved = false
 
-func _on_up(pid: int) -> void:
+func _on_up(pid: int, raw_pos: Vector2 = Vector2.ZERO) -> void:
 	if pid == joy_pid: joy_pid = -1; joy_vec = Vector2.ZERO
 	if pid == act_pid: act_pid = -1; mine_vec = Vector2.ZERO
 	if pid == brk_pid: brk_pid = -1
-	if pid == world_mine_pid: world_mine_pid = -1
-	if pid == -10: mouse_mine_held = false
+	if _pinch_pts.has(pid):
+		_pinch_pts.erase(pid)
+	if pid == _tap_pid:
+		var was_tap := (not _pinch_active) and (not _tap_moved) and modal == Modal.NONE and grid != null
+		_tap_pid = -1
+		if was_tap:
+			var cam := get_viewport().get_camera_2d()
+			if cam:
+				var wp := cam.get_canvas_transform().affine_inverse() * (raw_pos if raw_pos != Vector2.ZERO else _tap_start_raw)
+				grid.handle_world_click(wp)
+	if _pinch_pts.size() < 2:
+		_pinch_dist = 0.0
+	if _pinch_pts.is_empty():
+		_pinch_active = false
 
 func _upd_joy(pos: Vector2) -> void:
 	var d := pos - joy_center
@@ -252,7 +289,9 @@ func _pick_tool(tid: String) -> void:
 		State.add_log("在庫がありません。【クラフト】で製造してください。", "warn")
 		return
 	State.selected_tool = tid
-	if tid != "wire" and grid: grid.wire_pick_uid = -1
+	if grid:
+		if tid != "wire": grid.wire_pick_uid = -1
+		if tid != "salvage": grid.salvage_armed_uid = -1
 	Sfx.play("select")
 
 func _exec(h: Dictionary) -> void:
@@ -332,6 +371,22 @@ func _exec(h: Dictionary) -> void:
 			if grid: grid.depot_cycle_filter(depot_uid, String(h["v"]))
 		"depot_take":
 			if grid: grid.depot_transfer(depot_uid, String(h["v"]), false, 5)
+		"bld_collect":
+			if grid: grid.building_collect(inspect_uid)
+		"bld_feed":
+			if grid: grid.building_hand_feed(inspect_uid)
+		"bld_flip":
+			if grid: grid.building_flip_dir(inspect_uid)
+		"bld_recipe":
+			if grid: grid.building_cycle_recipe(inspect_uid)
+		"bld_wire":
+			if grid:
+				grid.start_wire_from(inspect_uid)
+				modal = Modal.NONE
+		"bld_salvage":
+			if grid and grid.salvage_by_uid(inspect_uid):
+				inspect_uid = -1
+				modal = Modal.NONE
 
 func _add_hit(r: Rect2, a: String, v = null) -> void:
 	_hits.append({"r": r, "a": a, "v": v})
@@ -363,11 +418,12 @@ func _on_draw() -> void:
 	_draw_bottom_dock(vp, portrait, font)
 
 	match modal:
-		Modal.CRAFT:   _draw_craft_modal(vp, portrait, font)
-		Modal.TECH:    _draw_tech_modal(vp, portrait, font)
-		Modal.COMMAND: _draw_command_modal(vp, portrait, font)
-		Modal.DEPOT:   _draw_depot_modal(vp, font)
-		Modal.GUIDE:   _draw_guide_modal(vp, portrait, font)
+		Modal.CRAFT:    _draw_craft_modal(vp, portrait, font)
+		Modal.TECH:     _draw_tech_modal(vp, portrait, font)
+		Modal.COMMAND:  _draw_command_modal(vp, portrait, font)
+		Modal.DEPOT:    _draw_depot_modal(vp, font)
+		Modal.BUILDING: _draw_building_modal(vp, font)
+		Modal.GUIDE:    _draw_guide_modal(vp, portrait, font)
 
 	if touch_ui_active and modal == Modal.NONE:
 		_draw_touch_controls(font)
@@ -381,7 +437,7 @@ func _on_draw() -> void:
 func _draw_diegetic_arcs(vp: Vector2, font: Font) -> void:
 	if not player or State.orbit_view: return
 	var cam := get_viewport().get_camera_2d()
-	if not cam: return
+	if not cam or cam.zoom.x < 0.30: return
 	var sp := (cam.get_canvas_transform() * player.global_position) / maxf(0.1, scale.x)
 	if not Rect2(Vector2(-60, -60), vp + Vector2(120, 120)).has_point(sp): return
 	var rad := 46.0 + float(State.attached_drones) * 2.5
@@ -531,36 +587,36 @@ func _draw_bottom_right_telemetry(vp: Vector2, portrait: bool, font: Font) -> vo
 		root_ctrl.draw_string(font, Vector2(r.position.x + 8, y), "・" + String(lg["msg"]), HORIZONTAL_ALIGNMENT_LEFT, int(w - 14), 9, c)
 		y += 16.0
 
-# 6. 下部スッキリ所持ツールバー（採掘・配線・解体 ＋ クラフト済みの所持装置のみ表示！）
+# 6. 下部スッキリ所持ツールバー（採掘・配線・削除を常設固定 ＋ クラフト済みの所持装置！）
 func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
-	var slots: Array[Dictionary] = [{"id": "mine", "label": "採掘"}]
+	var slots: Array[Dictionary] = [{"id": "mine", "label": "通常"}]
 	if State.is_unlocked("wire"):
 		slots.append({"id": "wire", "label": "配線"})
+	slots.append({"id": "salvage", "label": "削除"})
 	var owned := State.get_owned_buildings()
 	for bid in owned:
 		slots.append({"id": bid, "label": String(State.BLD[bid]["short"]), "cnt": State.get_stock(bid)})
 	if owned.is_empty():
 		slots.append({"id": "__craft", "label": "+製造"})
-	slots.append({"id": "salvage", "label": "回収"})
 
 	var slot_sz := 48.0 if portrait else 54.0
 	var gap := 6.0
-	var max_slots := mini(slots.size(), 8 if not portrait else 7)
+	var max_slots := mini(slots.size(), 9 if not portrait else 8)
 	var bar_w := float(max_slots) * (slot_sz + gap) + gap + 10.0
 	var bar_h := slot_sz + 14.0
 	var bx := (vp.x - bar_w) * 0.5
 	var by := vp.y - bar_h - 8.0
 
-	# 配置モード／配線モード中の明快ガイドバー
+	# 配置モード／配線モード／削除モード中の明快ガイドバー
 	if modal == Modal.NONE and State.selected_tool != "mine":
-		var mw := minf(vp.x - 16.0, 480.0)
+		var mw := minf(vp.x - 16.0, 490.0)
 		var mr := Rect2((vp.x - mw) * 0.5, by - 36.0, mw, 30.0)
-		_panel(mr, Color(0.06, 0.16, 0.24, 0.94), Color(0.40, 0.96, 0.82), 1.5)
+		_panel(mr, Color(0.06, 0.16, 0.24, 0.94), Color(1.0, 0.44, 0.42) if State.selected_tool == "salvage" else Color(0.40, 0.96, 0.82), 1.5)
 		var msg := ""
 		if State.selected_tool == "wire":
 			msg = "【配線モード】 発電機 → テスラリレーの順にタップして電線を接続"
 		elif State.selected_tool == "salvage":
-			msg = "【回収モード】 撤去したい装置をタップ（所持リストへ戻ります）"
+			msg = "【削除モード】 削除したい施設をダブルタップ（2回タップで回収）"
 		elif State.BLD.has(State.selected_tool):
 			msg = "【配置: %s (残%d)】 地面をタップして設置" % [State.BLD[State.selected_tool]["name"], State.get_stock(State.selected_tool)]
 		root_ctrl.draw_string(font, Vector2(mr.position.x + 10, mr.position.y + 19), msg, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 108), 10, Color(0.92, 1.0, 0.96))
@@ -595,8 +651,8 @@ func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 			var pad := 6.0
 			root_ctrl.draw_texture_rect(t, Rect2(sx + pad, sy + 4.0, slot_sz - pad * 2.0, slot_sz - 18.0), false)
 		else:
-			var sym := "電線" if tid == "wire" else ("回収" if tid == "salvage" else "＋")
-			var sc := Color(0.42, 0.96, 1.0) if tid == "wire" else (Color(1.0, 0.52, 0.46) if tid == "salvage" else Color(0.45, 1.0, 0.76))
+			var sym := "電線" if tid == "wire" else ("削除" if tid == "salvage" else "＋")
+			var sc := Color(0.42, 0.96, 1.0) if tid == "wire" else (Color(1.0, 0.46, 0.42) if tid == "salvage" else Color(0.45, 1.0, 0.76))
 			root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz * 0.52), sym, HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 12, sc)
 
 		root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz - 4), String(s["label"]), HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 9, Color.WHITE)
@@ -991,6 +1047,111 @@ func _draw_depot_modal(vp: Vector2, font: Font) -> void:
 		if cnt > 0: _add_hit(tr, "depot_take", it)
 		y += 24.0
 
+# 11b. 全施設対応：施設の中身・稼働詳細インスペクタ（通常タップで開く！）
+func _draw_building_modal(vp: Vector2, font: Font) -> void:
+	if not grid: return
+	var snap: Dictionary = grid.get_building_snap(inspect_uid)
+	if snap.is_empty(): modal = Modal.NONE; return
+	var bid := String(snap["id"])
+	var mw := minf(vp.x - 20.0, 480.0)
+	var mh := 346.0
+	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
+	_panel(r, Color(0.04, 0.06, 0.12, 0.97), Color(0.38, 0.90, 1.0), 2.0)
+
+	var itex := ArtReg.get_t(String(snap["tex"]))
+	if itex:
+		root_ctrl.draw_texture_rect(itex, Rect2(r.position.x + 14, r.position.y + 10, 32, 32), false)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 54, r.position.y + 30), "%s // 施設詳細" % String(snap["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 130), 13, Color(0.48, 0.96, 1.0))
+
+	var cr := Rect2(r.end.x - 66, r.position.y + 8, 56, 24)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+	_add_hit(cr, "close")
+
+	var y := r.position.y + 52.0
+	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 12), String(snap["desc"]), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 10, Color(0.80, 0.90, 0.98))
+	y += 26.0
+
+	# 稼働・電力ステータス枠
+	var st_r := Rect2(r.position.x + 14, y, mw - 28, 56)
+	_panel(st_r, Color(0.06, 0.10, 0.17, 0.95), Color(0.26, 0.42, 0.58), 1.2)
+	var pwr := float(snap["pwr_ratio"])
+	var p_txt := ""
+	var p_col := Color(0.45, 0.98, 0.72)
+	if bool(snap["is_power"]):
+		var links: Array = snap["links"]
+		var lnk_s := ("接続先: " + "・".join(links)) if not links.is_empty() else "未配線（【配線】でテスラリレー等と接続）"
+		if bid == "battery":
+			var pct := int(round(float(snap["battery_kj"]) / maxf(1.0, float(snap["battery_cap"])) * 100.0))
+			p_txt = "蓄電量: %d / %d kJ (%d%%)" % [int(snap["battery_kj"]), int(snap["battery_cap"]), pct]
+		elif float(snap["gen"]) > 0.1:
+			p_txt = "現在発電量: %.0fW（%s）" % [float(snap["gen"]), "通電中" if bool(snap["wired"]) else "未配線のため0W"]
+		else:
+			p_txt = "電力供給ドーム: %s" % ("稼働中 (配電中)" if pwr > 0.1 else "未通電（発電機と配線してください）")
+			if pwr <= 0.1: p_col = Color(1.0, 0.68, 0.36)
+		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 21), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 11, p_col)
+		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 43), lnk_s, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 10, Color(0.74, 0.88, 1.0))
+	else:
+		var use_w := float(snap["use"])
+		if use_w <= 0.01 or pwr > 0.1:
+			p_txt = "状態: 稼働中（消費電力 %.0fW）%s" % [use_w, "  ※出力満杯停止中" if bool(snap["blocked"]) else ""]
+		else:
+			p_txt = "状態: 電力不足（テスラリレーの青い範囲内に設置してください）"
+			p_col = Color(1.0, 0.46, 0.40)
+		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 21), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 10, p_col)
+		var sub_info := ""
+		if bid == "drill":
+			sub_info = "採掘中の鉱脈: %s" % State.res_name(String(snap["ore_target"]))
+		elif bid == "belt" or bid == "lift":
+			sub_info = "搬送方向: %s" % ("右方向 / 上方向" if int(snap["dir"]) > 0 else "左方向 / 下方向")
+		elif bid == "assembler":
+			sub_info = "現在の製造レシピ: %s" % State.res_name(String(snap["recipe"]))
+		else:
+			sub_info = "電力効率: %d%%" % int(round(pwr * 100.0))
+		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 43), sub_info, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 10, Color(0.76, 0.90, 1.0))
+
+	y += 66.0
+	# 中身（入力バッファ＆出力バッファ）表示
+	var buf_r := Rect2(r.position.x + 14, y, mw - 28, 92)
+	_panel(buf_r, Color(0.05, 0.08, 0.14, 0.95), Color(0.28, 0.44, 0.62), 1.2)
+	var in_d: Dictionary = snap["in_buf"]
+	var out_d: Dictionary = snap["out_buf"]
+	var in_parts: Array[String] = []
+	for k in in_d.keys(): in_parts.append("%s ×%d" % [State.res_name(String(k)), int(in_d[k])])
+	var out_parts: Array[String] = []
+	for k in out_d.keys(): out_parts.append("%s ×%d" % [State.res_name(String(k)), int(out_d[k])])
+	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 22), "内部の材料（入力）: " + ("  ".join(in_parts) if not in_parts.is_empty() else "空"), HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 11, Color(0.88, 0.94, 1.0))
+	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 52), "内部の完成品（出力）: " + ("  ".join(out_parts) if not out_parts.is_empty() else "空"), HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 11, Color(0.46, 0.98, 0.78) if not out_parts.is_empty() else Color(0.60, 0.68, 0.78))
+	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 78), "※隣にベルトを繋ぐと自動で入出力されます。", HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 9, Color(0.64, 0.74, 0.86))
+
+	# 操作アクションボタン列
+	y += 102.0
+	var acts: Array[Dictionary] = []
+	if not out_d.is_empty():
+		acts.append({"lbl": "完成品を回収", "a": "bld_collect", "c": Color(0.38, 0.98, 0.74)})
+	if bid in ["smelter", "assembler", "gantry_printer"]:
+		acts.append({"lbl": "材料を手動投入", "a": "bld_feed", "c": Color(0.42, 0.90, 1.0)})
+	if bid == "assembler":
+		acts.append({"lbl": "レシピ切替", "a": "bld_recipe", "c": Color(1.0, 0.84, 0.36)})
+	if bid == "belt" or bid == "lift":
+		acts.append({"lbl": "向きを反転", "a": "bld_flip", "c": Color(0.42, 0.92, 1.0)})
+	if bool(snap["is_power"]):
+		acts.append({"lbl": "電線をつなぐ", "a": "bld_wire", "c": Color(0.42, 0.96, 1.0)})
+
+	if not acts.is_empty():
+		var aw := (mw - 28.0 - float(acts.size() - 1) * 6.0) / float(acts.size())
+		for ai in range(acts.size()):
+			var ar := Rect2(r.position.x + 14 + float(ai) * (aw + 6.0), y, aw, 32)
+			_panel(ar, Color(0.08, 0.22, 0.30, 0.95), Color(acts[ai]["c"]), 1.4)
+			root_ctrl.draw_string(font, Vector2(ar.position.x, ar.position.y + 21), String(acts[ai]["lbl"]), HORIZONTAL_ALIGNMENT_CENTER, aw, 11, Color.WHITE)
+			_add_hit(ar, String(acts[ai]["a"]))
+
+	# 下段：この施設を削除・回収ボタン
+	var del_r := Rect2(r.position.x + 14, r.end.y - 42, mw - 28, 30)
+	_panel(del_r, Color(0.24, 0.08, 0.10, 0.92), Color(1.0, 0.44, 0.42), 1.3)
+	root_ctrl.draw_string(font, Vector2(del_r.position.x, del_r.position.y + 19), "この施設を削除・回収して所持リストへ戻す", HORIZONTAL_ALIGNMENT_CENTER, del_r.size.x, 10, Color(1.0, 0.86, 0.86))
+	_add_hit(del_r, "bld_salvage")
+
 # 12. タッチ仮想コントロール（左：移動スティック / 右：方向指定採掘スティック！）
 func _draw_touch_controls(font: Font) -> void:
 	# 左下: 移動ジョイスティック
@@ -1018,7 +1179,7 @@ func _draw_touch_controls(font: Font) -> void:
 	else:
 		root_ctrl.draw_circle(act_center, 36.0, Color(0.06, 0.16, 0.14, 0.82))
 		root_ctrl.draw_arc(act_center, 36.0, 0.0, TAU, 24, Color(0.35, 0.96, 0.68), 2.2)
-		var act_lbl := "接続" if State.selected_tool == "wire" else ("回収" if State.selected_tool == "salvage" else "設置")
+		var act_lbl := "接続" if State.selected_tool == "wire" else ("削除" if State.selected_tool == "salvage" else "設置")
 		root_ctrl.draw_string(font, act_center + Vector2(-30, 5), act_lbl, HORIZONTAL_ALIGNMENT_CENTER, 60, 12, Color.WHITE)
 
 	root_ctrl.draw_circle(brk_center, 25.0, Color(0.18, 0.07, 0.09, 0.80))

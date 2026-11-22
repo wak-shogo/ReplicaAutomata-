@@ -90,7 +90,12 @@ def main():
         print("START:", t0, flush=True)
         page.screenshot(path=os.path.join(SHOT_DIR, "v4_01_jp_start.png"))
 
-        # 1. Surface Mining for Fe & Cu
+        # 1. Surface Mining using SPACE + Cursor Aim (tap-to-mine is abolished!)
+        # First verify tapping empty ground does NOT fire mining beam!
+        click_xy(page, 760, 368, hold=0.15)
+        t_tap = tel(page)
+        assert t_tap["beam_x"] == 0 and t_tap["beam_y"] == 0, f"Tap-to-mine should be abolished! {t_tap}"
+
         for step in range(14):
             t = tel(page)
             if t["fe"] >= 46 and t["cu"] >= 30:
@@ -102,9 +107,9 @@ def main():
             page.keyboard.up("KeyW")
             page.keyboard.up(dir_k)
             page.mouse.move(760 if dir_k == "KeyD" else 520, 368)
-            page.mouse.down()
+            page.keyboard.down("Space")
             time.sleep(0.85)
-            page.mouse.up()
+            page.keyboard.up("Space")
         t_m = tel(page)
         print("AFTER MINING:", "fe=", t_m["fe"], "cu=", t_m["cu"], "tut_step=", t_m["tut_step"], flush=True)
         assert t_m["fe"] >= 32 and t_m["cu"] >= 20 and t_m["tut_step"] >= 1, f"Mining failed: {t_m}"
@@ -212,12 +217,36 @@ def main():
         page.screenshot(path=os.path.join(SHOT_DIR, "v4_05_wired_surface.png"))
         assert t_w["bldg"] >= 2 and t_w["wires"] >= 1 and t_w["pwr_prod"] >= 25, f"Wired grid failed: {t_w}"
 
-        # 6. Open Command Modal (指令・地図 at top-right x=1223, y=105) & Guide Modal [H]
-        click_xy(page, 1223, 105)
+        # 6. Tap Solar facility in normal mode -> Opens Universal Facility Inspector Modal (modal==6)!
+        click_xy(page, 500, 360)
         time.sleep(0.35)
-        page.screenshot(path=os.path.join(SHOT_DIR, "v4_06_command_modal.png"))
+        t_insp = tel(page)
+        print("INSPECT SOLAR:", "modal=", t_insp["modal"], "insp_uid=", t_insp["insp_uid"], flush=True)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v4_06_building_inspector.png"))
+        assert t_insp["modal"] == 6 and t_insp["insp_uid"] > 0, f"Tapping Solar must open Facility Inspector! {t_insp}"
+        page.keyboard.press("Escape")
+        time.sleep(0.25)
+
+        # 7. Delete mode double-tap verification:
+        # Bottom dock now has [通常, 配線, 削除, +製造] (4 slots -> bar_w=256, bx=512, slot2 削除 x=640..694, y=651..705)
+        click_xy(page, 667, 678)
+        time.sleep(0.25)
+        # 1st tap on Solar -> MUST ARM only, NOT delete!
+        click_xy(page, 500, 360)
+        time.sleep(0.25)
+        t_arm = tel(page)
+        print("DELETE 1ST TAP (ARM):", "bldg=", t_arm["bldg"], "armed=", t_arm["armed_del"], flush=True)
+        assert t_arm["bldg"] == 2 and t_arm["armed_del"] > 0, f"1st tap in delete mode should arm only! {t_arm}"
+        # 2nd tap on Solar -> DELETES & refunds stock_solar == 1!
+        click_xy(page, 500, 360)
+        time.sleep(0.3)
+        t_del = tel(page)
+        print("DELETE 2ND TAP (DONE):", "bldg=", t_del["bldg"], "stock_solar=", t_del["stock_solar"], flush=True)
+        assert t_del["bldg"] == 1 and t_del["stock_solar"] == 1, f"2nd tap in delete mode failed to delete & refund! {t_del}"
         page.keyboard.press("Escape")
         time.sleep(0.2)
+
+        # 8. Open Guide Modal [H]
         page.keyboard.press("KeyH")
         time.sleep(0.35)
         page.screenshot(path=os.path.join(SHOT_DIR, "v4_07_guide_modal.png"))
@@ -269,6 +298,35 @@ def main():
         print("MOBILE TWIN-STICK BEAM:", "bx=", tm_beam["beam_x"], "by=", tm_beam["beam_y"], "fe=", tm_mined["fe"], "cu=", tm_mined["cu"], flush=True)
         assert tm_beam["beam_x"] > 10.0 and tm_beam["beam_y"] > 10.0, f"Right mining stick did not aim DOWN-RIGHT! {tm_beam}"
         assert (tm_mined["fe"] + tm_mined["cu"]) > 0, f"Mobile twin-stick mining failed to harvest ore! {tm_mined}"
+
+        # 4) REAL Two-Finger Pinch-Out (Zoom IN -> huge close-up of Seed Unit!)
+        z0 = tel(mpage)["zoom"]
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 180, "y": 400, "id": 10}, {"x": 230, "y": 400, "id": 11}]})
+        for step in range(1, 7):
+            dx = step * 24
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 180 - dx, "y": 400, "id": 10}, {"x": 230 + dx, "y": 400, "id": 11}]})
+            time.sleep(0.05)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        time.sleep(0.45)
+        z_in = tel(mpage)["zoom"]
+        print("MOBILE PINCH ZOOM IN:", "before=", z0, "after=", z_in, flush=True)
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_11_mobile_zoom_in.png"))
+        assert z_in > 1.8, f"Pinch zoom-in did not zoom close enough! z={z_in}"
+
+        # 5) REAL Two-Finger Pinch-In (Zoom OUT -> full spherical planet!)
+        for _repeat in range(3):
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 40, "y": 400, "id": 20}, {"x": 370, "y": 400, "id": 21}]})
+            for step in range(1, 7):
+                dx = step * 24
+                cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 40 + dx, "y": 400, "id": 20}, {"x": 370 - dx, "y": 400, "id": 21}]})
+                time.sleep(0.05)
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            time.sleep(0.15)
+        time.sleep(0.6)
+        z_out = tel(mpage)["zoom"]
+        print("MOBILE PINCH ZOOM OUT (FULL PLANET):", "zoom=", z_out, flush=True)
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_12_mobile_zoom_planet.png"))
+        assert z_out < 0.14, f"Pinch zoom-out did not reach full-planet scale! z={z_out}"
 
         mctx.close()
         browser.close()

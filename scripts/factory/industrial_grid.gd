@@ -6,6 +6,7 @@ extends Node2D
 # and HD-2D Pixel-Art Rendering with Smoke Plumes, Fireglow & Foundation Pads.
 
 signal depot_opened(uid: int)
+signal building_inspected(uid: int)
 
 const POWER_NODES: Array[String] = ["solar", "geothermal", "tesla", "battery"]
 const WIRE_RANGE: float = 680.0
@@ -29,6 +30,8 @@ var turret_beams: Array[Dictionary] = []
 
 var wire_pick_uid: int = -1
 var selected_depot_uid: int = -1
+var salvage_armed_uid: int = -1
+var salvage_armed_ms: int = 0
 var next_uid: int = 1
 var anim_t: float = 0.0
 var hover_world: Vector2 = Vector2.ZERO
@@ -40,7 +43,7 @@ func _ready() -> void:
 func clear_all() -> void:
 	buildings.clear(); wires.clear(); belt_items.clear()
 	launch_trails.clear(); turret_beams.clear()
-	wire_pick_uid = -1; selected_depot_uid = -1; next_uid = 1
+	wire_pick_uid = -1; selected_depot_uid = -1; salvage_armed_uid = -1; salvage_armed_ms = 0; next_uid = 1
 
 func _by_uid(uid: int) -> Dictionary:
 	for b in buildings:
@@ -174,26 +177,52 @@ func _find_local_ore(c: int, r: int) -> String:
 			if o != "": return o
 	return "fe"
 
-func try_salvage_at(world_pos: Vector2) -> bool:
-	var bi := -1; var bd := 72.0
+func salvage_by_uid(uid: int) -> bool:
+	var bi := -1
 	for i in range(buildings.size()):
-		var d := Vector2(buildings[i]["pos"]).distance_to(world_pos)
-		if d < bd: bd = d; bi = i
+		if int(buildings[i]["uid"]) == uid:
+			bi = i; break
 	if bi < 0: return false
 	var b := buildings[bi]
 	var dead_u := int(b["uid"])
 	var bid := String(b["id"])
 	var info: Dictionary = State.BLD[bid]
+	# 中に入っていた資源・在庫も漏れなくプレイヤーへ返却！
+	for k in b["in_buf"].keys(): State.add_r(String(k), int(b["in_buf"][k]))
+	for k in b["out_buf"].keys(): State.add_r(String(k), int(b["out_buf"][k]))
+	for k in b["inv"].keys(): State.add_r(String(k), int(b["inv"][k]))
 	State.add_stock(bid, 1)
 	for wi in range(wires.size() - 1, -1, -1):
 		if int(wires[wi][0]) == dead_u or int(wires[wi][1]) == dead_u:
 			wires.remove_at(wi)
 	if wire_pick_uid == dead_u: wire_pick_uid = -1
 	if selected_depot_uid == dead_u: selected_depot_uid = -1
+	if salvage_armed_uid == dead_u: salvage_armed_uid = -1
 	buildings.remove_at(bi)
 	_solve_power(0.0)
 	Sfx.play("pop")
-	State.add_log("回収完了: %s（所持リストに戻りました）" % info["name"], "info")
+	State.add_log("削除・回収完了: %s（所持リストに戻りました）" % info["name"], "info")
+	return true
+
+func try_salvage_at(world_pos: Vector2) -> bool:
+	var b := find_nearest(world_pos, 78.0)
+	if b.is_empty(): return false
+	return salvage_by_uid(int(b["uid"]))
+
+func try_double_tap_salvage(world_pos: Vector2) -> bool:
+	var b := find_nearest(world_pos, 78.0)
+	if b.is_empty():
+		salvage_armed_uid = -1
+		return false
+	var uid := int(b["uid"])
+	var now := Time.get_ticks_msec()
+	if salvage_armed_uid == uid and (now - salvage_armed_ms) <= 3200:
+		salvage_armed_uid = -1
+		return salvage_by_uid(uid)
+	salvage_armed_uid = uid
+	salvage_armed_ms = now
+	Sfx.play("click")
+	State.add_log("削除確認: もう一度「%s」をタップすると削除・回収します" % State.BLD[b["id"]]["name"], "warn")
 	return true
 
 # ------------------------------------------------------------------------------
@@ -271,56 +300,112 @@ func try_wire_at(pos: Vector2) -> bool:
 func handle_world_click(world_pos: Vector2) -> bool:
 	var tool := State.selected_tool
 	if tool == "wire":
+		salvage_armed_uid = -1
 		return try_wire_at(world_pos)
 	if tool == "salvage":
-		return try_salvage_at(world_pos)
+		return try_double_tap_salvage(world_pos)
 	if State.BLD.has(tool):
+		salvage_armed_uid = -1
 		return try_place_at(tool, world_pos)
 
-	# Mine / Interact mode: check clicked building first
-	var b := find_nearest(world_pos, 68.0)
+	# 通常モード：施設をタップすると中身・詳細パネルを開く（タップ採掘は廃止！）
+	salvage_armed_uid = -1
+	var b := find_nearest(world_pos, 78.0)
 	if b.is_empty(): return false
-	var bid := String(b["id"])
-	if bid in POWER_NODES:
-		return try_wire_at(world_pos)
-	elif bid == "depot":
-		selected_depot_uid = int(b["uid"])
-		State.tut_opened_depot = true
-		State.update_tutorial()
-		Sfx.play("select")
-		depot_opened.emit(selected_depot_uid)
-		return true
-	elif bid == "belt" or bid == "lift":
-		b["dir"] = -int(b["dir"])
-		Sfx.play("click")
-		return true
-	elif bid == "assembler":
-		var ri := (RECIPES.find(String(b["recipe"])) + 1) % RECIPES.size()
-		b["recipe"] = RECIPES[ri]
-		_collect_out(b)
-		Sfx.play("select")
-		State.add_log("自動組立機レシピ変更: %s" % State.res_name(String(b["recipe"])), "info")
-		return true
-	elif bid in ["drill", "smelter", "gantry_printer"]:
-		if _collect_out(b) == 0:
-			_hand_feed(b)
-		return true
-	return false
-
-func interact_near_player(pos: Vector2) -> bool:
-	var b := find_nearest(pos, 110.0, ["depot", "smelter", "assembler", "gantry_printer", "drill"])
-	if b.is_empty(): return false
+	var uid := int(b["uid"])
 	var bid := String(b["id"])
 	if bid == "depot":
-		selected_depot_uid = int(b["uid"])
+		selected_depot_uid = uid
 		State.tut_opened_depot = true
 		State.update_tutorial()
 		Sfx.play("select")
-		depot_opened.emit(selected_depot_uid)
+		depot_opened.emit(uid)
 		return true
-	var got := _collect_out(b)
-	var fed := _hand_feed(b) if bid != "drill" else false
-	return got > 0 or fed
+	Sfx.play("select")
+	building_inspected.emit(uid)
+	return true
+
+func interact_near_player(pos: Vector2) -> bool:
+	var b := find_nearest(pos, 115.0)
+	if b.is_empty(): return false
+	var uid := int(b["uid"])
+	if String(b["id"]) == "depot":
+		selected_depot_uid = uid
+		State.tut_opened_depot = true
+		State.update_tutorial()
+		Sfx.play("select")
+		depot_opened.emit(uid)
+		return true
+	Sfx.play("select")
+	building_inspected.emit(uid)
+	return true
+
+# ------------------------------------------------------------------------------
+# 施設詳細・中身インスペクタ用API（全施設対応）
+# ------------------------------------------------------------------------------
+func get_building_snap(uid: int) -> Dictionary:
+	var b := _by_uid(uid)
+	if b.is_empty(): return {}
+	var bid := String(b["id"])
+	var info: Dictionary = State.BLD[bid]
+	var links: Array[String] = []
+	for w in wires:
+		if int(w[0]) == uid:
+			var ob := _by_uid(int(w[1]))
+			if not ob.is_empty(): links.append(String(State.BLD[ob["id"]]["name"]))
+		elif int(w[1]) == uid:
+			var ob := _by_uid(int(w[0]))
+			if not ob.is_empty(): links.append(String(State.BLD[ob["id"]]["name"]))
+	var live_gen := 0.0
+	if bid == "solar":
+		live_gen = float(info["gen"]) * (planet.get_sunlight(b["pos"]) if planet else 1.0)
+	elif bid == "geothermal":
+		live_gen = float(info["gen"])
+	return {
+		"uid": uid, "id": bid, "name": String(info["name"]), "tex": String(info["tex"]),
+		"desc": String(info["desc"]), "is_power": (bid in POWER_NODES),
+		"gen": live_gen, "use": float(info["use"]),
+		"pwr_ratio": float(b["pwr_ratio"]), "wired": bool(b["wired"]), "links": links,
+		"battery_kj": float(b["battery_kj"]), "battery_cap": BATTERY_CAP_KJ,
+		"ore_target": String(b["ore_target"]), "dir": int(b["dir"]),
+		"recipe": String(b["recipe"]), "blocked": bool(b["blocked"]),
+		"in_buf": b["in_buf"].duplicate(), "out_buf": b["out_buf"].duplicate(),
+	}
+
+func building_collect(uid: int) -> int:
+	var b := _by_uid(uid)
+	if b.is_empty(): return 0
+	return _collect_out(b)
+
+func building_hand_feed(uid: int) -> bool:
+	var b := _by_uid(uid)
+	if b.is_empty(): return false
+	return _hand_feed(b)
+
+func building_flip_dir(uid: int) -> void:
+	var b := _by_uid(uid)
+	if b.is_empty(): return
+	b["dir"] = -int(b["dir"])
+	Sfx.play("click")
+	State.add_log("%s の向きを反転しました。" % State.BLD[b["id"]]["name"], "info")
+
+func building_cycle_recipe(uid: int) -> String:
+	var b := _by_uid(uid)
+	if b.is_empty(): return ""
+	var ri := (RECIPES.find(String(b["recipe"])) + 1) % RECIPES.size()
+	b["recipe"] = RECIPES[ri]
+	_collect_out(b)
+	Sfx.play("select")
+	State.add_log("自動組立機レシピ変更: %s" % State.res_name(String(b["recipe"])), "info")
+	return String(b["recipe"])
+
+func start_wire_from(uid: int) -> void:
+	var b := _by_uid(uid)
+	if b.is_empty() or not (b["id"] in POWER_NODES): return
+	State.selected_tool = "wire"
+	wire_pick_uid = uid
+	Sfx.play("click")
+	State.add_log("接続元選択: %s → つなぐ先の電力装置をタップ" % State.BLD[b["id"]]["name"], "info")
 
 func _collect_out(b: Dictionary) -> int:
 	var out: Dictionary = b["out_buf"]
@@ -784,7 +869,11 @@ func _draw() -> void:
 		elif bid == "assembler":
 			draw_string(font, Vector2(-38, -bh - 10), State.res_name(String(b["recipe"])), HORIZONTAL_ALIGNMENT_CENTER, 76, 10, Color(0.46, 0.96, 1.0))
 
-		if int(b["uid"]) == wire_pick_uid:
+		if int(b["uid"]) == salvage_armed_uid:
+			var pulse_d := 38.0 + sin(anim_t * 9.0) * 5.0
+			draw_arc(Vector2(0, -bh * 0.5), pulse_d, 0.0, TAU, 24, Color(1.0, 0.28, 0.28, 0.96), 3.2)
+			draw_string(font, Vector2(-68, -bh - 18), "もう一度タップで削除！", HORIZONTAL_ALIGNMENT_CENTER, 136, 11, Color(1.0, 0.42, 0.38))
+		elif int(b["uid"]) == wire_pick_uid:
 			draw_arc(Vector2(0, -bh * 0.5), 36.0, 0.0, TAU, 24, Color(0.45, 1.0, 1.0), 2.8)
 		elif State.tut_enabled and State.tut_step == 5 and (bid in POWER_NODES) and not bool(b["wired"]):
 			var pulse := 34.0 + sin(anim_t * 6.0) * 5.0

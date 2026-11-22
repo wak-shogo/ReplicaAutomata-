@@ -13,7 +13,9 @@ extends Node2D
 @onready var cam: Camera2D = $Camera2D
 @onready var hud: CanvasLayer = $CommandHUD
 
-var user_zoom: float = 1.0
+var user_zoom: float = 0.88
+const ZOOM_MIN: float = 0.072 # 惑星全体＆衛星軌道まで一望
+const ZOOM_MAX: float = 2.60  # 機体や施設が大きく映る超近接ズーム
 var _tel_t: float = 0.0
 var _test_failed: bool = false
 
@@ -30,21 +32,34 @@ func _ready() -> void:
 	hud.grid = grid
 	hud.player = player
 	hud.swarm = swarm
+	hud.game_root = self
 	grid.depot_opened.connect(hud.open_depot)
+	grid.building_inspected.connect(hud.open_building)
 
 	player.spawn_north_pole()
 	cam.position = player.position + Vector2(0, -45)
-	cam.zoom = Vector2(0.88, 0.88)
+	cam.zoom = Vector2(user_zoom, user_zoom)
 
 	if "--run-tests" in OS.get_cmdline_args() or "--run-tests" in OS.get_cmdline_user_args():
 		call_deferred("_run_tests")
 
+func adjust_zoom(factor: float) -> void:
+	if factor <= 0.0: return
+	if State.orbit_view and factor > 1.02:
+		State.orbit_view = false
+	user_zoom = clampf(user_zoom * factor, ZOOM_MIN, ZOOM_MAX)
+
+func set_zoom_val(v: float) -> void:
+	user_zoom = clampf(v, ZOOM_MIN, ZOOM_MAX)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			user_zoom = clampf(user_zoom * 1.12, 0.35, 1.8)
+			adjust_zoom(1.16)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			user_zoom = clampf(user_zoom / 1.12, 0.35, 1.8)
+			adjust_zoom(1.0 / 1.16)
+	elif event is InputEventMagnifyGesture:
+		adjust_zoom(event.factor)
 
 func _process(delta: float) -> void:
 	if State.orbit_view:
@@ -53,13 +68,17 @@ func _process(delta: float) -> void:
 		var fit := minf(vp.x, vp.y) / 17000.0
 		cam.zoom = cam.zoom.lerp(Vector2(fit, fit), minf(1.0, delta * 5.0))
 	else:
-		# Offset slightly skyward when on surface so player sees both subterranean caves AND upper sky!
-		var up := player.position.normalized() if player.position.length() > 1.0 else Vector2.UP
-		var target_c := player.position + (up * 35.0 if player.get_altitude() < 260.0 else Vector2.ZERO)
-		cam.position = cam.position.lerp(target_c, minf(1.0, delta * 7.5))
+		# 超広域ズーム（ピンチアウトで惑星全体まで引いた時）は惑星中心へ滑らかに視点を寄せる
 		var alt := maxf(0.0, player.get_altitude())
-		var az := lerpf(0.88, 0.44, clampf(alt / 3200.0, 0.0, 1.0)) * user_zoom
-		cam.zoom = cam.zoom.lerp(Vector2(az, az), minf(1.0, delta * 4.5))
+		var alt_scale := lerpf(1.0, 0.55, clampf(alt / 3200.0, 0.0, 1.0))
+		var target_z := clampf(user_zoom * alt_scale, ZOOM_MIN, ZOOM_MAX)
+		cam.zoom = cam.zoom.lerp(Vector2(target_z, target_z), minf(1.0, delta * 10.0))
+
+		var up := player.position.normalized() if player.position.length() > 1.0 else Vector2.UP
+		var local_c := player.position + (up * 35.0 if player.get_altitude() < 260.0 else Vector2.ZERO)
+		var macro_t := clampf((0.26 - cam.zoom.x) / (0.26 - 0.11), 0.0, 1.0)
+		var target_c := local_c.lerp(Vector2.ZERO, macro_t)
+		cam.position = cam.position.lerp(target_c, minf(1.0, delta * 8.0))
 
 	if OS.has_feature("web"):
 		_tel_t += delta
@@ -86,6 +105,7 @@ func _publish_tel() -> void:
 		"pwr_stored": int(round(State.pwr_stored)), "wires": State.wire_count, "teslas_on": State.active_teslas,
 		"bldg": grid.buildings.size(), "fleet": State.swarm_fleet, "launches": State.total_launches,
 		"techs": State.unlocked_techs, "tool": State.selected_tool, "modal": hud.modal,
+		"zoom": snappedf(cam.zoom.x, 0.001), "insp_uid": hud.inspect_uid, "armed_del": grid.salvage_armed_uid,
 		"orbit": State.orbit_view, "won": State.game_won,
 	}
 	JavaScriptBridge.eval("window.__star_tel = " + JSON.stringify(d) + ";")
@@ -151,6 +171,18 @@ func _run_tests() -> void:
 	var p_tes: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL, SphericalPlanet.ROWS - 2)["pos"]
 	var p_bat: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL - 3, SphericalPlanet.ROWS - 2)["pos"]
 	_chk(grid.try_place_at("solar", p_sol) and State.get_stock("solar") == 0, "Place Solar failed")
+	# Double-tap delete check: 1st tap only arms, 2nd tap deletes & refunds stock!
+	_chk(grid.try_double_tap_salvage(p_sol) and grid.buildings.size() == 1 and grid.salvage_armed_uid > 0, "1st tap in delete mode must only arm, not delete!")
+	_chk(grid.try_double_tap_salvage(p_sol) and grid.buildings.is_empty() and State.get_stock("solar") == 1, "2nd tap in delete mode must delete & refund stock!")
+	_chk(grid.try_place_at("solar", p_sol) and State.get_stock("solar") == 0, "Re-place Solar failed")
+	var bsnap: Dictionary = grid.get_building_snap(int(grid.buildings[0]["uid"]))
+	_chk(String(bsnap.get("id", "")) == "solar", "Building inspector snap failed!")
+	# Wide pinch zoom bounds check (close-up to full planet!)
+	adjust_zoom(5.0)
+	_chk(user_zoom >= 2.5, "Max close-up zoom too small: %.2f" % user_zoom)
+	adjust_zoom(0.01)
+	_chk(user_zoom <= 0.08, "Min full-planet zoom too large: %.3f" % user_zoom)
+	set_zoom_val(0.88)
 	grid._solve_power(0.1)
 	_chk(State.pwr_prod <= 0.1, "Unwired Solar must report 0W!")
 	_chk(grid.try_place_at("tesla", p_tes), "Place Tesla failed")
