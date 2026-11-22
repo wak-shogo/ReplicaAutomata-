@@ -71,6 +71,8 @@ func _publish_tel() -> void:
 	var d := {
 		"px": int(round(player.position.x)), "py": int(round(player.position.y)),
 		"vx": snappedf(player.velocity.x, 0.1), "vy": snappedf(player.velocity.y, 0.1),
+		"beam_x": snappedf(player.beam_end_world.x - player.position.x, 0.1) if player.beam_end_world != Vector2.ZERO else 0.0,
+		"beam_y": snappedf(player.beam_end_world.y - player.position.y, 0.1) if player.beam_end_world != Vector2.ZERO else 0.0,
 		"r": int(round(player.position.length())), "alt": int(round(player.get_altitude())),
 		"vel": int(round(player.velocity.length())), "grav": snappedf(player.local_g, 0.02),
 		"drones": State.attached_drones, "prop": State.propulsion_tier,
@@ -122,6 +124,12 @@ func _run_tests() -> void:
 	_chk(player.velocity.x > 20.0, "Screen-space RIGHT at bottom-right failed! vel=%s" % str(player.velocity))
 	player.spawn_north_pole()
 	player.move_input = Vector2.ZERO
+
+	# 1b. Directional raycast mining test: aiming UP into empty sky must NOT auto-snap to ground below; aiming DOWN hits crust!
+	var up_hit := planet.find_mine_target(player.position, Vector2.UP, 220.0)
+	var dn_hit := planet.find_mine_target(player.position, Vector2.DOWN, 220.0)
+	_chk(up_hit.is_empty(), "Aiming UP into sky must not auto-target ground! got=%s" % str(up_hit))
+	_chk(not dn_hit.is_empty(), "Aiming DOWN at crust must hit terrain!")
 
 	# 2. Timed Craft Queue + Cancel Refund + Auto-Docking Fabricator Drones!
 	State.add_r("fe", 320); State.add_r("cu", 240); State.add_r("si", 160); State.add_r("ti", 160)

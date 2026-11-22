@@ -463,49 +463,66 @@ func check_moon_hit(pos: Vector2, rad: float = 20.0) -> Dictionary:
 	return {"hit": false}
 
 # ------------------------------------------------------------------------------
-# SMOOTH ORGANIC MULTI-BEAM MINING (CARVES ROUNDED TUNNELS, NEVER UGLY BLOCKS!)
+# DIRECTIONAL RAYCAST MULTI-BEAM MINING (AIMS STRICTLY ALONG INPUT DIRECTION!)
 # ------------------------------------------------------------------------------
-func find_mine_target(pos: Vector2, aim_world: Vector2, max_range: float = 260.0) -> Dictionary:
-	if pos.length() > R_SURFACE + 240.0:
-		var bi := -1; var bd := max_range + 140.0
-		for i in range(asteroids.size()):
-			var d := pos.distance_to(asteroids[i]["pos"]) - float(asteroids[i]["rad"])
-			if d < bd: bd = d; bi = i
-		if bi >= 0:
-			return {"kind": "asteroid", "idx": bi, "pos": asteroids[bi]["pos"], "ore": asteroids[bi]["ore"]}
-		for i in range(moons.size()):
-			var mp: Vector2 = moons[i]["pos"]
-			var d := pos.distance_to(mp) - float(moons[i]["rad"])
-			if d < max_range + 120.0:
-				return {"kind": "moon", "idx": i, "pos": mp + (pos - mp).normalized() * float(moons[i]["rad"]), "ore": moons[i]["ore"]}
-		return {}
+func find_mine_target(pos: Vector2, aim_dir: Vector2, max_range: float = 260.0) -> Dictionary:
+	var dir := aim_dir.normalized() if aim_dir.length() > 0.05 else (-pos.normalized() if pos.length() > 1.0 else Vector2.DOWN)
+	var step_d := 8.0
+	var d := 14.0
+	var space_reach := max_range + (140.0 if pos.length() > R_SURFACE + 240.0 else 0.0)
 
-	var pc := world_to_cell(pos)
-	var best_s := 1e9
-	var best_c := -1; var best_r := -1; var best_p := Vector2.ZERO
-	for dr in range(-7, 7):
-		var r := pc.y + dr
-		if r < 6 or r >= ROWS: continue
-		for dc in range(-8, 9):
-			var wc := wrap_col(pc.x + dc)
-			if not is_solid(wc, r): continue
-			if factory != null and factory.is_foundation_protected(wc, r): continue
-			var cp := cell_world_pos(wc, r)
-			var d := cp.distance_to(pos)
-			if d > max_range: continue
-			var sc := d
-			if int(ore[r * COLS + wc]) > 0: sc -= 55.0
-			if aim_world.length() > 0.2:
-				sc -= (cp - pos).normalized().dot(aim_world.normalized()) * 85.0
-			if sc < best_s:
-				best_s = sc; best_c = wc; best_r = r; best_p = cp
-	if best_c >= 0:
-		return {"kind": "voxel", "col": best_c, "row": best_r, "pos": best_p, "ore": get_ore_id(best_c, best_r)}
+	while d <= space_reach:
+		var rp := pos + dir * d
+
+		# 1. Surface & cavern crystal spires along the beam ray
+		if d <= max_range + 16.0:
+			for pi in range(crystal_props.size()):
+				var pr: Dictionary = crystal_props[pi]
+				if Vector2(pr["pos"]).distance_to(rp) <= 24.0 * float(pr.get("sc", 1.0)):
+					var o_n: String = ["", "fe", "cu", "si", "ti"][int(pr["ore"])]
+					return {"kind": "crystal", "idx": pi, "pos": pr["pos"], "ore": o_n}
+
+		# 2. Solid planet terrain voxels along the beam ray
+		if d <= max_range and rp.length() <= R_SURFACE + 28.0:
+			var cell := world_to_cell(rp)
+			if is_solid(cell.x, cell.y):
+				if factory == null or not factory.is_foundation_protected(cell.x, cell.y):
+					return {"kind": "voxel", "col": cell.x, "row": cell.y, "pos": rp, "ore": get_ore_id(cell.x, cell.y)}
+				return {} # Protected building foundation blocks beam cleanly
+
+		# 3. Asteroids & Moons along the beam ray
+		if rp.length() > R_SURFACE + 180.0:
+			for ai in range(asteroids.size()):
+				var ast: Dictionary = asteroids[ai]
+				if Vector2(ast["pos"]).distance_to(rp) <= float(ast["rad"]) + 12.0:
+					return {"kind": "asteroid", "idx": ai, "pos": rp, "ore": ast["ore"]}
+			for mi in range(moons.size()):
+				var m: Dictionary = moons[mi]
+				if Vector2(m["pos"]).distance_to(rp) <= float(m["rad"]) + 10.0:
+					return {"kind": "moon", "idx": mi, "pos": rp, "ore": m["ore"]}
+
+		d += step_d
 	return {}
 
 func damage_target(tgt: Dictionary, dmg: float) -> bool:
 	if tgt.is_empty(): return false
 	var kind := String(tgt["kind"])
+	if kind == "crystal":
+		var pi := int(tgt["idx"])
+		if pi < 0 or pi >= crystal_props.size(): return false
+		var pr: Dictionary = crystal_props[pi]
+		pr["hp"] = float(pr.get("hp", 10.0)) - dmg
+		var o_n: String = ["", "fe", "cu", "si", "ti"][int(pr["ore"])]
+		if randf() < 0.45:
+			spawn_sparks(pr["pos"], ore_col(o_n), 4)
+		if float(pr["hp"]) <= 0.0:
+			State.add_r(o_n, 8)
+			Sfx.play("mine")
+			spawn_sparks(pr["pos"], ore_col(o_n), 12)
+			spawn_popup(pr["pos"], "+8 %s" % State.res_name(o_n), ore_col(o_n))
+			crystal_props.remove_at(pi)
+			return true
+		return false
 	if kind == "voxel":
 		var c0 := int(tgt["col"]); var r0 := int(tgt["row"])
 		var carved := false

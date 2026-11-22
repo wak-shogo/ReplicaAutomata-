@@ -101,9 +101,9 @@ def main():
             time.sleep(0.5)
             page.keyboard.up("KeyW")
             page.keyboard.up(dir_k)
-            page.mouse.move(680 if dir_k == "KeyD" else 590, 440)
+            page.mouse.move(760 if dir_k == "KeyD" else 520, 368)
             page.mouse.down()
-            time.sleep(1.4)
+            time.sleep(0.85)
             page.mouse.up()
         t_m = tel(page)
         print("AFTER MINING:", "fe=", t_m["fe"], "cu=", t_m["cu"], "tut_step=", t_m["tut_step"], flush=True)
@@ -223,7 +223,7 @@ def main():
         page.screenshot(path=os.path.join(SHOT_DIR, "v4_07_guide_modal.png"))
         ctx.close()
 
-        # === PORTRAIT MOBILE (412x915, DPR 2.625) ===
+        # === PORTRAIT MOBILE (412x915, DPR 2.625) REAL TOUCHSCREEN TAP & TWIN-STICK TEST! ===
         mctx = browser.new_context(viewport={"width": 412, "height": 915}, device_scale_factor=2.625, has_touch=True, is_mobile=True)
         mpage = mctx.new_page()
         mpage.on("pageerror", lambda e: errors.append(f"MOBERR: {e}"))
@@ -232,9 +232,44 @@ def main():
         wait_tel(mpage, 25.0)
         time.sleep(1.2)
         mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_08_mobile_hud.png"))
-        mpage.keyboard.press("KeyC")
-        time.sleep(0.4)
+
+        # 1) REAL Touchscreen tap on top-right クラフト button!
+        # In logical 520x1155 HUD coords: x=520-88-8=424..512 (center 468), y=8..42 (center 25)
+        # CSS coords on 412x915 viewport: cx = 468 * (412/520) = 371, cy = 25 * (412/520) = 20
+        mpage.touchscreen.tap(371, 20)
+        time.sleep(0.45)
+        tm_craft = tel(mpage)
+        print("MOBILE TAP CRAFT:", "modal=", tm_craft["modal"], flush=True)
         mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_09_mobile_craft.png"))
+        assert tm_craft["modal"] == 1, f"Mobile touchscreen tap on クラフト FAILED to open Craft modal! {tm_craft}"
+
+        # 2) Tap 閉じる button inside Craft modal via REAL touchscreen tap!
+        # Craft modal mw=500 -> x=10..510, mh=610 -> y=(1155-610)/2=272.5, close btn x=442..500 (cx=471), y=279.5..303.5 (cy=291.5)
+        # CSS coords: cx = 471 * (412/520) = 373, cy = 291.5 * (412/520) = 231
+        mpage.touchscreen.tap(373, 231)
+        time.sleep(0.4)
+        tm_closed = tel(mpage)
+        print("MOBILE TAP CLOSE:", "modal=", tm_closed["modal"], flush=True)
+        assert tm_closed["modal"] == 0, f"Mobile tap on 閉じる failed! {tm_closed}"
+
+        # 3) REAL Touchscreen Drag on Bottom-Right Twin-Stick Mining Pad (aim DOWN-RIGHT!)
+        # Logical act_center = (520 - 48 - 20, 1155 - 48 - 118) = (452, 989)
+        # CSS coords: (452 * 412/520, 989 * 412/520) = (358, 784)
+        cdp = mctx.new_cdp_session(mpage)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 358, "y": 784, "id": 1}]})
+        time.sleep(0.08)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 388, "y": 814, "id": 1}]})
+        time.sleep(0.45)
+        tm_beam = tel(mpage)
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v4_10_mobile_twinstick_beam.png"))
+        time.sleep(1.2)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        time.sleep(0.2)
+        tm_mined = tel(mpage)
+        print("MOBILE TWIN-STICK BEAM:", "bx=", tm_beam["beam_x"], "by=", tm_beam["beam_y"], "fe=", tm_mined["fe"], "cu=", tm_mined["cu"], flush=True)
+        assert tm_beam["beam_x"] > 10.0 and tm_beam["beam_y"] > 10.0, f"Right mining stick did not aim DOWN-RIGHT! {tm_beam}"
+        assert (tm_mined["fe"] + tm_mined["cu"]) > 0, f"Mobile twin-stick mining failed to harvest ore! {tm_mined}"
+
         mctx.close()
         browser.close()
 

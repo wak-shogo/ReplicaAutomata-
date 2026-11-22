@@ -18,16 +18,20 @@ var depot_uid: int = -1
 var redrop_armed: bool = false
 var anim_t: float = 0.0
 
-# モバイル／タッチ端末専用仮想コントロール
+# モバイル／タッチ端末専用仮想コントロール（左：移動スティック / 右：方向指定採掘スティック）
 var touch_ui_active: bool = false
+var _last_touch_ms: int = -10000
 var joy_center: Vector2 = Vector2.ZERO
 var joy_r: float = 52.0
 var joy_vec: Vector2 = Vector2.ZERO
 var joy_pid: int = -1
 var act_center: Vector2 = Vector2.ZERO
-var brk_center: Vector2 = Vector2.ZERO
+var mine_r: float = 48.0
+var mine_vec: Vector2 = Vector2.ZERO
 var act_pid: int = -1
+var brk_center: Vector2 = Vector2.ZERO
 var brk_pid: int = -1
+var world_mine_pid: int = -1
 var mouse_mine_held: bool = false
 
 var _hits: Array[Dictionary] = []
@@ -60,9 +64,10 @@ func _process(delta: float) -> void:
 	anim_t += delta
 	var vp := _hud_vp()
 	joy_r = 52.0
+	mine_r = 48.0
 	joy_center = Vector2(joy_r + 22.0, vp.y - joy_r - 116.0)
-	act_center = Vector2(vp.x - 58.0, vp.y - 160.0)
-	brk_center = Vector2(vp.x - 128.0, vp.y - 134.0)
+	act_center = Vector2(vp.x - mine_r - 20.0, vp.y - mine_r - 118.0)
+	brk_center = Vector2(act_center.x - mine_r - 34.0, vp.y - 134.0)
 
 	# キーボード WASD / 矢印キー ＋ タッチジョイスティック（常に画面方向へ移動！）
 	var kb := Vector2.ZERO
@@ -75,6 +80,7 @@ func _process(delta: float) -> void:
 
 	if player:
 		player.move_input = joy_vec if joy_vec.length() > 0.08 else kb
+		player.manual_aim_dir = mine_vec if (act_pid != -1 and mine_vec.length() > 0.12) else Vector2.ZERO
 		player.braking = (brk_pid != -1) or Input.is_key_pressed(KEY_SHIFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
 		var cam := get_viewport().get_camera_2d()
 		if cam:
@@ -85,12 +91,13 @@ func _process(delta: float) -> void:
 				if grid:
 					grid.hover_world = wp
 			else:
-				player.aim_world = Vector2.ZERO
+				if world_mine_pid == -1:
+					player.aim_world = Vector2.ZERO
 				if grid:
 					grid.hover_world = player.position
 			if grid:
 				grid.show_ghost = (modal == Modal.NONE and State.BLD.has(State.selected_tool) and State.get_stock(State.selected_tool) > 0)
-		player.firing_mine = (modal == Modal.NONE and State.selected_tool == "mine" and (mouse_mine_held or act_pid != -1 or Input.is_key_pressed(KEY_SPACE)))
+		player.firing_mine = (modal == Modal.NONE and State.selected_tool == "mine" and (mouse_mine_held or act_pid != -1 or world_mine_pid != -1 or Input.is_key_pressed(KEY_SPACE)))
 
 	root_ctrl.queue_redraw()
 
@@ -101,14 +108,29 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventScreenTouch:
 		touch_ui_active = true
+		_last_touch_ms = Time.get_ticks_msec()
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if event.pressed: _on_down(event.index, p, event.position)
 		else: _on_up(event.index)
 	elif event is InputEventScreenDrag:
+		touch_ui_active = true
+		_last_touch_ms = Time.get_ticks_msec()
+		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if event.index == joy_pid:
-			_upd_joy(event.position / maxf(0.1, scale.x))
+			_upd_joy(p)
+			get_viewport().set_input_as_handled()
+		elif event.index == act_pid:
+			_upd_mine_stick(p)
+			get_viewport().set_input_as_handled()
+		elif event.index == world_mine_pid and player:
+			var cam := get_viewport().get_camera_2d()
+			if cam:
+				player.aim_world = cam.get_canvas_transform().affine_inverse() * event.position
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton:
+		# モバイル実機でタッチ直後に発生するエミュレート／ゴーストマウスイベントを完全に無視！
+		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
+			return
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed: _on_down(-10, p, event.position)
@@ -120,8 +142,14 @@ func _input(event: InputEvent) -> void:
 				State.selected_tool = "mine"
 				if grid: grid.wire_pick_uid = -1
 				Sfx.play("click")
-	elif event is InputEventMouseMotion and joy_pid == -10:
-		_upd_joy(event.position / maxf(0.1, scale.x))
+	elif event is InputEventMouseMotion:
+		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
+			return
+		var p: Vector2 = event.position / maxf(0.1, scale.x)
+		if joy_pid == -10:
+			_upd_joy(p)
+		elif act_pid == -10:
+			_upd_mine_stick(p)
 
 func _on_key(code: int) -> void:
 	match code:
@@ -156,15 +184,18 @@ func _on_key(code: int) -> void:
 				grid.interact_near_player(player.position)
 
 func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
-	# 1. モバイル仮想コントロール
+	# 1. モバイル仮想コントロール（左：移動スティック / 右：方向指定採掘スティック）
 	if touch_ui_active and modal == Modal.NONE:
 		if pos.distance_to(joy_center) <= joy_r + 30.0:
 			joy_pid = pid; _upd_joy(pos); get_viewport().set_input_as_handled(); return
-		if pos.distance_to(act_center) <= 38.0:
+		if pos.distance_to(act_center) <= mine_r + 24.0:
 			act_pid = pid
+			_upd_mine_stick(pos)
 			if grid and player:
 				if State.selected_tool == "mine":
-					if not grid.interact_near_player(player.position):
+					if mine_vec.length() < 0.25 and grid.interact_near_player(player.position):
+						act_pid = -1; mine_vec = Vector2.ZERO
+					else:
 						player.firing_mine = true
 				else:
 					grid.handle_world_click(player.position)
@@ -190,18 +221,26 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 				return
 			if State.selected_tool == "mine":
 				if pid == -10: mouse_mine_held = true
-				elif player: player.firing_mine = true
+				else:
+					world_mine_pid = pid
+					if player: player.firing_mine = true
 
 func _on_up(pid: int) -> void:
 	if pid == joy_pid: joy_pid = -1; joy_vec = Vector2.ZERO
-	if pid == act_pid: act_pid = -1
+	if pid == act_pid: act_pid = -1; mine_vec = Vector2.ZERO
 	if pid == brk_pid: brk_pid = -1
+	if pid == world_mine_pid: world_mine_pid = -1
 	if pid == -10: mouse_mine_held = false
 
 func _upd_joy(pos: Vector2) -> void:
 	var d := pos - joy_center
 	if d.length() > joy_r: d = d.normalized() * joy_r
 	joy_vec = d / maxf(1.0, joy_r)
+
+func _upd_mine_stick(pos: Vector2) -> void:
+	var d := pos - act_center
+	if d.length() > mine_r: d = d.normalized() * mine_r
+	mine_vec = d / maxf(1.0, mine_r)
 
 func _pick_tool(tid: String) -> void:
 	if tid == "wire" and not State.is_unlocked("wire"):
@@ -952,18 +991,35 @@ func _draw_depot_modal(vp: Vector2, font: Font) -> void:
 		if cnt > 0: _add_hit(tr, "depot_take", it)
 		y += 24.0
 
-# 12. タッチ仮想コントロール（モバイル／タッチ端末のみ表示！）
+# 12. タッチ仮想コントロール（左：移動スティック / 右：方向指定採掘スティック！）
 func _draw_touch_controls(font: Font) -> void:
+	# 左下: 移動ジョイスティック
 	root_ctrl.draw_circle(joy_center, joy_r, Color(0.04, 0.08, 0.14, 0.52))
 	root_ctrl.draw_arc(joy_center, joy_r, 0.0, TAU, 32, Color(0.36, 0.80, 1.0, 0.74), 2.0)
 	var pk := joy_center + joy_vec * (joy_r * 0.62)
 	root_ctrl.draw_circle(pk, 18.0, Color(0.10, 0.24, 0.38, 0.88))
 	root_ctrl.draw_arc(pk, 18.0, 0.0, TAU, 24, Color(0.45, 0.96, 1.0), 2.0)
 
-	root_ctrl.draw_circle(act_center, 33.0, Color(0.06, 0.16, 0.14, 0.82))
-	root_ctrl.draw_arc(act_center, 33.0, 0.0, TAU, 24, Color(0.35, 0.96, 0.68), 2.2)
-	var act_lbl := "採掘" if State.selected_tool == "mine" else ("接続" if State.selected_tool == "wire" else "設置")
-	root_ctrl.draw_string(font, act_center + Vector2(-30, 5), act_lbl, HORIZONTAL_ALIGNMENT_CENTER, 60, 12, Color.WHITE)
+	# 右下: ツインスティック採掘パッド（ドラッグした方向へ正確に採掘ビーム照射！）
+	if State.selected_tool == "mine":
+		root_ctrl.draw_circle(act_center, mine_r, Color(0.04, 0.13, 0.11, 0.56))
+		root_ctrl.draw_arc(act_center, mine_r, 0.0, TAU, 32, Color(0.35, 0.96, 0.68, 0.82), 2.2)
+		# 十字ガイド目盛
+		for a_deg in [0.0, 90.0, 180.0, 270.0]:
+			var dv := Vector2.from_angle(deg_to_rad(a_deg))
+			root_ctrl.draw_line(act_center + dv * (mine_r - 9.0), act_center + dv * (mine_r - 2.0), Color(0.38, 0.96, 0.76, 0.45), 1.6)
+		var mpk := act_center + mine_vec * (mine_r * 0.64)
+		if mine_vec.length() > 0.12:
+			var md := mine_vec.normalized()
+			root_ctrl.draw_line(act_center, act_center + md * (mine_r + 12.0), Color(0.42, 1.0, 0.86, 0.85), 2.6)
+		root_ctrl.draw_circle(mpk, 19.0, Color(0.08, 0.28, 0.22, 0.92))
+		root_ctrl.draw_arc(mpk, 19.0, 0.0, TAU, 24, Color(0.42, 1.0, 0.80), 2.2)
+		root_ctrl.draw_string(font, mpk + Vector2(-20, 4), "採掘", HORIZONTAL_ALIGNMENT_CENTER, 40, 10, Color.WHITE)
+	else:
+		root_ctrl.draw_circle(act_center, 36.0, Color(0.06, 0.16, 0.14, 0.82))
+		root_ctrl.draw_arc(act_center, 36.0, 0.0, TAU, 24, Color(0.35, 0.96, 0.68), 2.2)
+		var act_lbl := "接続" if State.selected_tool == "wire" else ("回収" if State.selected_tool == "salvage" else "設置")
+		root_ctrl.draw_string(font, act_center + Vector2(-30, 5), act_lbl, HORIZONTAL_ALIGNMENT_CENTER, 60, 12, Color.WHITE)
 
 	root_ctrl.draw_circle(brk_center, 25.0, Color(0.18, 0.07, 0.09, 0.80))
 	root_ctrl.draw_arc(brk_center, 25.0, 0.0, TAU, 24, Color(1.0, 0.44, 0.42), 2.0)

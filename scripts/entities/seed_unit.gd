@@ -13,9 +13,12 @@ var velocity: Vector2 = Vector2.ZERO
 var on_ground: bool = false
 var move_input: Vector2 = Vector2.ZERO
 var aim_world: Vector2 = Vector2.ZERO
+var manual_aim_dir: Vector2 = Vector2.ZERO
+var last_aim_dir: Vector2 = Vector2.DOWN
 var braking: bool = false
 var firing_mine: bool = false
 var mine_target: Dictionary = {}
+var beam_end_world: Vector2 = Vector2.ZERO
 var firing_chem: bool = false
 var firing_ion: bool = false
 var local_g: float = 1.0
@@ -130,19 +133,35 @@ func _physics_process(delta: float) -> void:
 		grid.collect_near_player(position, 86.0)
 		grid.service_player(position, delta)
 
-	# 5. Multi-Beam Mining & Combat Laser (1 Core Beam + N Docked Fabricator Drone Beams!)
+	# 5. Directional Multi-Beam Mining & Combat Laser (Strictly follows right mining stick or cursor!)
 	mine_target = {}
+	beam_end_world = Vector2.ZERO
 	if firing_mine and State.selected_tool == "mine":
-		var aim_dir := (aim_world - position).normalized() if (aim_world != Vector2.ZERO and aim_world.distance_to(position) > 8.0) else (wdir if wdir.length() > 0.1 else -up)
-		var reach := 220.0 + float(State.attached_drones) * 24.0
+		var aim_dir := last_aim_dir
+		if manual_aim_dir.length() > 0.10:
+			aim_dir = manual_aim_dir.normalized()
+		elif aim_world != Vector2.ZERO and aim_world.distance_to(position) > 8.0:
+			aim_dir = (aim_world - position).normalized()
+		elif wdir.length() > 0.10:
+			aim_dir = wdir.normalized()
+		else:
+			aim_dir = -up
+		last_aim_dir = aim_dir
+
+		var reach := 225.0 + float(State.attached_drones) * 24.0
 		var tgt := planet.find_mine_target(position, aim_dir, reach)
 		if not tgt.is_empty():
 			mine_target = tgt
-			var dps := (26.0 + float(State.attached_drones) * 8.5 + float(State.propulsion_tier) * 6.0) * delta
+			beam_end_world = Vector2(tgt["pos"])
+			var dps := (28.0 + float(State.attached_drones) * 9.0 + float(State.propulsion_tier) * 6.0) * delta
 			planet.damage_target(tgt, dps)
-		elif swarm and not State.boss_dead and position.distance_to(swarm.boss_pos) <= 460.0:
+		elif swarm and not State.boss_dead and position.distance_to(swarm.boss_pos) <= 480.0 and (swarm.boss_pos - position).normalized().dot(aim_dir) > 0.85:
 			mine_target = {"kind": "boss", "pos": swarm.boss_pos}
+			beam_end_world = swarm.boss_pos
 			swarm.damage_boss((50.0 + float(State.attached_drones) * 12.0) * delta)
+		else:
+			# Extend beam visibly in the exact aimed direction even across open air/space!
+			beam_end_world = position + aim_dir * reach
 
 	queue_redraw()
 
@@ -228,12 +247,14 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, 16.0, Color(0.35, 0.85, 1.0))
 
 	# 5. Synchronized Multi-Beam Mining / Welding Lasers (Core + ALL Docked Drones!)
-	if not mine_target.is_empty():
-		var lt := to_local(Vector2(mine_target["pos"]))
-		var bc := Color(0.32, 0.94, 1.0, 0.90) if String(mine_target.get("kind", "")) != "boss" else Color(1.0, 0.44, 0.24, 0.92)
-		draw_line(Vector2.ZERO, lt, bc, 4.6)
-		draw_line(Vector2.ZERO, lt, Color(0.95, 1.0, 1.0, 0.95), 1.6)
+	if firing_mine and State.selected_tool == "mine" and beam_end_world != Vector2.ZERO:
+		var lt := to_local(beam_end_world)
+		var hit := not mine_target.is_empty()
+		var bc := Color(1.0, 0.44, 0.24, 0.92) if String(mine_target.get("kind", "")) == "boss" else (Color(0.32, 0.94, 1.0, 0.92) if hit else Color(0.32, 0.94, 1.0, 0.56))
+		draw_line(Vector2.ZERO, lt, bc, 4.6 if hit else 3.2)
+		draw_line(Vector2.ZERO, lt, Color(0.95, 1.0, 1.0, 0.95 if hit else 0.70), 1.6)
 		for dp in drone_positions:
-			draw_line(dp, lt, Color(0.45, 0.96, 1.0, 0.68), 2.2)
+			draw_line(dp, lt, Color(0.45, 0.96, 1.0, 0.68 if hit else 0.40), 2.2)
 		if glow:
-			draw_texture_rect(glow, Rect2(lt.x - 24, lt.y - 24, 48, 48), false, bc)
+			var gr := 24.0 if hit else 14.0
+			draw_texture_rect(glow, Rect2(lt.x - gr, lt.y - gr, gr * 2.0, gr * 2.0), false, bc)
