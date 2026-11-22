@@ -11,6 +11,7 @@ const ICON_IDS: Array[String] = [
 	"fe", "cu", "si", "ti",
 	"plate_fe", "wire_cu", "wafer_si", "circuit",
 	"alloy", "sci_pack", "probe_stock", "ice",
+	"quantum_core", "antimatter", "dyson_panel",
 ]
 
 func _ready() -> void:
@@ -22,8 +23,9 @@ func _ready() -> void:
 		"seed_core", "fab_drone", "orbital_booster",
 		"depot", "gantry_printer", "smelter", "assembler", "mass_driver",
 		"drill", "belt", "lift", "solar", "tesla", "battery", "geothermal", "turret",
+		"orb_power", "orb_laser", "orb_collector", "orb_station",
 		"crystal_si", "ore_fe", "ore_cu", "ore_ti",
-		"enemy_station", "moon_luna", "moon_ignis", "moon_cryo",
+		"enemy_station", "moon_luna", "moon_ignis", "moon_cryo", "planet_astra",
 		"ast_fe", "ast_cu", "ast_si", "ast_ti",
 		"icon_strip", "glow",
 	]

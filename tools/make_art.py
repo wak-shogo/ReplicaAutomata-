@@ -363,6 +363,88 @@ def make_buildings():
     d.point((24, 25), fill=(255, 220, 220, 255))
     outline(im).save(os.path.join(OUT, "turret.png"))
 
+    # 13) Orbital Power Satellite (76x56) - dual golden-blue solar wings + microwave transmitter dish
+    im = Image.new("RGBA", (76, 56), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    # Left & Right solar wing arrays
+    d.rectangle([2, 14, 24, 34], fill=(18, 56, 118, 255), outline=DK)
+    d.rectangle([52, 14, 74, 34], fill=(18, 56, 118, 255), outline=DK)
+    for gx in (8, 14, 20, 58, 64, 70):
+        d.line([gx, 15, gx, 33], fill=(64, 174, 244, 255))
+    d.line([3, 24, 23, 24], fill=(64, 174, 244, 255))
+    d.line([53, 24, 73, 24], fill=(64, 174, 244, 255))
+    # Struts
+    d.rectangle([23, 21, 53, 27], fill=S3, outline=DK)
+    # Central reactor core + gold microwave dish below
+    box(d, 28, 10, 48, 36, S2, S3, S1)
+    d.ellipse([33, 16, 43, 26], fill=AM2, outline=DK)
+    d.ellipse([35, 18, 41, 24], fill=AM3)
+    d.pieslice([26, 34, 50, 52], 180, 360, fill=AM1, outline=DK)
+    d.ellipse([35, 42, 41, 48], fill=CY2, outline=DK)
+    outline(im).save(os.path.join(OUT, "orb_power.png"))
+
+    # 14) Orbital Mining Laser (64x68) - heavy orbital lens cannon aimed downward
+    im = Image.new("RGBA", (64, 68), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    # Cooling radiator fins
+    d.polygon([(4, 14), (20, 10), (20, 32), (6, 28)], fill=S1, outline=DK)
+    d.polygon([(60, 14), (44, 10), (44, 32), (58, 28)], fill=S1, outline=DK)
+    for ry in (16, 22, 27):
+        d.line([6, ry, 18, ry], fill=CY1)
+        d.line([46, ry, 58, ry], fill=CY1)
+    # Armored body + capacitor rings
+    box(d, 18, 6, 46, 38, S2, S3, S1)
+    hazard(d, 20, 10, 44, 14)
+    d.rectangle([25, 18, 39, 32], fill=(16, 40, 56, 255), outline=DK)
+    d.ellipse([27, 20, 37, 30], fill=CY2)
+    d.ellipse([30, 22, 34, 26], fill=CY3)
+    # Focusing barrel + glowing emerald-cyan lens
+    box(d, 22, 38, 42, 54, S1, S2, DK, rivets=False)
+    d.rectangle([20, 44, 44, 48], fill=AM2, outline=DK)
+    d.polygon([(24, 54), (40, 54), (36, 64), (28, 64)], fill=CY1, outline=DK)
+    d.rectangle([29, 57, 35, 63], fill=(96, 255, 214, 255))
+    outline(im).save(os.path.join(OUT, "orb_laser.png"))
+
+    # 15) Orbital Collector Module (68x64) - magnetic tractor scoop with glowing prongs
+    im = Image.new("RGBA", (68, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    box(d, 16, 8, 52, 34, S2, S3, S1)
+    d.rectangle([22, 14, 46, 28], fill=(16, 34, 48, 255), outline=DK)
+    d.rectangle([24, 16, 44, 22], fill=(56, 232, 186, 255))
+    # Tractor arms curving downward like a wide catcher funnel
+    d.polygon([(14, 28), (22, 28), (16, 54), (6, 48)], fill=S3, outline=DK)
+    d.polygon([(46, 28), (54, 28), (62, 48), (52, 54)], fill=S3, outline=DK)
+    d.ellipse([6, 48, 16, 58], fill=CY2, outline=DK)
+    d.ellipse([52, 48, 62, 58], fill=CY2, outline=DK)
+    # Magnetic field arc inside scoop
+    d.arc([14, 34, 54, 60], 10, 170, fill=(84, 248, 226, 255), width=2)
+    d.arc([20, 40, 48, 56], 15, 165, fill=CY3, width=2)
+    outline(im).save(os.path.join(OUT, "orb_collector.png"))
+
+    # 16) Orbital Craft Station (92x76) - ring-station orbital nanofactory
+    im = Image.new("RGBA", (92, 76), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    # Outer habitat/factory ring
+    d.ellipse([8, 12, 84, 64], fill=S1, outline=DK)
+    d.ellipse([18, 20, 74, 56], fill=(0, 0, 0, 0), outline=DK)
+    # Cross truss spokes
+    d.rectangle([12, 34, 80, 42], fill=S2, outline=DK)
+    d.rectangle([41, 14, 51, 62], fill=S2, outline=DK)
+    # Left & Right fabrication pods
+    box(d, 4, 26, 22, 50, S2, S3, S1)
+    box(d, 70, 26, 88, 50, S2, S3, S1)
+    d.rectangle([8, 32, 18, 44], fill=CY1, outline=DK)
+    d.rectangle([74, 32, 84, 44], fill=AM2, outline=DK)
+    # Central Zero-G Nanofactory Core
+    box(d, 30, 22, 62, 54, S3, S4, S1)
+    d.ellipse([36, 28, 56, 48], fill=(32, 22, 64, 255), outline=DK)
+    d.ellipse([40, 32, 52, 44], fill=(164, 108, 255, 255))
+    d.ellipse([43, 35, 49, 41], fill=CY3)
+    # Top antenna mast
+    d.line([46, 2, 46, 14], fill=S4, width=2)
+    d.ellipse([43, 1, 49, 7], fill=CY2, outline=DK)
+    outline(im).save(os.path.join(OUT, "orb_station.png"))
+
 
 def make_crystals_and_celestials():
     # Large dramatic subterranean crystal clusters matching target_gameplay_concept.jpeg!
@@ -442,6 +524,7 @@ def make_crystals_and_celestials():
     sphere("moon_luna.png", 96, (104, 118, 146, 255), (186, 204, 236, 255), (12, 16, 28, 255), (58, 68, 88, 255), 501)
     sphere("moon_ignis.png", 96, (162, 62, 32, 255), (255, 166, 62, 255), (24, 10, 10, 255), (255, 218, 88, 255), 502)
     sphere("moon_cryo.png", 96, (72, 152, 192, 255), (196, 244, 255, 255), (12, 26, 46, 255), (42, 92, 134, 255), 503)
+    sphere("planet_astra.png", 96, (88, 64, 168, 255), (174, 242, 224, 255), (14, 12, 36, 255), (56, 134, 142, 255), 504)
 
     for fname, ore_col, seed in [
         ("ast_fe.png", (236, 70, 64, 255), 601),
@@ -470,13 +553,16 @@ def make_crystals_and_celestials():
 
 
 def make_icons_and_glow():
-    # 12 crisp 16x16 icons: fe, cu, si, ti, plate_fe, wire_cu, wafer_si, circuit, alloy, sci_pack, probe_stock, ice
-    im = Image.new("RGBA", (192, 16), (0, 0, 0, 0))
+    # 15 crisp 16x16 icons:
+    # 0..11: fe, cu, si, ti, plate_fe, wire_cu, wafer_si, circuit, alloy, sci_pack, probe_stock, ice
+    # 12..14: quantum_core, antimatter, dyson_panel
+    im = Image.new("RGBA", (240, 16), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     cols = [
         (228, 64, 58, 255), (242, 158, 46, 255), (62, 214, 255, 255), (174, 98, 246, 255),
         (154, 174, 198, 255), (236, 134, 48, 255), (52, 164, 224, 255), (46, 206, 118, 255),
         (194, 162, 242, 255), (72, 240, 186, 255), (255, 214, 82, 255), (156, 232, 255, 255),
+        (124, 236, 255, 255), (255, 76, 168, 255), (255, 206, 68, 255),
     ]
     for i, c in enumerate(cols):
         x = i * 16
@@ -490,6 +576,21 @@ def make_icons_and_glow():
         elif i == 10:
             d.polygon([(x + 8, 2), (x + 3, 13), (x + 8, 10), (x + 13, 13)], fill=c, outline=DK)
             d.point((x + 8, 6), fill=CY3)
+        elif i == 12:
+            # Quantum Core: cyan-violet ringed energy sphere
+            d.ellipse([x + 2, 2, x + 13, 13], fill=(92, 54, 198, 255), outline=DK)
+            d.ellipse([x + 4, 4, x + 11, 11], fill=c)
+            d.ellipse([x + 6, 6, x + 9, 9], fill=(255, 255, 255, 255))
+        elif i == 13:
+            # Antimatter Cell: glowing crimson-magenta containment vial
+            d.rectangle([x + 4, 1, x + 11, 14], fill=S2, outline=DK)
+            d.rectangle([x + 5, 4, x + 10, 11], fill=c)
+            d.line([x + 6, 5, x + 6, 10], fill=hi)
+        elif i == 14:
+            # Dyson Panel: hexagonal golden mirror array
+            d.polygon([(x + 8, 1), (x + 14, 5), (x + 14, 11), (x + 8, 14), (x + 2, 11), (x + 2, 5)], fill=c, outline=DK)
+            d.line([x + 8, 2, x + 8, 13], fill=hi)
+            d.line([x + 3, 8, x + 13, 8], fill=(184, 112, 18, 255))
         else:
             d.rectangle([x + 2, 3, x + 13, 12], fill=c, outline=DK)
             d.line([x + 3, 4, x + 12, 4], fill=hi)

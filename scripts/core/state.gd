@@ -30,6 +30,9 @@ const RES_NAMES: Dictionary = {
 	"alloy": "合金",
 	"sci_pack": "研究パック",
 	"probe_stock": "プローブ",
+	"quantum_core": "量子コア",
+	"antimatter": "反物質セル",
+	"dyson_panel": "ダイソン板",
 }
 
 const DOCTRINE_NAMES: Array[String] = ["収穫", "複製", "防衛", "強襲"]
@@ -68,6 +71,7 @@ var pwr_prod: float = 0.0
 var pwr_use: float = 0.0
 var pwr_stored: float = 0.0
 var pwr_cap: float = 0.0
+var orb_power_bonus_w: float = 0.0
 var wire_count: int = 0
 var active_teslas: int = 0
 var active_printers: int = 0
@@ -118,66 +122,91 @@ const TECH_ORDER: Array[String] = [
 const TECHS: Dictionary = {
 	"seed_core": {
 		"name": "シード・コア", "col": 0, "row": 1, "req": [], "cost": {},
+		"icon": "seed_core",
 		"unlocks": ["採掘レーザー", "ドローン増設"],
-		"summary": "クラフト画面でファブリケータードローンを製造し、同時採掘と製造速度を強化します。",
-		"flow": "鉱石採掘 → クラフトでドローン製造 → 自動ドッキング",
+		"unlock_keys": ["seed_core", "fab_drone"],
+		"flow_keys": ["ore_fe", "seed_core", "fab_drone"],
+		"summary": "ドローン製造で採掘＆製造を高速化",
+		"flow": "採掘 ➔ ドローン製造 ➔ 自動合体",
 	},
 	"power_grid": {
 		"name": "電力とテスラ", "col": 1, "row": 0, "req": ["seed_core"],
 		"cost": {"fe": 12, "cu": 6},
-		"unlocks": ["ソーラーパネル", "テスラリレー", "夜間バッテリー", "電線"],
-		"summary": "発電機と夜間バッテリーをクラフトし、電線でテスラリレーへ繋いで周囲へ給電します。",
-		"flow": "ソーラー＋バッテリー ─(電線)→ テスラリレー ─(電力ドーム)→ 各機械",
+		"icon": "tesla",
+		"unlocks": ["ソーラー", "テスラ", "蓄電池", "電線"],
+		"unlock_keys": ["solar", "tesla", "battery"],
+		"flow_keys": ["solar", "battery", "tesla"],
+		"summary": "発電機と蓄電池を電線でテスラへ接続（夜間対策）",
+		"flow": "ソーラー＋蓄電池 ➔ 電線 ➔ テスラ",
 	},
 	"cave_logistics": {
 		"name": "洞窟物流ライン", "col": 1, "row": 2, "req": ["power_grid"],
 		"cost": {"fe": 16, "cu": 8},
-		"unlocks": ["採掘ドリル", "自由搬送ライン", "カーゴデポ"],
-		"summary": "硬質鉱床に採掘ドリルを設置し、自由結束の搬送ラインで施設同士を繋いで自動運搬します。",
-		"flow": "硬質鉱床＋ドリル ─(自由搬送ライン)→ カーゴデポ(出力フィルタ)",
+		"icon": "drill",
+		"unlocks": ["採掘ドリル", "搬送ライン", "倉庫"],
+		"unlock_keys": ["drill", "depot"],
+		"flow_keys": ["drill", "depot"],
+		"summary": "硬質鉱床にドリル設置＆自由結束で自動搬送",
+		"flow": "硬質鉱床ドリル ➔ 搬送ライン ➔ 倉庫",
 	},
 	"smelting_booster": {
 		"name": "精錬と軌道進出", "col": 2, "row": 1, "req": ["cave_logistics"],
 		"cost": {"fe": 22, "cu": 12},
-		"unlocks": ["溶鉱炉", "軌道ブースター"],
-		"summary": "溶鉱炉で鉄板・銅線・基板を精錬し、軌道ブースターを製造して宇宙へ飛び立ちます。",
-		"flow": "カーゴデポ → 溶鉱炉 → 鉄板/銅線/基板 → 軌道ブースター",
+		"icon": "orbital_booster",
+		"unlocks": ["溶鉱炉", "軌道ブースター", "軌道発電衛星", "軌道採掘レーザー"],
+		"unlock_keys": ["smelter", "orbital_booster", "orb_power", "orb_laser"],
+		"flow_keys": ["smelter", "orbital_booster", "orb_power", "orb_laser"],
+		"summary": "宇宙軌道へ進出！同一軌道上に発電衛星＆採掘レーザー配置",
+		"flow": "溶鉱炉 ➔ ブースター ➔ 軌道送電＆軌道採掘",
 	},
 	"circuits_geo": {
 		"name": "電子回路と地熱", "col": 3, "row": 0, "req": ["smelting_booster"],
 		"cost": {"plate_fe": 6, "wire_cu": 4, "si": 8},
+		"icon": "assembler",
 		"unlocks": ["自動組立機", "地熱発電所", "レーザー砲台"],
-		"summary": "自動組立機で回路・合金を量産。地熱発電所で昼夜問わず安定した大電力を確保します。",
-		"flow": "溶鉱炉 → 自動組立機(回路/合金) ＋ 地熱発電",
+		"unlock_keys": ["assembler", "geothermal", "turret"],
+		"flow_keys": ["smelter", "assembler", "geothermal"],
+		"summary": "回路・合金量産＆昼夜無休の地熱発電",
+		"flow": "溶鉱炉 ➔ 組立機 ＋ 地熱発電",
 	},
 	"deep_space": {
-		"name": "深宇宙クライオ", "col": 3, "row": 2, "req": ["circuits_geo"],
+		"name": "深宇宙と軌道工場", "col": 3, "row": 2, "req": ["circuits_geo"],
 		"cost": {"plate_fe": 8, "wire_cu": 6, "wafer_si": 4, "circuit": 4},
-		"unlocks": ["深宇宙クライオ推進"],
-		"summary": "無抵抗の宇宙空間をケプラー軌道で周回し、衛星や小惑星からチタンと氷を採取します。",
-		"flow": "軌道飛行 → 衛星ルナ/イグニス/クライオで希少資源採取",
+		"icon": "orb_station",
+		"unlocks": ["クライオ推進", "軌道回収モジュール", "軌道クラフト局"],
+		"unlock_keys": ["orb_collector", "orb_station", "quantum_core", "antimatter"],
+		"flow_keys": ["orb_laser", "orb_collector", "orb_station", "quantum_core"],
+		"summary": "軌道採掘で舞い上がる資源を回収し、軌道上で量子コア・反物質を製造！",
+		"flow": "軌道レーザー ➔ 軌道回収 ➔ 軌道クラフト局",
 	},
 	"macro_swarm": {
 		"name": "マクロ艦隊量産", "col": 4, "row": 1, "req": ["deep_space"],
 		"cost": {"plate_fe": 12, "circuit": 8, "ti": 10},
-		"unlocks": ["マクロ3Dプリンタ", "マスドライバー", "旗艦ドライブ"],
-		"summary": "マクロ3Dプリンタでレプリカ機体を量産し、マスドライバーで10,000機艦隊を射出！",
-		"flow": "マクロ3Dプリンタ → ベルト → マスドライバー → 10,000機艦隊",
+		"icon": "mass_driver",
+		"unlocks": ["3Dプリンタ", "マスドライバー", "旗艦ドライブ"],
+		"unlock_keys": ["gantry_printer", "mass_driver", "probe_stock"],
+		"flow_keys": ["gantry_printer", "mass_driver", "probe_stock"],
+		"summary": "10,000機レプリカ艦隊を宇宙へ連続射出！",
+		"flow": "3Dプリンタ ➔ 射出機 ➔ 10,000機艦隊",
 	},
 	"megastructures": {
 		"name": "巨大構造物", "col": 5, "row": 1, "req": ["macro_swarm"],
 		"cost": {"alloy": 8, "circuit": 12, "ti": 16},
+		"icon": "dyson_panel",
 		"unlocks": ["軌道エレベーター", "ダイソンリング", "軌道要塞", "ワープゲート"],
-		"summary": "軌道メガストラクチャーを建造し、汚染軌道要塞を撃破して星系を解放します。",
-		"flow": "10,000機艦隊で強襲 ＋ ワープゲート建造 → 完全勝利",
+		"unlock_keys": ["dyson_panel", "antimatter", "enemy_station"],
+		"flow_keys": ["orb_station", "dyson_panel", "enemy_station"],
+		"summary": "星系メガ構造物建造＆汚染軌道要塞を撃破！",
+		"flow": "艦隊強襲 ＋ ワープゲート ➔ 完全勝利",
 	},
 }
 
 const CRAFT_TABS: Array[Dictionary] = [
-	{"id": "unit",  "label": "機体・増設"},
-	{"id": "power", "label": "電力・防衛", "items": ["solar", "tesla", "battery", "geothermal", "turret"]},
-	{"id": "logi",  "label": "採掘・物流", "items": ["drill", "depot"]},
-	{"id": "fact",  "label": "加工・艦隊", "items": ["smelter", "assembler", "gantry_printer", "mass_driver"]},
+	{"id": "unit",    "label": "機体・増設"},
+	{"id": "power",   "label": "電力・防衛", "items": ["solar", "tesla", "battery", "geothermal", "turret"]},
+	{"id": "logi",    "label": "採掘・物流", "items": ["drill", "depot"]},
+	{"id": "fact",    "label": "加工・艦隊", "items": ["smelter", "assembler", "gantry_printer", "mass_driver"]},
+	{"id": "orbital", "label": "軌道施設",   "items": ["orb_power", "orb_laser", "orb_collector", "orb_station"]},
 ]
 
 const BLD: Dictionary = {
@@ -244,7 +273,31 @@ const BLD: Dictionary = {
 	"mass_driver": {
 		"name": "マスドライバー", "short": "射出機", "tex": "mass_driver", "req": "macro_swarm",
 		"cost": {"plate_fe": 18, "wire_cu": 10, "circuit": 6}, "craft_time": 6.0, "gen": 0.0, "use": 30.0, "w": 134, "h": 112,
-		"desc": "プローブを宇宙へ射出し、10,000機スウォーム艦隊を編成(30W)。",
+		"desc": "プローブを宇宙へ射出(30W)",
+	},
+	"orb_power": {
+		"name": "軌道発電衛星", "short": "軌道送電", "tex": "orb_power", "req": "smelting_booster",
+		"orbital": true,
+		"cost": {"plate_fe": 8, "wire_cu": 6, "wafer_si": 4}, "craft_time": 4.5, "gen": 120.0, "use": 0.0, "w": 76, "h": 56,
+		"desc": "軌道上で+120W発電し地上・軌道施設へ無線送電",
+	},
+	"orb_laser": {
+		"name": "軌道採掘レーザー", "short": "軌道採掘", "tex": "orb_laser", "req": "smelting_booster",
+		"orbital": true,
+		"cost": {"plate_fe": 10, "wire_cu": 8, "wafer_si": 4}, "craft_time": 5.0, "gen": 0.0, "use": 40.0, "w": 64, "h": 68,
+		"desc": "地上の鉱物を自動採掘し宇宙へ打ち上げ（未回収は重力落下）",
+	},
+	"orb_collector": {
+		"name": "軌道回収モジュール", "short": "軌道回収", "tex": "orb_collector", "req": "deep_space",
+		"orbital": true,
+		"cost": {"plate_fe": 10, "circuit": 4, "ti": 4}, "craft_time": 4.5, "gen": 0.0, "use": 25.0, "w": 68, "h": 64,
+		"desc": "打ち上がった鉱物パケットを自動回収し軌道工場へ転送",
+	},
+	"orb_station": {
+		"name": "軌道クラフト局", "short": "軌道工場", "tex": "orb_station", "req": "deep_space",
+		"orbital": true,
+		"cost": {"plate_fe": 14, "circuit": 8, "alloy": 4}, "craft_time": 6.0, "gen": 0.0, "use": 45.0, "w": 92, "h": 76,
+		"desc": "回収資源から量子コア・反物質・ダイソン板・軌道プローブ製造",
 	},
 }
 
@@ -327,6 +380,7 @@ func reset_all() -> void:
 		"fe": 0, "cu": 0, "si": 0, "ti": 0, "ice": 0,
 		"plate_fe": 0, "wire_cu": 0, "wafer_si": 0,
 		"circuit": 0, "alloy": 0, "sci_pack": 0, "probe_stock": 0,
+		"quantum_core": 0, "antimatter": 0, "dyson_panel": 0,
 	}
 	bld_stock.clear()
 	craft_queue.clear()
@@ -338,7 +392,7 @@ func reset_all() -> void:
 	max_ion_bat = 100.0; ion_bat = 100.0
 	swarm_fleet = 0; total_launches = 0; doctrine = Doctrine.HARVEST
 	boss_hp = boss_max_hp; boss_dead = false; game_won = false
-	pwr_prod = 0.0; pwr_use = 0.0; pwr_stored = 0.0; pwr_cap = 0.0
+	pwr_prod = 0.0; pwr_use = 0.0; pwr_stored = 0.0; pwr_cap = 0.0; orb_power_bonus_w = 0.0
 	wire_count = 0; active_teslas = 0; active_printers = 0; total_printers = 0
 	selected_tool = "mine"; build_dir = 1; orbit_view = false
 	megastructures = {"elevator": false, "dyson": false, "citadel": false, "warpgate": false}
@@ -380,6 +434,9 @@ func add_stock(bid: String, delta: int) -> void:
 		bld_stock[bid] = nxt
 	stock_changed.emit(bid, nxt)
 	update_tutorial()
+
+func is_orbital_bld(bid: String) -> bool:
+	return BLD.has(bid) and bool(BLD[bid].get("orbital", false))
 
 func get_owned_buildings() -> Array[String]:
 	var out: Array[String] = []

@@ -150,7 +150,7 @@ func _too_close_to_existing(pos: Vector2, bid: String) -> bool:
 	return false
 
 func try_place_at(bid: String, world_pos: Vector2) -> bool:
-	if not planet or not State.BLD.has(bid): return false
+	if not planet or not State.BLD.has(bid) or State.is_orbital_bld(bid): return false
 	if not State.is_unlocked(bid):
 		Sfx.play("error")
 		State.add_log("先に【研究】で必要な技術を解放してください。", "warn")
@@ -423,23 +423,26 @@ func start_conveyor_from(uid: int) -> void:
 	State.add_log("搬送元選択: %s → 送り先の施設をタップ" % State.BLD[b["id"]]["name"], "info")
 
 func handle_world_click(world_pos: Vector2) -> bool:
+	var local_pos := to_local(world_pos)
 	var tool := State.selected_tool
+	if State.is_orbital_bld(tool):
+		return false
 	if tool == "wire":
 		salvage_armed_uid = -1; conveyor_pick_uid = -1
-		return try_wire_at(world_pos)
+		return try_wire_at(local_pos)
 	if tool == "conveyor":
 		salvage_armed_uid = -1; wire_pick_uid = -1
-		return try_conveyor_at(world_pos)
+		return try_conveyor_at(local_pos)
 	if tool == "salvage":
 		wire_pick_uid = -1; conveyor_pick_uid = -1
-		return try_double_tap_salvage(world_pos)
+		return try_double_tap_salvage(local_pos)
 	if State.BLD.has(tool):
 		salvage_armed_uid = -1; wire_pick_uid = -1; conveyor_pick_uid = -1
-		return try_place_at(tool, world_pos)
+		return try_place_at(tool, local_pos)
 
 	# 通常モード：施設をタップすると中身・詳細パネルを開く（タップ採掘は廃止！）
 	salvage_armed_uid = -1
-	var b := find_nearest(world_pos, 78.0)
+	var b := find_nearest(local_pos, 78.0)
 	if b.is_empty(): return false
 	var uid := int(b["uid"])
 	var bid := String(b["id"])
@@ -454,8 +457,8 @@ func handle_world_click(world_pos: Vector2) -> bool:
 	building_inspected.emit(uid)
 	return true
 
-func interact_near_player(pos: Vector2) -> bool:
-	var b := find_nearest(pos, 115.0)
+func interact_near_player(world_pos: Vector2) -> bool:
+	var b := find_nearest(to_local(world_pos), 115.0)
 	if b.is_empty(): return false
 	var uid := int(b["uid"])
 	if String(b["id"]) == "depot":
@@ -672,7 +675,7 @@ func _solve_power(delta: float) -> void:
 
 	var vis: Dictionary = {}
 	var tot_p := 0.0; var tot_u := 0.0; var tot_s := 0.0; var tot_c := 0.0; var t_on := 0
-	var dyson_w := 240.0 if bool(State.megastructures["dyson"]) else 0.0
+	var dyson_w := (240.0 if bool(State.megastructures["dyson"]) else 0.0) + State.orb_power_bonus_w
 
 	for uid in adj.keys():
 		if vis.has(uid): continue
@@ -781,7 +784,8 @@ func _try_send(b: Dictionary, buf: Dictionary, filter_item: String, dir_vec: Vec
 	if not ok: _buf_add(buf, it, 1)
 	return ok
 
-func collect_near_player(pos: Vector2, rad: float = 82.0) -> int:
+func collect_near_player(world_pos: Vector2, rad: float = 82.0) -> int:
+	var pos := to_local(world_pos)
 	var got := 0
 	for i in range(belt_items.size() - 1, -1, -1):
 		var p: Vector2 = Vector2(belt_items[i]["from"]).lerp(Vector2(belt_items[i]["to"]), float(belt_items[i]["t"]))
@@ -795,7 +799,8 @@ func collect_near_player(pos: Vector2, rad: float = 82.0) -> int:
 	if got > 0: Sfx.play("pop")
 	return got
 
-func service_player(pos: Vector2, delta: float) -> void:
+func service_player(world_pos: Vector2, delta: float) -> void:
+	var pos := to_local(world_pos)
 	var near_pad := false
 	for b in buildings:
 		if (b["id"] in POWER_NODES or b["id"] == "depot") and float(b["pwr_ratio"]) > 0.15:
@@ -805,7 +810,7 @@ func service_player(pos: Vector2, delta: float) -> void:
 		State.fuel = minf(State.max_fuel, State.fuel + 28.0 * delta)
 		State.hp = minf(State.max_hp, State.hp + 12.0 * delta)
 	else:
-		var sun := planet.get_sunlight(pos) if planet else 0.6
+		var sun := planet.get_sunlight_world(world_pos) if planet else 0.6
 		State.ion_bat = minf(State.max_ion_bat, State.ion_bat + (6.0 + 9.0 * sun) * delta)
 
 func _process(delta: float) -> void:
@@ -1020,9 +1025,10 @@ func _draw() -> void:
 	var font := ArtReg.get_font()
 	var fi := int(floor(anim_t * 10.0)) % 4
 
-	# 1. Placement Hologram Ghost under cursor/player
-	if show_ghost and State.BLD.has(State.selected_tool) and State.get_stock(State.selected_tool) > 0:
-		var pose := compute_snap_pose(hover_world, State.selected_tool)
+	# 1. Placement Hologram Ghost under cursor/player (ground buildings only)
+	var hover_local := to_local(hover_world)
+	if show_ghost and State.BLD.has(State.selected_tool) and not State.is_orbital_bld(State.selected_tool) and State.get_stock(State.selected_tool) > 0:
+		var pose := compute_snap_pose(hover_local, State.selected_tool)
 		if not pose.is_empty():
 			var info: Dictionary = State.BLD[State.selected_tool]
 			var pose_ok := bool(pose.get("valid", true))
@@ -1146,8 +1152,8 @@ func _draw() -> void:
 		var src_b := _by_uid(conveyor_pick_uid)
 		if not src_b.is_empty():
 			var p1 := _conv_anchor(src_b)
-			var snap_t := find_nearest(hover_world, 120.0, LOGI_NODES)
-			var p2 := _conv_anchor(snap_t) if (not snap_t.is_empty() and int(snap_t["uid"]) != conveyor_pick_uid) else hover_world
+			var snap_t := find_nearest(hover_local, 120.0, LOGI_NODES)
+			var p2 := _conv_anchor(snap_t) if (not snap_t.is_empty() and int(snap_t["uid"]) != conveyor_pick_uid) else hover_local
 			if p1.distance_to(p2) > 20.0:
 				var dist := p1.distance_to(p2)
 				var need_fe := calc_conveyor_cost(p1, p2)

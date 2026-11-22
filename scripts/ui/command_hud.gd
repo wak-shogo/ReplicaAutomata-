@@ -1,12 +1,16 @@
 extends CanvasLayer
 
-# STAR REPLICA: AUTOMA - ミニマル日本語HUD・クラフト製造キュー・研究ツリー・指令パネル・インタラクティブチュートリアル
-# すべての主要行動を2〜3タップ以内に収め、メイン画面のボタン数を最小限に整理。
+# STAR REPLICA: AUTOMA - ビジュアル重視・大型フォント日本語HUD
+# ・ドット絵アイコン＆フロー図解で文字を最小限に抑制
+# ・研究ツリーカードタップ → 専用「技術詳細ポップアップ」（右上「閉じる」＋下部横長「研究する」ボタン）
+# ・軌道施設インスペクタ＆同一軌道ワンタップ配置対応
+# ・モバイル実機シングルタップ保護・2本指ピンチズーム・ツインスティック採掘完全維持
 
-enum Modal { NONE, CRAFT, TECH, COMMAND, DEPOT, GUIDE, BUILDING }
+enum Modal { NONE, CRAFT, TECH, COMMAND, DEPOT, GUIDE, BUILDING, ORBITAL }
 
 var planet: SphericalPlanet = null
 var grid: Node2D = null
+var orbital: Node2D = null
 var player: Node2D = null
 var swarm: Node2D = null
 var game_root: Node2D = null
@@ -14,13 +18,15 @@ var game_root: Node2D = null
 var modal: int = Modal.NONE
 var craft_tab: int = 0
 var tech_sel: int = 1
+var tech_detail_open: bool = false
 var guide_tab: int = 0
 var depot_uid: int = -1
 var inspect_uid: int = -1
+var orbital_uid: int = -1
 var redrop_armed: bool = false
 var anim_t: float = 0.0
 
-# モバイル／タッチ端末専用仮想コントロール（左：移動スティック / 右：方向指定採掘スティック / 2本指ピンチズーム）
+# モバイル／タッチ仮想コントロール
 var touch_ui_active: bool = false
 var _last_touch_ms: int = -10000
 var joy_center: Vector2 = Vector2.ZERO
@@ -34,8 +40,8 @@ var act_pid: int = -1
 var brk_center: Vector2 = Vector2.ZERO
 var brk_pid: int = -1
 
-# 2本指ピンチズーム & ワールド単タップ判定（ピンチ中に誤タップ・誤採掘しない！）
-var _pinch_pts: Dictionary = {} # touch_index -> raw screen pos
+# 2本指ピンチズーム & 単タップ判定
+var _pinch_pts: Dictionary = {}
 var _pinch_dist: float = 0.0
 var _pinch_active: bool = false
 var _tap_pid: int = -1
@@ -63,11 +69,16 @@ func open_building(uid: int) -> void:
 	modal = Modal.BUILDING
 	root_ctrl.queue_redraw()
 
+func open_orbital(uid: int) -> void:
+	orbital_uid = uid
+	modal = Modal.ORBITAL
+	root_ctrl.queue_redraw()
+
 func _hud_vp() -> Vector2:
 	var raw := get_viewport().get_visible_rect().size
 	if raw.y > raw.x * 1.1:
 		touch_ui_active = true
-		var s := clampf(raw.x / 520.0, 1.35, 2.6)
+		var s := clampf(raw.x / 500.0, 1.35, 2.6)
 		scale = Vector2(s, s)
 		return raw / s
 	scale = Vector2.ONE
@@ -78,11 +89,10 @@ func _process(delta: float) -> void:
 	var vp := _hud_vp()
 	joy_r = 52.0
 	mine_r = 48.0
-	joy_center = Vector2(joy_r + 22.0, vp.y - joy_r - 116.0)
-	act_center = Vector2(vp.x - mine_r - 20.0, vp.y - mine_r - 118.0)
-	brk_center = Vector2(act_center.x - mine_r - 34.0, vp.y - 134.0)
+	joy_center = Vector2(joy_r + 20.0, vp.y - joy_r - 122.0)
+	act_center = Vector2(vp.x - mine_r - 18.0, vp.y - mine_r - 124.0)
+	brk_center = Vector2(act_center.x - mine_r - 34.0, vp.y - 140.0)
 
-	# キーボード WASD / 矢印キー ＋ タッチジョイスティック（常に画面方向へ移動！）
 	var kb := Vector2.ZERO
 	if modal == Modal.NONE:
 		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): kb.x += 1.0
@@ -101,18 +111,22 @@ func _process(delta: float) -> void:
 				var mpos := get_viewport().get_mouse_position()
 				var wp := cam.get_canvas_transform().affine_inverse() * mpos
 				player.aim_world = wp
-				if grid:
-					grid.hover_world = wp
+				if grid: grid.hover_world = wp
 			else:
 				player.aim_world = Vector2.ZERO
-				if grid:
-					grid.hover_world = player.position
+				if grid: grid.hover_world = player.position
 			if grid:
-				grid.show_ghost = (modal == Modal.NONE and State.BLD.has(State.selected_tool) and State.get_stock(State.selected_tool) > 0)
-		# タップ採掘は廃止！右下採掘スティック（またはPCはSPACEキー）でのみ照射
+				grid.show_ghost = (modal == Modal.NONE and State.BLD.has(State.selected_tool) and not State.is_orbital_bld(State.selected_tool) and State.get_stock(State.selected_tool) > 0)
 		player.firing_mine = (modal == Modal.NONE and State.selected_tool == "mine" and (act_pid != -1 or Input.is_key_pressed(KEY_SPACE)))
 
 	root_ctrl.queue_redraw()
+
+func _handle_world_tap(wp: Vector2) -> bool:
+	if orbital and orbital.handle_world_click(wp):
+		return true
+	if grid and grid.handle_world_click(wp):
+		return true
+	return false
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -149,7 +163,6 @@ func _input(event: InputEvent) -> void:
 				_tap_moved = true
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton:
-		# モバイル実機でタッチ直後に発生するエミュレート／ゴーストマウスイベントを完全に無視！
 		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
 			return
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
@@ -157,32 +170,34 @@ func _input(event: InputEvent) -> void:
 			if event.pressed: _on_down(-10, p, event.position)
 			else: _on_up(-10, event.position)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			if modal != Modal.NONE:
+			if tech_detail_open:
+				tech_detail_open = false; Sfx.play("click")
+			elif modal != Modal.NONE:
 				modal = Modal.NONE; Sfx.play("click")
 			elif State.selected_tool != "mine":
 				State.selected_tool = "mine"
 				if grid:
-					grid.wire_pick_uid = -1
-					grid.salvage_armed_uid = -1
+					grid.wire_pick_uid = -1; grid.conveyor_pick_uid = -1; grid.salvage_armed_uid = -1
 				Sfx.play("click")
 	elif event is InputEventMouseMotion:
 		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
 			return
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
-		if joy_pid == -10:
-			_upd_joy(p)
-		elif act_pid == -10:
-			_upd_mine_stick(p)
+		if joy_pid == -10: _upd_joy(p)
+		elif act_pid == -10: _upd_mine_stick(p)
 
 func _on_key(code: int) -> void:
 	match code:
 		KEY_C:
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.CRAFT else Modal.CRAFT
 			Sfx.play("select")
 		KEY_T:
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.TECH else Modal.TECH
 			Sfx.play("select")
 		KEY_M:
+			tech_detail_open = false
 			if modal == Modal.COMMAND:
 				modal = Modal.NONE
 			else:
@@ -190,53 +205,49 @@ func _on_key(code: int) -> void:
 				if State.orbit_view: State.tut_opened_orbit = true
 			Sfx.play("click")
 		KEY_H:
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.GUIDE else Modal.GUIDE
 			Sfx.play("select")
 		KEY_ESCAPE:
-			if modal != Modal.NONE: modal = Modal.NONE
+			if tech_detail_open:
+				tech_detail_open = false
+			elif modal != Modal.NONE:
+				modal = Modal.NONE
 			else:
 				State.selected_tool = "mine"
-				if grid: grid.wire_pick_uid = -1
+				if grid: grid.wire_pick_uid = -1; grid.conveyor_pick_uid = -1
 			Sfx.play("click")
-		KEY_R:
-			State.build_dir = -State.build_dir
-			Sfx.play("click")
-			State.add_log("ベルト向き切替: %s" % ("右方向" if State.build_dir > 0 else "左方向"), "info")
 		KEY_E:
 			if modal == Modal.NONE and grid and player:
 				grid.interact_near_player(player.position)
 
 func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
-	# 1. モバイル仮想コントロール（左：移動スティック / 右：方向指定採掘スティック）
 	if touch_ui_active and modal == Modal.NONE:
 		if pos.distance_to(joy_center) <= joy_r + 30.0:
 			joy_pid = pid; _upd_joy(pos); get_viewport().set_input_as_handled(); return
 		if pos.distance_to(act_center) <= mine_r + 24.0:
-			act_pid = pid
-			_upd_mine_stick(pos)
-			if grid and player:
+			act_pid = pid; _upd_mine_stick(pos)
+			if player:
 				if State.selected_tool == "mine":
 					player.firing_mine = true
 				else:
-					grid.handle_world_click(player.position)
+					_handle_world_tap(player.position)
 			get_viewport().set_input_as_handled(); return
 		if pos.distance_to(brk_center) <= 30.0:
 			brk_pid = pid; get_viewport().set_input_as_handled(); return
 
-	# 2. HUDボタン判定（手前のモーダル優先）
 	for i in range(_hits.size() - 1, -1, -1):
 		if Rect2(_hits[i]["r"]).has_point(pos):
 			_exec(_hits[i])
 			get_viewport().set_input_as_handled()
 			return
 
-	# 3. ワールド入力：タッチはピンチズーム対応（単タップ離し時に施設詳細／設置／配線／ダブルタップ削除）
-	if modal == Modal.NONE and grid:
+	if modal == Modal.NONE:
 		if pid == -10:
 			var cam := get_viewport().get_camera_2d()
 			if cam:
 				var wp := cam.get_canvas_transform().affine_inverse() * raw_pos
-				if grid.handle_world_click(wp):
+				if _handle_world_tap(wp):
 					get_viewport().set_input_as_handled()
 		else:
 			_pinch_pts[pid] = raw_pos
@@ -254,20 +265,17 @@ func _on_up(pid: int, raw_pos: Vector2 = Vector2.ZERO) -> void:
 	if pid == joy_pid: joy_pid = -1; joy_vec = Vector2.ZERO
 	if pid == act_pid: act_pid = -1; mine_vec = Vector2.ZERO
 	if pid == brk_pid: brk_pid = -1
-	if _pinch_pts.has(pid):
-		_pinch_pts.erase(pid)
+	if _pinch_pts.has(pid): _pinch_pts.erase(pid)
 	if pid == _tap_pid:
-		var was_tap := (not _pinch_active) and (not _tap_moved) and modal == Modal.NONE and grid != null
+		var was_tap := (not _pinch_active) and (not _tap_moved) and modal == Modal.NONE
 		_tap_pid = -1
 		if was_tap:
 			var cam := get_viewport().get_camera_2d()
 			if cam:
 				var wp := cam.get_canvas_transform().affine_inverse() * (raw_pos if raw_pos != Vector2.ZERO else _tap_start_raw)
-				grid.handle_world_click(wp)
-	if _pinch_pts.size() < 2:
-		_pinch_dist = 0.0
-	if _pinch_pts.is_empty():
-		_pinch_active = false
+				_handle_world_tap(wp)
+	if _pinch_pts.size() < 2: _pinch_dist = 0.0
+	if _pinch_pts.is_empty(): _pinch_active = false
 
 func _upd_joy(pos: Vector2) -> void:
 	var d := pos - joy_center
@@ -281,17 +289,11 @@ func _upd_mine_stick(pos: Vector2) -> void:
 
 func _pick_tool(tid: String) -> void:
 	if tid == "wire" and not State.is_unlocked("wire"):
-		Sfx.play("error")
-		State.add_log("先に【研究】で「電力とテスラ」を解放してください。", "warn")
-		return
+		Sfx.play("error"); State.add_log("要研究: 電力とテスラ", "warn"); return
 	if tid == "conveyor" and not State.is_unlocked("conveyor"):
-		Sfx.play("error")
-		State.add_log("先に【研究】で「洞窟物流ライン」を解放してください。", "warn")
-		return
+		Sfx.play("error"); State.add_log("要研究: 洞窟物流ライン", "warn"); return
 	if State.BLD.has(tid) and State.get_stock(tid) <= 0:
-		Sfx.play("error")
-		State.add_log("在庫がありません。【クラフト】で製造してください。", "warn")
-		return
+		Sfx.play("error"); State.add_log("在庫なし（クラフトで製造）", "warn"); return
 	State.selected_tool = tid
 	if grid:
 		if tid != "wire": grid.wire_pick_uid = -1
@@ -303,24 +305,32 @@ func _exec(h: Dictionary) -> void:
 	var act := String(h["a"])
 	match act:
 		"open_craft":
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.CRAFT else Modal.CRAFT
 			if modal == Modal.CRAFT:
 				if State.tut_step == 1: craft_tab = 0
 				elif State.tut_step == 3: craft_tab = 1
 			Sfx.play("select")
 		"open_tech":
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.TECH else Modal.TECH
 			if modal == Modal.TECH and State.tut_step == 2:
 				tech_sel = 1
 			Sfx.play("select")
 		"open_cmd":
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.COMMAND else Modal.COMMAND
 			Sfx.play("select")
 		"open_guide":
+			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.GUIDE else Modal.GUIDE
 			Sfx.play("select")
 		"close":
-			modal = Modal.NONE; redrop_armed = false; Sfx.play("click")
+			modal = Modal.NONE; tech_detail_open = false; redrop_armed = false; Sfx.play("click")
+		"close_tech_detail":
+			tech_detail_open = false; Sfx.play("click")
+		"noop":
+			pass
 		"craft_tab":
 			craft_tab = int(h["v"]); Sfx.play("click")
 		"craft_drone":
@@ -337,22 +347,23 @@ func _exec(h: Dictionary) -> void:
 				State.selected_tool = bid
 				modal = Modal.NONE
 				Sfx.play("select")
-				State.add_log("配置モード: %s（地面をタップして設置）" % State.BLD[bid]["name"], "info")
+		"deploy_orb_now":
+			if orbital and State.is_orbital_bld(State.selected_tool):
+				orbital.deploy_on_player_orbit(State.selected_tool)
 		"tool":
 			_pick_tool(String(h["v"]))
 		"cancel_tool":
 			State.selected_tool = "mine"
 			if grid:
-				grid.wire_pick_uid = -1
-				grid.conveyor_pick_uid = -1
-				grid.salvage_armed_uid = -1
+				grid.wire_pick_uid = -1; grid.conveyor_pick_uid = -1; grid.salvage_armed_uid = -1
 			Sfx.play("click")
-		"flip_dir":
-			State.build_dir = -State.build_dir; Sfx.play("click")
-		"tech_sel":
-			tech_sel = int(h["v"]); Sfx.play("click")
+		"tech_open_card":
+			tech_sel = int(h["v"])
+			tech_detail_open = true
+			Sfx.play("select")
 		"tech_buy":
-			State.research(String(h["v"]))
+			if State.research(String(h["v"])):
+				tech_detail_open = false
 		"toggle_orbit":
 			State.orbit_view = not State.orbit_view
 			if State.orbit_view: State.tut_opened_orbit = true
@@ -375,51 +386,125 @@ func _exec(h: Dictionary) -> void:
 			guide_tab = int(h["v"]); Sfx.play("click")
 		"depot_all":
 			if grid: grid.depot_deposit_all(depot_uid)
-		"depot_flt":
-			if grid: grid.depot_cycle_filter(depot_uid, String(h["v"]))
 		"depot_link_flt":
 			if grid: grid.depot_cycle_link_filter(int(h["v"]))
 		"depot_conv":
 			if grid:
-				grid.start_conveyor_from(depot_uid)
-				modal = Modal.NONE
+				grid.start_conveyor_from(depot_uid); modal = Modal.NONE
 		"depot_take":
 			if grid: grid.depot_transfer(depot_uid, String(h["v"]), false, 5)
 		"bld_collect":
 			if grid: grid.building_collect(inspect_uid)
 		"bld_feed":
 			if grid: grid.building_hand_feed(inspect_uid)
-		"bld_flip":
-			if grid: grid.building_flip_dir(inspect_uid)
 		"bld_recipe":
 			if grid: grid.building_cycle_recipe(inspect_uid)
 		"bld_wire":
-			if grid:
-				grid.start_wire_from(inspect_uid)
-				modal = Modal.NONE
+			if grid: grid.start_wire_from(inspect_uid); modal = Modal.NONE
 		"bld_conv":
-			if grid:
-				grid.start_conveyor_from(inspect_uid)
-				modal = Modal.NONE
+			if grid: grid.start_conveyor_from(inspect_uid); modal = Modal.NONE
 		"bld_salvage":
 			if grid and grid.salvage_by_uid(inspect_uid):
-				inspect_uid = -1
-				modal = Modal.NONE
+				inspect_uid = -1; modal = Modal.NONE
+		"orb_recipe":
+			if orbital: orbital.module_cycle_recipe(orbital_uid)
+		"orb_feed":
+			if orbital: orbital.module_hand_feed(orbital_uid)
+		"orb_collect":
+			if orbital: orbital.module_collect(orbital_uid)
+		"orb_salvage":
+			if orbital and orbital.salvage_module(orbital_uid):
+				orbital_uid = -1; modal = Modal.NONE
 
 func _add_hit(r: Rect2, a: String, v = null) -> void:
 	_hits.append({"r": r, "a": a, "v": v})
 
-func _panel(r: Rect2, bg: Color, edge: Color, bw: float = 1.5) -> void:
+func _panel(r: Rect2, bg: Color, edge: Color, bw: float = 1.6) -> void:
 	root_ctrl.draw_rect(r, bg)
 	root_ctrl.draw_rect(r, edge, false, bw)
 
 func _pulse_frame(r: Rect2) -> void:
 	var a := 0.65 + 0.35 * sin(anim_t * 6.5)
 	var pad := 2.0 + sin(anim_t * 6.5) * 1.5
-	root_ctrl.draw_rect(r.grow(pad), Color(1.0, 0.86, 0.24, a), false, 2.6)
+	root_ctrl.draw_rect(r.grow(pad), Color(1.0, 0.86, 0.24, a), false, 3.0)
 
 # ------------------------------------------------------------------------------
-# メイン描画（視界を広く保ちつつ、全操作が2〜3タップで完結）
+# PIXEL-ART VISUAL DIAGRAM HELPERS (REPLACE VERBOSE TEXT WITH SPRITES & ARROWS!)
+# ------------------------------------------------------------------------------
+func _get_visual_tex(key: String) -> Texture2D:
+	var t := ArtReg.get_t(key)
+	if t != null: return t
+	return ArtReg.get_icon(key)
+
+func _draw_cost_icons(pos: Vector2, cost: Dictionary, font: Font, icon_sz: float = 18.0, fs: int = 14, show_have: bool = false) -> void:
+	if cost.is_empty():
+		root_ctrl.draw_string(font, pos + Vector2(0, icon_sz - 2), "FREE", HORIZONTAL_ALIGNMENT_LEFT, 80, fs, Color(0.45, 1.0, 0.76))
+		return
+	var x := pos.x
+	for k in cost.keys():
+		var kn := String(k)
+		var need := int(cost[k])
+		var have := State.get_r(kn)
+		var ok := have >= need
+		var ic := ArtReg.get_icon(kn)
+		if ic:
+			root_ctrl.draw_texture_rect(ic, Rect2(x, pos.y, icon_sz, icon_sz), false)
+		var txt := ("%d/%d" % [have, need]) if show_have else ("%d" % need)
+		var tw := 68.0 if show_have else 40.0
+		root_ctrl.draw_string(font, Vector2(x + icon_sz + 4, pos.y + icon_sz - 2), txt, HORIZONTAL_ALIGNMENT_LEFT, int(tw), fs, Color(0.48, 1.0, 0.76) if ok else Color(1.0, 0.46, 0.42))
+		x += icon_sz + tw + 8.0
+
+func _draw_flow_diagram(rect: Rect2, keys: Array, font: Font, labels: Array = []) -> void:
+	_panel(rect, Color(0.03, 0.06, 0.12, 0.96), Color(0.28, 0.50, 0.70, 0.85), 1.4)
+	var n := keys.size()
+	if n == 0: return
+	var pad := 14.0
+	var step_w := (rect.size.x - pad * 2.0) / float(n)
+	var spr_sz := clampf(minf(step_w * 0.56, rect.size.y - (26.0 if not labels.is_empty() else 14.0)), 24.0, 48.0)
+	for i in range(n):
+		var cx := rect.position.x + pad + (float(i) + 0.5) * step_w
+		var cy := rect.position.y + (rect.size.y * 0.42 if not labels.is_empty() else rect.size.y * 0.5)
+		var box_r := Rect2(cx - spr_sz * 0.6, cy - spr_sz * 0.6, spr_sz * 1.2, spr_sz * 1.2)
+		_panel(box_r, Color(0.07, 0.13, 0.22, 0.92), Color(0.36, 0.76, 0.96, 0.72), 1.2)
+		var t := _get_visual_tex(String(keys[i]))
+		if t:
+			root_ctrl.draw_texture_rect(t, Rect2(cx - spr_sz * 0.48, cy - spr_sz * 0.48, spr_sz * 0.96, spr_sz * 0.96), false)
+		if i < labels.size():
+			root_ctrl.draw_string(font, Vector2(cx - step_w * 0.48, rect.end.y - 6), String(labels[i]), HORIZONTAL_ALIGNMENT_CENTER, step_w * 0.96, 11, Color(0.86, 0.94, 1.0))
+		if i < n - 1:
+			var ax0 := box_r.end.x + 4.0
+			var ax1 := rect.position.x + pad + (float(i + 1) + 0.5) * step_w - spr_sz * 0.6 - 4.0
+			if ax1 > ax0 + 6.0:
+				root_ctrl.draw_line(Vector2(ax0, cy), Vector2(ax1, cy), Color(0.42, 0.96, 1.0, 0.92), 2.4)
+				root_ctrl.draw_polygon(PackedVector2Array([Vector2(ax1, cy), Vector2(ax1 - 7, cy - 5), Vector2(ax1 - 7, cy + 5)]), PackedColorArray([Color(0.42, 0.96, 1.0)]))
+
+func _draw_recipe_visual(rect: Rect2, in_dict: Dictionary, out_id: String, out_qty: int, font: Font) -> void:
+	_panel(rect, Color(0.04, 0.08, 0.15, 0.95), Color(0.32, 0.58, 0.78), 1.3)
+	var x := rect.position.x + 12.0
+	var cy := rect.position.y + rect.size.y * 0.5
+	var idx := 0
+	for k in in_dict.keys():
+		var kn := String(k)
+		var ic := ArtReg.get_icon(kn)
+		if ic:
+			root_ctrl.draw_texture_rect(ic, Rect2(x, cy - 11, 22, 22), false)
+		root_ctrl.draw_string(font, Vector2(x + 25, cy + 6), "×%d" % int(in_dict[k]), HORIZONTAL_ALIGNMENT_LEFT, 36, 14, Color.WHITE)
+		x += 62.0
+		idx += 1
+		if idx < in_dict.size():
+			root_ctrl.draw_string(font, Vector2(x - 8, cy + 5), "+", HORIZONTAL_ALIGNMENT_CENTER, 16, 15, Color(0.68, 0.82, 0.96))
+			x += 12.0
+	# Glowing arrow
+	root_ctrl.draw_line(Vector2(x + 2, cy), Vector2(x + 28, cy), Color(0.42, 0.98, 0.80), 2.6)
+	root_ctrl.draw_polygon(PackedVector2Array([Vector2(x + 30, cy), Vector2(x + 22, cy - 5), Vector2(x + 22, cy + 5)]), PackedColorArray([Color(0.42, 0.98, 0.80)]))
+	x += 38.0
+	var oic := ArtReg.get_icon(out_id)
+	if oic:
+		root_ctrl.draw_texture_rect(oic, Rect2(x, cy - 12, 24, 24), false)
+	root_ctrl.draw_string(font, Vector2(x + 28, cy + 6), "%s ×%d" % [State.res_name(out_id), out_qty], HORIZONTAL_ALIGNMENT_LEFT, int(rect.end.x - x - 32), 14, Color(0.52, 1.0, 0.82))
+
+# ------------------------------------------------------------------------------
+# メイン描画
 # ------------------------------------------------------------------------------
 func _on_draw() -> void:
 	_hits.clear()
@@ -441,177 +526,217 @@ func _on_draw() -> void:
 		Modal.COMMAND:  _draw_command_modal(vp, portrait, font)
 		Modal.DEPOT:    _draw_depot_modal(vp, font)
 		Modal.BUILDING: _draw_building_modal(vp, font)
+		Modal.ORBITAL:  _draw_orbital_modal(vp, font)
 		Modal.GUIDE:    _draw_guide_modal(vp, portrait, font)
 
 	if touch_ui_active and modal == Modal.NONE:
 		_draw_touch_controls(font)
 
 	if State.game_won:
-		var vr := Rect2(vp.x * 0.5 - 220, 74, 440, 44)
+		var vr := Rect2(vp.x * 0.5 - 240, 74, 480, 48)
 		_panel(vr, Color(0.06, 0.24, 0.16, 0.96), Color(0.36, 1.0, 0.72), 2.2)
-		root_ctrl.draw_string(font, Vector2(vr.position.x, vr.position.y + 28), "完全勝利：星系解放＆ワープゲート起動！", HORIZONTAL_ALIGNMENT_CENTER, vr.size.x, 14, Color(0.90, 1.0, 0.94))
+		root_ctrl.draw_string(font, Vector2(vr.position.x, vr.position.y + 31), "完全勝利：星系解放＆ワープゲート起動！", HORIZONTAL_ALIGNMENT_CENTER, vr.size.x, 16, Color(0.90, 1.0, 0.94))
 
-# 1. 自機周囲の戦闘機HUD円弧（耐久・燃料・イオン・速度）
+# 1. 自機周囲のHUD円弧（耐久・燃料・イオン・軌道ロック表示）
 func _draw_diegetic_arcs(vp: Vector2, font: Font) -> void:
 	if not player or State.orbit_view: return
 	var cam := get_viewport().get_camera_2d()
-	if not cam or cam.zoom.x < 0.30: return
+	if not cam or cam.zoom.x < 0.15: return
 	var sp := (cam.get_canvas_transform() * player.global_position) / maxf(0.1, scale.x)
 	if not Rect2(Vector2(-60, -60), vp + Vector2(120, 120)).has_point(sp): return
-	var rad := 46.0 + float(State.attached_drones) * 2.5
+	var rad := 48.0 + float(State.attached_drones) * 2.5
 	var hp_f := clampf(State.hp / maxf(1.0, State.max_hp), 0.0, 1.0)
 	var fl_f := clampf(State.fuel / maxf(1.0, State.max_fuel), 0.0, 1.0)
 	var in_f := clampf(State.ion_bat / maxf(1.0, State.max_ion_bat), 0.0, 1.0)
 	var l0 := deg_to_rad(138.0); var l1 := deg_to_rad(222.0)
-	root_ctrl.draw_arc(sp, rad, l0, l1, 18, Color(0.15, 0.22, 0.30, 0.45), 3.5)
-	root_ctrl.draw_arc(sp, rad, l0, lerpf(l0, l1, hp_f), 18, Color(0.32, 0.92, 0.60, 0.85), 3.5)
+	root_ctrl.draw_arc(sp, rad, l0, l1, 18, Color(0.15, 0.22, 0.30, 0.45), 3.8)
+	root_ctrl.draw_arc(sp, rad, l0, lerpf(l0, l1, hp_f), 18, Color(0.32, 0.92, 0.60, 0.88), 3.8)
 	var r0 := deg_to_rad(42.0); var r1 := deg_to_rad(-42.0)
-	root_ctrl.draw_arc(sp, rad, r1, r0, 18, Color(0.15, 0.22, 0.30, 0.45), 3.5)
+	root_ctrl.draw_arc(sp, rad, r1, r0, 18, Color(0.15, 0.22, 0.30, 0.45), 3.8)
 	if fl_f > 0.01:
-		root_ctrl.draw_arc(sp, rad, lerpf(r0, r1, fl_f), r0, 18, Color(1.0, 0.72, 0.22, 0.85), 3.5)
-	root_ctrl.draw_arc(sp, rad - 6.0, lerpf(r0, r1, in_f), r0, 16, Color(0.34, 0.92, 1.0, 0.85), 2.2)
-	if player.velocity.length() > 24.0:
-		root_ctrl.draw_string(font, sp + Vector2(rad + 8, 4), "%dm/s" % int(player.velocity.length()), HORIZONTAL_ALIGNMENT_LEFT, 68, 10, Color(0.84, 0.92, 1.0, 0.85))
+		root_ctrl.draw_arc(sp, rad, lerpf(r0, r1, fl_f), r0, 18, Color(1.0, 0.72, 0.22, 0.88), 3.8)
+	root_ctrl.draw_arc(sp, rad - 6.0, lerpf(r0, r1, in_f), r0, 16, Color(0.34, 0.92, 1.0, 0.88), 2.4)
+	if player.on_rails:
+		root_ctrl.draw_string(font, sp + Vector2(-56, -rad - 10), "軌道ロック %dm/s" % int(player.velocity.length()), HORIZONTAL_ALIGNMENT_CENTER, 112, 13, Color(0.38, 1.0, 0.92))
+	elif player.velocity.length() > 24.0:
+		root_ctrl.draw_string(font, sp + Vector2(rad + 8, 5), "%dm/s" % int(player.velocity.length()), HORIZONTAL_ALIGNMENT_LEFT, 80, 13, Color(0.88, 0.95, 1.0, 0.90))
 
-# 2. 左上スリム状況パネル（資源・電力・艦隊・製造キューミニバー）
+# 2. 左上ステータス（大型アイコン＆くっきり数字＋昼夜・天体・軌道バッジ）
 func _draw_top_left_status(vp: Vector2, portrait: bool, font: Font) -> void:
 	var has_ref := (State.get_r("plate_fe") + State.get_r("wire_cu") + State.get_r("wafer_si") + State.get_r("circuit")) > 0
-	var w := 224.0 if not portrait else minf(vp.x - 108.0, 324.0)
-	var h := (124.0 if has_ref else 102.0) if not portrait else (106.0 if has_ref else 86.0)
+	var w := 280.0 if not portrait else minf(vp.x - 118.0, 340.0)
+	var h := (144.0 if has_ref else 118.0)
 	var r := Rect2(8, 8, w, h)
-	_panel(r, Color(0.05, 0.07, 0.12, 0.88), Color(0.24, 0.36, 0.50, 0.86), 1.4)
+	_panel(r, Color(0.04, 0.07, 0.12, 0.90), Color(0.28, 0.42, 0.58, 0.88), 1.6)
 
 	var base_items: Array[String] = ["fe", "cu", "si", "ti"]
 	var ref_items: Array[String] = ["plate_fe", "wire_cu", "wafer_si", "circuit"]
 	var cw := (w - 14.0) / 4.0
 	for i in range(4):
 		var id: String = base_items[i]
-		var x := r.position.x + 7.0 + float(i) * cw
+		var x := r.position.x + 8.0 + float(i) * cw
 		var y := r.position.y + 8.0
 		var ic := ArtReg.get_icon(id)
-		if ic: root_ctrl.draw_texture_rect(ic, Rect2(x, y, 14, 14), false)
-		root_ctrl.draw_string(font, Vector2(x + 17, y + 12), "%d" % State.get_r(id), HORIZONTAL_ALIGNMENT_LEFT, int(cw - 17), 11, Color(0.95, 0.98, 1.0))
+		if ic: root_ctrl.draw_texture_rect(ic, Rect2(x, y, 18, 18), false)
+		root_ctrl.draw_string(font, Vector2(x + 21, y + 15), "%d" % State.get_r(id), HORIZONTAL_ALIGNMENT_LEFT, int(cw - 20), 14, Color(0.96, 0.98, 1.0))
 
-	var y2 := r.position.y + 32.0
+	var y2 := r.position.y + 34.0
 	if has_ref:
 		for i in range(4):
 			var id: String = ref_items[i]
-			var x := r.position.x + 7.0 + float(i) * cw
+			var x := r.position.x + 8.0 + float(i) * cw
 			var ic := ArtReg.get_icon(id)
-			if ic: root_ctrl.draw_texture_rect(ic, Rect2(x, y2 - 2, 14, 14), false)
-			root_ctrl.draw_string(font, Vector2(x + 17, y2 + 10), "%d" % State.get_r(id), HORIZONTAL_ALIGNMENT_LEFT, int(cw - 17), 11, Color(0.76, 0.94, 1.0))
-		y2 += 22.0
+			if ic: root_ctrl.draw_texture_rect(ic, Rect2(x, y2, 18, 18), false)
+			root_ctrl.draw_string(font, Vector2(x + 21, y2 + 15), "%d" % State.get_r(id), HORIZONTAL_ALIGNMENT_LEFT, int(cw - 20), 14, Color(0.74, 0.94, 1.0))
+		y2 += 26.0
 
-	var pcol := Color(0.36, 0.96, 0.64) if (State.pwr_prod >= State.pwr_use and State.pwr_prod > 0.0) else (Color(1.0, 0.80, 0.34) if State.pwr_stored > 10.0 else Color(0.96, 0.44, 0.38))
-	var bat_s := " 蓄:%d%%" % int(State.pwr_stored / maxf(1.0, State.pwr_cap) * 100.0) if State.pwr_cap > 1.0 else ""
-	root_ctrl.draw_string(font, Vector2(r.position.x + 8, y2 + 10), "電力 %d/%dW%s  ドローン %d/8" % [int(State.pwr_prod), int(State.pwr_use), bat_s, State.attached_drones], HORIZONTAL_ALIGNMENT_LEFT, int(w - 14), 10, pcol)
+	# 電力＋ドローン（ドット絵アイコン＋くっきり数値）
+	var pcol := Color(0.36, 0.98, 0.66) if (State.pwr_prod >= State.pwr_use and State.pwr_prod > 0.0) else (Color(1.0, 0.82, 0.34) if State.pwr_stored > 10.0 else Color(0.98, 0.46, 0.40))
+	var t_ic := ArtReg.get_t("tesla")
+	if t_ic: root_ctrl.draw_texture_rect(t_ic, Rect2(r.position.x + 8, y2, 16, 20), false)
+	var bat_s := " 蓄%d%%" % int(State.pwr_stored / maxf(1.0, State.pwr_cap) * 100.0) if State.pwr_cap > 1.0 else ""
+	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 16), "%d/%dW%s" % [int(State.pwr_prod), int(State.pwr_use), bat_s], HORIZONTAL_ALIGNMENT_LEFT, 146, 13, pcol)
+	var d_ic := ArtReg.get_t("fab_drone")
+	var dx_ic := r.position.x + w - 72.0
+	if d_ic: root_ctrl.draw_texture_rect(d_ic, Rect2(dx_ic, y2 + 1, 18, 18), false)
+	root_ctrl.draw_string(font, Vector2(dx_ic + 22, y2 + 16), "%d/8" % State.attached_drones, HORIZONTAL_ALIGNMENT_LEFT, 48, 13, Color(0.76, 0.94, 1.0))
 
-	y2 += 26.0
-	root_ctrl.draw_string(font, Vector2(r.position.x + 8, y2 + 2), "艦隊: %d / 10,000" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(w - 16), 10, Color(1.0, 0.86, 0.42))
-	var br := Rect2(r.position.x + 8, y2 + 8, w - 16, 6)
+	# 昼夜＆天体＆軌道ステータス（太陽/月インジケータ描画）
+	y2 += 25.0
+	var sun_v := planet.get_sunlight_world(player.position) if (planet and player) else 1.0
+	var is_day := sun_v > 0.35
+	var is_dusk := (not is_day) and sun_v > 0.05
+	var sc_p := Vector2(r.position.x + 16, y2 + 10)
+	if is_day:
+		root_ctrl.draw_circle(sc_p, 6.5, Color(1.0, 0.88, 0.32))
+	elif is_dusk:
+		root_ctrl.draw_circle(sc_p, 6.5, Color(1.0, 0.56, 0.24))
+	else:
+		root_ctrl.draw_circle(sc_p, 6.5, Color(0.76, 0.88, 1.0))
+		root_ctrl.draw_circle(sc_p + Vector2(3.0, -2.0), 5.0, Color(0.04, 0.07, 0.12))
+	var dn_lbl := "昼" if is_day else ("夕" if is_dusk else "夜")
+	var b_name: String = String(player.get_active_body_name()) if player else "テラ-I"
+	var orb_tag := " [軌道ロック]" if (player and player.on_rails) else ""
+	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 15), "%s  %s%s" % [dn_lbl, b_name, orb_tag], HORIZONTAL_ALIGNMENT_LEFT, int(w - 34), 13, Color(0.45, 0.98, 0.90) if (player and player.on_rails) else Color(1.0, 0.90, 0.56))
+
+	# 艦隊ゲージ（プローブアイコン＋ゲージ）
+	y2 += 24.0
+	var p_ic := ArtReg.get_icon("probe_stock")
+	if p_ic: root_ctrl.draw_texture_rect(p_ic, Rect2(r.position.x + 8, y2 - 1, 16, 16), false)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 28, y2 + 12), "%d / 10,000" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(w - 36), 13, Color(1.0, 0.86, 0.42))
+	var br := Rect2(r.position.x + 8, y2 + 18, w - 16, 7)
 	root_ctrl.draw_rect(br, Color(0.10, 0.14, 0.22))
 	root_ctrl.draw_rect(Rect2(br.position, Vector2(br.size.x * clampf(float(State.swarm_fleet) / 10000.0, 0.0, 1.0), br.size.y)), Color(0.34, 0.86, 1.0))
 
-	# 製造キュー進行中のミニ進捗バー（タップでクラフト画面へ）
 	if not State.craft_queue.is_empty():
 		var q0: Dictionary = State.craft_queue[0]
 		var pct := clampf(1.0 - float(q0["time_left"]) / maxf(0.1, float(q0["total_time"])), 0.0, 1.0)
-		var qr := Rect2(8, r.end.y + 6, w, 34)
-		_panel(qr, Color(0.06, 0.14, 0.22, 0.92), Color(0.38, 0.92, 1.0), 1.4)
+		var qr := Rect2(8, r.end.y + 6, w, 40)
+		_panel(qr, Color(0.06, 0.14, 0.22, 0.94), Color(0.38, 0.92, 1.0), 1.6)
 		var extra := " (+%d)" % (State.craft_queue.size() - 1) if State.craft_queue.size() > 1 else ""
-		root_ctrl.draw_string(font, Vector2(qr.position.x + 8, qr.position.y + 15), "製造中: %s%s" % [String(q0["name"]), extra], HORIZONTAL_ALIGNMENT_LEFT, int(w - 16), 10, Color.WHITE)
-		root_ctrl.draw_rect(Rect2(qr.position.x + 8, qr.position.y + 22, w - 16, 6), Color(0.10, 0.16, 0.24))
-		root_ctrl.draw_rect(Rect2(qr.position.x + 8, qr.position.y + 22, (w - 16) * pct, 6), Color(0.34, 0.96, 0.72))
+		root_ctrl.draw_string(font, Vector2(qr.position.x + 8, qr.position.y + 19), "製造中: %s%s" % [String(q0["name"]), extra], HORIZONTAL_ALIGNMENT_LEFT, int(w - 16), 13, Color.WHITE)
+		root_ctrl.draw_rect(Rect2(qr.position.x + 8, qr.position.y + 27, w - 16, 7), Color(0.10, 0.16, 0.24))
+		root_ctrl.draw_rect(Rect2(qr.position.x + 8, qr.position.y + 27, (w - 16) * pct, 7), Color(0.34, 0.96, 0.72))
 		_add_hit(qr, "open_craft")
 
-# 3. 右上ミニマルメニュー（たった4ボタン！全操作2〜3タップ）
+# 3. 右上ミニマル4ボタン（見やすい大型ボタン）
 func _draw_top_right_menu(vp: Vector2, portrait: bool, font: Font) -> void:
-	var bw := 98.0 if not portrait else 88.0
+	var bw := 112.0 if not portrait else 100.0
 	var x := vp.x - bw - 8.0
 	var y := 8.0
 	var tut_f := String(State.get_tutorial_info()["focus"]) if State.tut_enabled else ""
 
-	# 1) クラフトボタン
-	var cr := Rect2(x, y, bw, 34)
+	var cr := Rect2(x, y, bw, 38)
 	var qn := State.craft_queue.size()
-	var c_lbl := ("クラフト (%d)" % qn) if qn > 0 else ("クラフト [C]" if not portrait else "クラフト")
-	_panel(cr, Color(0.08, 0.20, 0.30, 0.94) if modal == Modal.CRAFT else Color(0.05, 0.09, 0.16, 0.90), Color(0.42, 0.94, 1.0), 1.6)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 22), c_lbl, HORIZONTAL_ALIGNMENT_CENTER, bw, 11, Color.WHITE)
+	var c_lbl := ("クラフト(%d)" % qn) if qn > 0 else "クラフト"
+	_panel(cr, Color(0.08, 0.22, 0.34, 0.95) if modal == Modal.CRAFT else Color(0.05, 0.09, 0.16, 0.92), Color(0.42, 0.94, 1.0), 1.8)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 25), c_lbl, HORIZONTAL_ALIGNMENT_CENTER, bw, 14, Color.WHITE)
 	if modal == Modal.NONE and (tut_f == "craft_drone" or tut_f == "craft_power"):
 		_pulse_frame(cr)
 	_add_hit(cr, "open_craft")
-	y += 40.0
+	y += 44.0
 
-	# 2) 研究ボタン
 	var ready_t := false
 	for tid in State.TECH_ORDER:
 		if State.can_research(tid): ready_t = true; break
-	var tr := Rect2(x, y, bw, 34)
-	var t_lbl := "研究 %d/8" % State.unlocked_techs.size()
-	_panel(tr, Color(0.12, 0.22, 0.32, 0.94) if modal == Modal.TECH else Color(0.05, 0.09, 0.16, 0.90), Color(1.0, 0.84, 0.32) if ready_t else Color(0.36, 0.78, 1.0), 1.6)
-	root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 22), t_lbl, HORIZONTAL_ALIGNMENT_CENTER, bw, 11, Color(1.0, 0.92, 0.56) if ready_t else Color.WHITE)
+	var tr := Rect2(x, y, bw, 38)
+	_panel(tr, Color(0.12, 0.22, 0.34, 0.95) if modal == Modal.TECH else Color(0.05, 0.09, 0.16, 0.92), Color(1.0, 0.84, 0.32) if ready_t else Color(0.36, 0.78, 1.0), 1.8)
+	root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 25), "研究 %d/8" % State.unlocked_techs.size(), HORIZONTAL_ALIGNMENT_CENTER, bw, 14, Color(1.0, 0.92, 0.56) if ready_t else Color.WHITE)
 	if modal == Modal.NONE and tut_f == "research_power":
 		_pulse_frame(tr)
 	_add_hit(tr, "open_tech")
-	y += 40.0
+	y += 44.0
 
-	# 3) 指令ボタン（軌道マップ・艦隊ドクトリン・メガ構造物・設定）
-	var mr := Rect2(x, y, bw, 34)
-	_panel(mr, Color(0.14, 0.16, 0.30, 0.94) if (modal == Modal.COMMAND or State.orbit_view) else Color(0.05, 0.09, 0.16, 0.90), Color(0.62, 0.54, 1.0), 1.5)
-	root_ctrl.draw_string(font, Vector2(mr.position.x, mr.position.y + 22), "指令・地図" if not State.orbit_view else "通常視点へ", HORIZONTAL_ALIGNMENT_CENTER, bw, 11, Color.WHITE)
+	var mr := Rect2(x, y, bw, 38)
+	_panel(mr, Color(0.14, 0.16, 0.32, 0.95) if (modal == Modal.COMMAND or State.orbit_view) else Color(0.05, 0.09, 0.16, 0.92), Color(0.64, 0.56, 1.0), 1.6)
+	root_ctrl.draw_string(font, Vector2(mr.position.x, mr.position.y + 25), "星系地図" if not State.orbit_view else "機体視点", HORIZONTAL_ALIGNMENT_CENTER, bw, 14, Color.WHITE)
 	_add_hit(mr, "toggle_orbit" if State.orbit_view else "open_cmd")
-	y += 40.0
+	y += 44.0
 
-	# 4) ガイドボタン
-	var gr := Rect2(x, y, bw, 28)
-	_panel(gr, Color(0.06, 0.14, 0.18, 0.92) if modal == Modal.GUIDE else Color(0.05, 0.08, 0.14, 0.88), Color(0.38, 0.88, 0.74), 1.3)
-	root_ctrl.draw_string(font, Vector2(gr.position.x, gr.position.y + 19), "ガイド [H]" if not portrait else "ガイド", HORIZONTAL_ALIGNMENT_CENTER, bw, 10, Color(0.84, 0.96, 0.92))
+	var gr := Rect2(x, y, bw, 32)
+	_panel(gr, Color(0.06, 0.14, 0.18, 0.92) if modal == Modal.GUIDE else Color(0.05, 0.08, 0.14, 0.88), Color(0.38, 0.88, 0.74), 1.4)
+	root_ctrl.draw_string(font, Vector2(gr.position.x, gr.position.y + 21), "図解ガイド", HORIZONTAL_ALIGNMENT_CENTER, bw, 13, Color(0.86, 0.98, 0.94))
 	_add_hit(gr, "open_guide")
 
-# 4. 上部インタラクティブ・チュートリアル誘導バナー
+# 4. ビジュアル重視のコンパクト目標バー（アイコン＋短い誘導のみ！）
 func _draw_tutorial_banner(vp: Vector2, portrait: bool, font: Font) -> void:
 	var info := State.get_tutorial_info()
-	var w := minf(vp.x - 16.0, 620.0) if not portrait else (vp.x - 16.0)
-	var h := 50.0 if not portrait else 54.0
+	var w := minf(vp.x - 16.0, 480.0) if not portrait else (vp.x - 16.0)
+	var h := 48.0
 	var x := (vp.x - w) * 0.5 if not portrait else 8.0
-	var y := 8.0 if not portrait else 160.0
+	var y := 8.0 if not portrait else 184.0
 	var r := Rect2(x, y, w, h)
-	_panel(r, Color(0.05, 0.11, 0.19, 0.92), Color(1.0, 0.84, 0.34, 0.92), 1.6)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 10, r.position.y + 18), "【ガイド %s】 %s" % [String(info["step"]), String(info["title"])], HORIZONTAL_ALIGNMENT_LEFT, int(w - 76), 11, Color(1.0, 0.88, 0.40))
-	root_ctrl.draw_string(font, Vector2(r.position.x + 10, r.position.y + 38), String(info["hint"]), HORIZONTAL_ALIGNMENT_LEFT, int(w - 20), 10 if portrait else 11, Color(0.94, 0.97, 1.0))
+	_panel(r, Color(0.05, 0.11, 0.19, 0.92), Color(1.0, 0.84, 0.34, 0.94), 1.8)
 
-	var hr := Rect2(r.end.x - 54, r.position.y + 4, 48, 18)
+	# 目標ステップに合わせたアイコン表示
+	var icon_k := "ore_fe"
+	match State.tut_step:
+		0: icon_k = "ore_fe"
+		1: icon_k = "fab_drone"
+		2: icon_k = "tesla"
+		3, 4: icon_k = "solar"
+		5: icon_k = "tesla"
+		6: icon_k = "drill"
+		7: icon_k = "orbital_booster"
+		_: icon_k = "mass_driver"
+	var it := _get_visual_tex(icon_k)
+	if it:
+		root_ctrl.draw_texture_rect(it, Rect2(r.position.x + 8, r.position.y + 8, 32, 32), false)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 48, r.position.y + 20), "目標 %s: %s" % [String(info["step"]), String(info["title"])], HORIZONTAL_ALIGNMENT_LEFT, int(w - 114), 14, Color(1.0, 0.90, 0.44))
+	if State.tut_step == 0:
+		_draw_cost_icons(Vector2(r.position.x + 48, r.position.y + 25), {"fe": 10, "cu": 6}, font, 16.0, 13, true)
+	else:
+		root_ctrl.draw_string(font, Vector2(r.position.x + 48, r.position.y + 40), String(info["hint"]), HORIZONTAL_ALIGNMENT_LEFT, int(w - 60), 12, Color(0.92, 0.96, 1.0))
+
+	var hr := Rect2(r.end.x - 54, r.position.y + 6, 48, 20)
 	_panel(hr, Color(0.10, 0.14, 0.22, 0.90), Color(0.42, 0.54, 0.68), 1.0)
-	root_ctrl.draw_string(font, Vector2(hr.position.x, hr.position.y + 13), "非表示", HORIZONTAL_ALIGNMENT_CENTER, hr.size.x, 9, Color(0.80, 0.88, 0.96))
+	root_ctrl.draw_string(font, Vector2(hr.position.x, hr.position.y + 15), "隠す", HORIZONTAL_ALIGNMENT_CENTER, hr.size.x, 11, Color(0.84, 0.90, 0.96))
 	_add_hit(hr, "tut_toggle")
 
-# 5. 右下テレメトリ＆ログ（デスクトップのみ）
+# 5. 右下テレメトリ（デスクトップ）
 func _draw_bottom_right_telemetry(vp: Vector2, portrait: bool, font: Font) -> void:
 	if portrait: return
-	var w := 310.0; var h := 104.0
+	var w := 330.0; var h := 106.0
 	var r := Rect2(vp.x - w - 8.0, vp.y - h - 8.0, w, h)
-	_panel(r, Color(0.04, 0.06, 0.10, 0.86), Color(0.24, 0.34, 0.48, 0.85), 1.3)
+	_panel(r, Color(0.04, 0.06, 0.10, 0.88), Color(0.24, 0.36, 0.50, 0.88), 1.4)
 	var g_v: float = float(player.local_g) if player else 1.0
-	var at_v: float = float(planet.get_atmos_density(player.position)) if (planet and player) else 1.0
 	var vl_v: int = int(player.velocity.length()) if player else 0
 	var al_v: int = int(player.get_altitude()) if player else 0
-	root_ctrl.draw_string(font, Vector2(r.position.x + 8, r.position.y + 17), "重力 %.2fG  大気 %.2f  速度 %dm/s  高度 %dm" % [g_v, at_v, vl_v, al_v], HORIZONTAL_ALIGNMENT_LEFT, int(w - 14), 10, Color(0.76, 0.88, 0.98))
-	root_ctrl.draw_line(Vector2(r.position.x + 6, r.position.y + 25), Vector2(r.end.x - 6, r.position.y + 25), Color(0.22, 0.32, 0.44), 1.0)
-	var y := r.position.y + 42.0
-	var st := maxi(0, State.logs.size() - 4)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 10, r.position.y + 20), "%.2fG  %dm/s  高度 %dm" % [g_v, vl_v, al_v], HORIZONTAL_ALIGNMENT_LEFT, int(w - 18), 13, Color(0.76, 0.90, 1.0))
+	root_ctrl.draw_line(Vector2(r.position.x + 6, r.position.y + 28), Vector2(r.end.x - 6, r.position.y + 28), Color(0.22, 0.32, 0.44), 1.0)
+	var y := r.position.y + 47.0
+	var st := maxi(0, State.logs.size() - 3)
 	for i in range(st, State.logs.size()):
 		var lg := State.logs[i]
-		var c := Color(0.45, 0.96, 0.70) if lg["kind"] == "good" else (Color(1.0, 0.78, 0.34) if lg["kind"] == "warn" else Color(0.86, 0.90, 0.96))
-		root_ctrl.draw_string(font, Vector2(r.position.x + 8, y), "・" + String(lg["msg"]), HORIZONTAL_ALIGNMENT_LEFT, int(w - 14), 9, c)
-		y += 16.0
+		var c := Color(0.45, 0.98, 0.72) if lg["kind"] == "good" else (Color(1.0, 0.80, 0.34) if lg["kind"] == "warn" else Color(0.88, 0.92, 0.98))
+		root_ctrl.draw_string(font, Vector2(r.position.x + 10, y), String(lg["msg"]), HORIZONTAL_ALIGNMENT_LEFT, int(w - 18), 12, c)
+		y += 19.0
 
-# 6. 下部スッキリ所持ツールバー（通常・配線・搬送・削除を常設固定 ＋ クラフト済みの所持装置！）
+# 6. 下部ドック（常設ツール ＋ 所持装置 ＋ 軌道配置ワンタップボタン！）
 func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 	var slots: Array[Dictionary] = [{"id": "mine", "label": "通常"}]
-	if State.is_unlocked("wire"):
-		slots.append({"id": "wire", "label": "配線"})
-	if State.is_unlocked("conveyor"):
-		slots.append({"id": "conveyor", "label": "搬送"})
+	if State.is_unlocked("wire"): slots.append({"id": "wire", "label": "配線"})
+	if State.is_unlocked("conveyor"): slots.append({"id": "conveyor", "label": "搬送"})
 	slots.append({"id": "salvage", "label": "削除"})
 	var owned := State.get_owned_buildings()
 	for bid in owned:
@@ -619,39 +744,43 @@ func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 	if owned.is_empty():
 		slots.append({"id": "__craft", "label": "+製造"})
 
-	var slot_sz := 48.0 if portrait else 54.0
+	var slot_sz := 54.0 if portrait else 60.0
 	var gap := 6.0
-	var max_slots := mini(slots.size(), 9 if not portrait else 8)
+	var max_slots := mini(slots.size(), 9 if not portrait else 7)
 	var bar_w := float(max_slots) * (slot_sz + gap) + gap + 10.0
 	var bar_h := slot_sz + 14.0
 	var bx := (vp.x - bar_w) * 0.5
 	var by := vp.y - bar_h - 8.0
 
-	# 配置モード／配線モード／搬送モード／削除モード中の明快ガイドバー
 	if modal == Modal.NONE and State.selected_tool != "mine":
-		var mw := minf(vp.x - 16.0, 510.0)
-		var mr := Rect2((vp.x - mw) * 0.5, by - 36.0, mw, 30.0)
-		var bar_col := Color(1.0, 0.44, 0.42) if State.selected_tool == "salvage" else (Color(1.0, 0.80, 0.30) if State.selected_tool == "conveyor" else Color(0.40, 0.96, 0.82))
-		_panel(mr, Color(0.06, 0.16, 0.24, 0.94), bar_col, 1.5)
+		var is_orb := State.is_orbital_bld(State.selected_tool)
+		var in_orb: bool = (player != null and bool(player.is_in_orbit()))
+		var mw := minf(vp.x - 16.0, 520.0)
+		var mr := Rect2((vp.x - mw) * 0.5, by - 42.0, mw, 36.0)
+		var bar_col := Color(1.0, 0.44, 0.42) if State.selected_tool == "salvage" else (Color(0.40, 0.96, 1.0) if is_orb else Color(1.0, 0.84, 0.34))
+		_panel(mr, Color(0.06, 0.16, 0.24, 0.95), bar_col, 1.8)
 		var msg := ""
-		if State.selected_tool == "wire":
-			msg = "【配線モード】 発電機 → テスラリレーの順にタップして電線を接続"
-		elif State.selected_tool == "conveyor":
-			msg = "【搬送モード】 送り元 → 送り先施設をタップで自由接続（距離分の鉄消費）"
-		elif State.selected_tool == "salvage":
-			msg = "【削除モード】 削除したい施設をダブルタップ（2回タップで回収）"
-		elif State.selected_tool == "drill":
-			msg = "【配置: 採掘ドリル (残%d)】 光る「硬質鉱床」をタップして設置" % State.get_stock("drill")
-		elif State.BLD.has(State.selected_tool):
-			msg = "【配置: %s (残%d)】 地面をタップして設置" % [State.BLD[State.selected_tool]["name"], State.get_stock(State.selected_tool)]
-		root_ctrl.draw_string(font, Vector2(mr.position.x + 10, mr.position.y + 19), msg, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 70), 10, Color(0.92, 1.0, 0.96))
-		var cr := Rect2(mr.end.x - 54, mr.position.y + 4, 48, 22)
-		_panel(cr, Color(0.28, 0.09, 0.11, 0.94), Color(1.0, 0.44, 0.44), 1.2)
-		root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 15), "解除", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+		if State.selected_tool == "wire": msg = "配線: 発電機 → テスラ"
+		elif State.selected_tool == "conveyor": msg = "搬送: 送り元 → 送り先"
+		elif State.selected_tool == "salvage": msg = "削除: 施設を2回タップ"
+		elif is_orb:
+			msg = "同一軌道へ配置OK！" if in_orb else "宇宙の周回軌道へ入ると配置可"
+		elif State.selected_tool == "drill": msg = "光る「ドリル鉱床」をタップ"
+		elif State.BLD.has(State.selected_tool): msg = "%s: 地面をタップして設置" % State.BLD[State.selected_tool]["name"]
+		var right_res := 162.0 if (is_orb and in_orb) else 66.0
+		root_ctrl.draw_string(font, Vector2(mr.position.x + 12, mr.position.y + 23), msg, HORIZONTAL_ALIGNMENT_LEFT, int(mw - right_res - 14), 13, Color.WHITE)
+		if is_orb and in_orb:
+			var dr := Rect2(mr.end.x - 156, mr.position.y + 4, 92, 28)
+			_panel(dr, Color(0.08, 0.32, 0.24, 0.96), Color(0.42, 1.0, 0.78), 1.6)
+			root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 19), "軌道配置", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 13, Color.WHITE)
+			_add_hit(dr, "deploy_orb_now")
+		var cr := Rect2(mr.end.x - 58, mr.position.y + 4, 52, 28)
+		_panel(cr, Color(0.28, 0.09, 0.11, 0.94), Color(1.0, 0.44, 0.44), 1.3)
+		root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 19), "解除", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 12, Color.WHITE)
 		_add_hit(cr, "cancel_tool")
 
 	var br := Rect2(bx, by, bar_w, bar_h)
-	_panel(br, Color(0.05, 0.07, 0.12, 0.92), Color(0.28, 0.40, 0.56, 0.90), 1.5)
+	_panel(br, Color(0.05, 0.07, 0.12, 0.94), Color(0.28, 0.42, 0.58, 0.92), 1.6)
 	var tut_f := String(State.get_tutorial_info()["focus"]) if State.tut_enabled else ""
 
 	for i in range(max_slots):
@@ -663,95 +792,94 @@ func _draw_bottom_dock(vp: Vector2, portrait: bool, font: Font) -> void:
 		var sel := (State.selected_tool == tid)
 		var bg := Color(0.12, 0.28, 0.40, 0.96) if sel else (Color(0.08, 0.18, 0.26, 0.94) if tid == "__craft" else Color(0.07, 0.10, 0.16, 0.92))
 		var bd := Color(1.0, 0.84, 0.34) if sel else (Color(0.42, 0.96, 0.80) if State.BLD.has(tid) else Color(0.34, 0.54, 0.72))
-		_panel(sr, bg, bd, 2.0 if sel else 1.2)
+		_panel(sr, bg, bd, 2.2 if sel else 1.3)
 
 		var tex_k := String(State.BLD[tid]["tex"]) if State.BLD.has(tid) else ("seed_core" if tid == "mine" else "")
 		var t := ArtReg.get_t(tex_k) if tex_k != "" else null
 		if t:
 			var pad := 6.0
-			root_ctrl.draw_texture_rect(t, Rect2(sx + pad, sy + 4.0, slot_sz - pad * 2.0, slot_sz - 18.0), false)
+			root_ctrl.draw_texture_rect(t, Rect2(sx + pad, sy + 4.0, slot_sz - pad * 2.0, slot_sz - 20.0), false)
+		elif tid == "wire":
+			var cx := sx + slot_sz * 0.5; var cy := sy + slot_sz * 0.38
+			root_ctrl.draw_polyline(PackedVector2Array([Vector2(cx + 4, cy - 11), Vector2(cx - 5, cy + 1), Vector2(cx + 2, cy + 1), Vector2(cx - 4, cy + 12)]), Color(0.42, 0.96, 1.0), 2.8)
+		elif tid == "conveyor":
+			var cx := sx + slot_sz * 0.5; var cy := sy + slot_sz * 0.38
+			root_ctrl.draw_line(Vector2(cx - 12, cy), Vector2(cx + 9, cy), Color(1.0, 0.80, 0.28), 3.0)
+			root_ctrl.draw_polygon(PackedVector2Array([Vector2(cx + 12, cy), Vector2(cx + 3, cy - 6), Vector2(cx + 3, cy + 6)]), PackedColorArray([Color(1.0, 0.80, 0.28)]))
+		elif tid == "salvage":
+			var cx := sx + slot_sz * 0.5; var cy := sy + slot_sz * 0.38
+			root_ctrl.draw_line(Vector2(cx - 8, cy - 8), Vector2(cx + 8, cy + 8), Color(1.0, 0.44, 0.42), 3.0)
+			root_ctrl.draw_line(Vector2(cx + 8, cy - 8), Vector2(cx - 8, cy + 8), Color(1.0, 0.44, 0.42), 3.0)
 		else:
-			var sym := "電線" if tid == "wire" else ("搬送" if tid == "conveyor" else ("削除" if tid == "salvage" else "＋"))
-			var sc := Color(0.42, 0.96, 1.0) if tid == "wire" else (Color(1.0, 0.80, 0.28) if tid == "conveyor" else (Color(1.0, 0.46, 0.42) if tid == "salvage" else Color(0.45, 1.0, 0.76)))
-			root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz * 0.52), sym, HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 12, sc)
+			root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz * 0.50), "＋", HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 20, Color(0.45, 1.0, 0.76))
 
-		root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz - 4), String(s["label"]), HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 9, Color.WHITE)
+		root_ctrl.draw_string(font, Vector2(sx, sy + slot_sz - 4), String(s["label"]), HORIZONTAL_ALIGNMENT_CENTER, slot_sz, 11, Color.WHITE)
 		if s.has("cnt"):
-			var cr_b := Rect2(sx + slot_sz - 22, sy + 2, 20, 14)
-			root_ctrl.draw_rect(cr_b, Color(0.08, 0.26, 0.34, 0.95))
-			root_ctrl.draw_string(font, Vector2(cr_b.position.x, cr_b.position.y + 11), "x%d" % int(s["cnt"]), HORIZONTAL_ALIGNMENT_CENTER, 20, 9, Color(0.55, 1.0, 0.82))
+			var cr_b := Rect2(sx + slot_sz - 24, sy + 2, 22, 16)
+			root_ctrl.draw_rect(cr_b, Color(0.08, 0.28, 0.36, 0.96))
+			root_ctrl.draw_string(font, Vector2(cr_b.position.x, cr_b.position.y + 13), "x%d" % int(s["cnt"]), HORIZONTAL_ALIGNMENT_CENTER, 22, 11, Color(0.55, 1.0, 0.82))
 
 		if modal == Modal.NONE:
-			if tut_f == "place_power" and (tid == "solar" or tid == "tesla"):
-				_pulse_frame(sr)
-			elif tut_f == "wire_power" and tid == "wire":
-				_pulse_frame(sr)
+			if tut_f == "place_power" and (tid == "solar" or tid == "tesla"): _pulse_frame(sr)
+			elif tut_f == "wire_power" and tid == "wire": _pulse_frame(sr)
 
-		if tid == "__craft":
-			_add_hit(sr, "open_craft")
-		else:
-			_add_hit(sr, "tool", tid)
+		if tid == "__craft": _add_hit(sr, "open_craft")
+		else: _add_hit(sr, "tool", tid)
 
-# 7. クラフト＆製造キュー画面 ([C])
+# 7. クラフト＆製造キュー画面（5タブ・大型フォント・アイコンコスト表示！）
 func _draw_craft_modal(vp: Vector2, portrait: bool, font: Font) -> void:
-	var mw := minf(vp.x - 20.0, 820.0)
-	var mh := minf(vp.y - 40.0, 610.0)
+	var mw := minf(vp.x - 16.0, 860.0)
+	var mh := minf(vp.y - 32.0, 640.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
-	_panel(r, Color(0.04, 0.06, 0.12, 0.97), Color(0.38, 0.90, 1.0), 2.0)
+	_panel(r, Color(0.04, 0.06, 0.12, 0.98), Color(0.38, 0.90, 1.0), 2.2)
 
 	var spd_pct := int(round((1.0 + float(State.attached_drones) * 0.18) * 100.0))
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 24), "クラフト・製造ドック（製造速度 %d%%）" % spd_pct, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 90), 13, Color(0.48, 0.96, 1.0))
-	var cr := Rect2(r.end.x - 68, r.position.y + 7, 58, 24)
-	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "クラフト（速度 %d%%）" % spd_pct, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.48, 0.96, 1.0))
+	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	# 4カテゴリタブ
-	var ty := r.position.y + 38.0
+	# 5カテゴリタブ（機体 / 電力 / 物流 / 加工 / 軌道施設！）
+	var ty := r.position.y + 46.0
 	var tw := (mw - 24.0) / float(State.CRAFT_TABS.size())
 	var tut_f := String(State.get_tutorial_info()["focus"]) if State.tut_enabled else ""
 	for ti in range(State.CRAFT_TABS.size()):
-		var tr := Rect2(r.position.x + 12.0 + float(ti) * tw, ty, tw - 4.0, 28.0)
+		var tr := Rect2(r.position.x + 12.0 + float(ti) * tw, ty, tw - 4.0, 34.0)
 		var sel := (ti == craft_tab)
-		_panel(tr, Color(0.12, 0.26, 0.38, 0.96) if sel else Color(0.06, 0.09, 0.16, 0.90), Color(0.45, 0.96, 1.0) if sel else Color(0.26, 0.36, 0.50), 1.4)
-		root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 18), String(State.CRAFT_TABS[ti]["label"]), HORIZONTAL_ALIGNMENT_CENTER, tr.size.x, 11, Color.WHITE if sel else Color(0.70, 0.78, 0.88))
+		_panel(tr, Color(0.12, 0.28, 0.40, 0.96) if sel else Color(0.06, 0.09, 0.16, 0.90), Color(0.45, 0.96, 1.0) if sel else Color(0.28, 0.40, 0.56), 1.6)
+		root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 23), String(State.CRAFT_TABS[ti]["label"]), HORIZONTAL_ALIGNMENT_CENTER, tr.size.x, 12 if portrait else 14, Color.WHITE if sel else Color(0.72, 0.80, 0.90))
 		if (tut_f == "craft_drone" and ti == 0 and not sel) or (tut_f == "craft_power" and ti == 1 and not sel):
 			_pulse_frame(tr)
 		_add_hit(tr, "craft_tab", ti)
 
-	# アイテム一覧領域
-	var qh := 94.0
-	var list_y := ty + 36.0
-	var list_h := mh - (list_y - r.position.y) - qh - 14.0
+	var qh := 96.0
+	var list_y := ty + 42.0
+	var list_h := mh - (list_y - r.position.y) - qh - 16.0
 	var card_w := mw - 24.0
 
 	if craft_tab == 0:
-		# 機体・増設タブ：ファブリケータードローン ＋ 推進モジュール
 		var y := list_y
-		var ch := 88.0
-		# カード1: ファブリケータードローン
+		var ch := 102.0
 		var dr := Rect2(r.position.x + 12, y, card_w, ch)
 		var can_d := State.can_enqueue_drone()
 		var qd := State.count_queued("drone")
-		_panel(dr, Color(0.07, 0.14, 0.22, 0.95), Color(0.42, 0.96, 1.0) if can_d else Color(0.28, 0.38, 0.50), 1.6)
+		_panel(dr, Color(0.07, 0.14, 0.22, 0.95), Color(0.42, 0.96, 1.0) if can_d else Color(0.28, 0.38, 0.50), 1.8)
 		var dt := ArtReg.get_t("fab_drone")
-		if dt: root_ctrl.draw_texture_rect(dt, Rect2(dr.position.x + 12, dr.position.y + 18, 48, 48), false)
-		var tx := dr.position.x + 72.0
-		var bw := 112.0 if not portrait else 92.0
-		var info_w := int(card_w - 84.0 - bw)
-		var f_desc := 9 if portrait else 10
-		root_ctrl.draw_string(font, Vector2(tx, dr.position.y + 22), "ファブリケータードローン（現在 %d/%d機%s）" % [State.attached_drones, State.MAX_DRONES, (" 製造中:%d" % qd) if qd > 0 else ""], HORIZONTAL_ALIGNMENT_LEFT, info_w, 11 if portrait else 12, Color.WHITE)
-		root_ctrl.draw_string(font, Vector2(tx, dr.position.y + 42), "完成で自動ドッキング！採掘ビーム+1 & 製造速度+18%", HORIZONTAL_ALIGNMENT_LEFT, info_w, f_desc, Color(0.80, 0.90, 0.98))
-		root_ctrl.draw_string(font, Vector2(tx, dr.position.y + 64), "必要資源: %s  |  %.1f秒" % [State.format_cost(State.DRONE_COST), State.DRONE_CRAFT_TIME], HORIZONTAL_ALIGNMENT_LEFT, info_w, f_desc, Color(0.50, 0.98, 0.76) if can_d else Color(1.0, 0.62, 0.50))
-		var db := Rect2(dr.end.x - bw - 10, dr.position.y + 22, bw, 44)
-		_panel(db, Color(0.08, 0.28, 0.22, 0.96) if can_d else Color(0.09, 0.11, 0.17, 0.90), Color(0.38, 1.0, 0.72) if can_d else Color(0.34, 0.42, 0.52), 1.6)
-		root_ctrl.draw_string(font, Vector2(db.position.x, db.position.y + 26), "上限達成" if State.attached_drones >= State.MAX_DRONES else "製造 (+1)", HORIZONTAL_ALIGNMENT_CENTER, bw, 11, Color.WHITE if can_d else Color(0.60, 0.68, 0.76))
-		if tut_f == "craft_drone" and can_d:
-			_pulse_frame(db)
+		if dt: root_ctrl.draw_texture_rect(dt, Rect2(dr.position.x + 14, dr.position.y + 22, 56, 56), false)
+		var tx := dr.position.x + 82.0
+		var bw := 116.0 if not portrait else 96.0
+		var info_w := int(card_w - 96.0 - bw)
+		root_ctrl.draw_string(font, Vector2(tx, dr.position.y + 26), "ドローン増設（%d/%d%s）" % [State.attached_drones, State.MAX_DRONES, (" +%d" % qd) if qd > 0 else ""], HORIZONTAL_ALIGNMENT_LEFT, info_w, 15, Color.WHITE)
+		root_ctrl.draw_string(font, Vector2(tx, dr.position.y + 49), "採掘ビーム+1  製造速度+18%%  %.1f秒" % State.DRONE_CRAFT_TIME, HORIZONTAL_ALIGNMENT_LEFT, info_w, 13, Color(0.74, 0.92, 1.0))
+		_draw_cost_icons(Vector2(tx, dr.position.y + 66), State.DRONE_COST, font, 18.0, 14)
+		var db := Rect2(dr.end.x - bw - 10, dr.position.y + 24, bw, 52)
+		_panel(db, Color(0.08, 0.30, 0.22, 0.96) if can_d else Color(0.09, 0.11, 0.17, 0.90), Color(0.38, 1.0, 0.72) if can_d else Color(0.34, 0.42, 0.52), 1.8)
+		root_ctrl.draw_string(font, Vector2(db.position.x, db.position.y + 32), "最大" if State.attached_drones >= State.MAX_DRONES else "製造", HORIZONTAL_ALIGNMENT_CENTER, bw, 15, Color.WHITE if can_d else Color(0.60, 0.68, 0.76))
+		if tut_f == "craft_drone" and can_d: _pulse_frame(db)
 		if can_d: _add_hit(db, "craft_drone")
 
-		# カード2: 次世代推進モジュール
-		y += ch + 12.0
+		y += ch + 14.0
 		var nxt := State.propulsion_tier + 1
 		var pr := Rect2(r.position.x + 12, y, card_w, ch)
 		var pt := ArtReg.get_t("orbital_booster")
@@ -759,23 +887,24 @@ func _draw_craft_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 			var pinfo: Dictionary = State.PROPULSION_TIERS[nxt]
 			var can_p := State.can_enqueue_propulsion()
 			var req_ok := State.has_tech(String(pinfo["req"]))
-			_panel(pr, Color(0.07, 0.14, 0.20, 0.95), Color(0.42, 1.0, 0.74) if can_p else Color(0.28, 0.38, 0.50), 1.6)
-			if pt: root_ctrl.draw_texture_rect(pt, Rect2(pr.position.x + 12, pr.position.y + 18, 48, 48), false)
-			root_ctrl.draw_string(font, Vector2(tx, pr.position.y + 22), "推進強化: %s（Tier %d）" % [String(pinfo["name"]), nxt], HORIZONTAL_ALIGNMENT_LEFT, info_w, 12, Color.WHITE)
-			root_ctrl.draw_string(font, Vector2(tx, pr.position.y + 42), String(pinfo["desc"]), HORIZONTAL_ALIGNMENT_LEFT, info_w, 10, Color(0.80, 0.90, 0.98))
-			var status_s := "必要資源: %s  |  %.1f秒" % [State.format_cost(pinfo["cost"]), float(pinfo["craft_time"])] if req_ok else "要研究: 【%s】" % State.TECHS[String(pinfo["req"])]["name"]
-			root_ctrl.draw_string(font, Vector2(tx, pr.position.y + 64), status_s, HORIZONTAL_ALIGNMENT_LEFT, info_w, 10, Color(0.50, 0.98, 0.76) if can_p else Color(1.0, 0.74, 0.40))
-			var pb := Rect2(pr.end.x - bw - 10, pr.position.y + 22, bw, 44)
-			_panel(pb, Color(0.08, 0.28, 0.22, 0.96) if can_p else Color(0.09, 0.11, 0.17, 0.90), Color(0.38, 1.0, 0.72) if can_p else Color(0.34, 0.42, 0.52), 1.6)
-			root_ctrl.draw_string(font, Vector2(pb.position.x, pb.position.y + 26), "製造する" if can_p else ("未解放" if not req_ok else "資源不足"), HORIZONTAL_ALIGNMENT_CENTER, bw, 11, Color.WHITE if can_p else Color(0.60, 0.68, 0.76))
+			_panel(pr, Color(0.07, 0.14, 0.20, 0.95), Color(0.42, 1.0, 0.74) if can_p else Color(0.28, 0.38, 0.50), 1.8)
+			if pt: root_ctrl.draw_texture_rect(pt, Rect2(pr.position.x + 14, pr.position.y + 22, 56, 56), false)
+			root_ctrl.draw_string(font, Vector2(tx, pr.position.y + 26), "%s（Tier %d）" % [String(pinfo["name"]), nxt], HORIZONTAL_ALIGNMENT_LEFT, info_w, 15, Color.WHITE)
+			if req_ok:
+				root_ctrl.draw_string(font, Vector2(tx, pr.position.y + 49), "宇宙軌道・他惑星航行  %.1f秒" % float(pinfo["craft_time"]), HORIZONTAL_ALIGNMENT_LEFT, info_w, 13, Color(0.74, 0.92, 1.0))
+				_draw_cost_icons(Vector2(tx, pr.position.y + 66), pinfo["cost"], font, 18.0, 14)
+			else:
+				root_ctrl.draw_string(font, Vector2(tx, pr.position.y + 56), "要研究: %s" % State.TECHS[String(pinfo["req"])]["name"], HORIZONTAL_ALIGNMENT_LEFT, info_w, 14, Color(1.0, 0.74, 0.40))
+			var pb := Rect2(pr.end.x - bw - 10, pr.position.y + 24, bw, 52)
+			_panel(pb, Color(0.08, 0.30, 0.22, 0.96) if can_p else Color(0.09, 0.11, 0.17, 0.90), Color(0.38, 1.0, 0.72) if can_p else Color(0.34, 0.42, 0.52), 1.8)
+			root_ctrl.draw_string(font, Vector2(pb.position.x, pb.position.y + 32), "製造" if can_p else ("未解放" if not req_ok else "不足"), HORIZONTAL_ALIGNMENT_CENTER, bw, 15, Color.WHITE if can_p else Color(0.60, 0.68, 0.76))
 			if can_p: _add_hit(pb, "craft_prop")
 		else:
-			_panel(pr, Color(0.06, 0.20, 0.16, 0.94), Color(0.40, 1.0, 0.72), 1.5)
-			root_ctrl.draw_string(font, Vector2(pr.position.x + 18, pr.position.y + 48), "推進機関は最大強化（スウォーム旗艦ドライブ）に到達しています！", HORIZONTAL_ALIGNMENT_LEFT, int(card_w - 36), 12, Color(0.66, 1.0, 0.82))
+			_panel(pr, Color(0.06, 0.20, 0.16, 0.94), Color(0.40, 1.0, 0.72), 1.6)
+			root_ctrl.draw_string(font, Vector2(pr.position.x + 20, pr.position.y + 56), "★ 推進機関 最大強化済み", HORIZONTAL_ALIGNMENT_LEFT, int(card_w - 40), 16, Color(0.66, 1.0, 0.82))
 	else:
-		# 建物製造リスト
 		var items: Array = State.CRAFT_TABS[craft_tab]["items"]
-		var row_h := clampf((list_h - float(items.size() - 1) * 6.0) / float(maxi(1, items.size())), 58.0, 78.0)
+		var row_h := clampf((list_h - float(items.size() - 1) * 8.0) / float(maxi(1, items.size())), 66.0, 88.0)
 		var y := list_y
 		for bid_v in items:
 			var bid := String(bid_v)
@@ -785,441 +914,517 @@ func _draw_craft_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 			var stock := State.get_stock(bid)
 			var qcnt := State.count_queued("building", bid)
 			var br := Rect2(r.position.x + 12, y, card_w, row_h)
-			_panel(br, Color(0.07, 0.11, 0.18, 0.94) if unl else Color(0.05, 0.06, 0.10, 0.88), Color(0.36, 0.74, 0.94) if can_b else Color(0.24, 0.30, 0.42), 1.3)
+			_panel(br, Color(0.07, 0.11, 0.18, 0.95) if unl else Color(0.05, 0.06, 0.10, 0.88), Color(0.36, 0.78, 0.96) if can_b else Color(0.24, 0.30, 0.42), 1.5)
 
 			var itex := ArtReg.get_t(String(info["tex"]))
-			var isz := minf(42.0, row_h - 14.0)
+			var isz := minf(48.0, row_h - 14.0)
 			if itex:
-				root_ctrl.draw_texture_rect(itex, Rect2(br.position.x + 10, br.position.y + (row_h - isz) * 0.5, isz, isz), false, Color.WHITE if unl else Color(0.4, 0.4, 0.45, 0.6))
+				root_ctrl.draw_texture_rect(itex, Rect2(br.position.x + 12, br.position.y + (row_h - isz) * 0.5, isz, isz), false, Color.WHITE if unl else Color(0.4, 0.4, 0.45, 0.55))
 
-			var btn_w := 84.0 if not portrait else 74.0
+			var btn_w := 86.0 if not portrait else 74.0
 			var has_place := stock > 0
-			var right_pad := (btn_w * 2.0 + 18.0) if has_place else (btn_w + 14.0)
-			var tx := br.position.x + isz + 18.0
-			var tw_i := int(card_w - (isz + 22.0) - right_pad)
-			var hdr := "%s（所持:%d%s）" % [String(info["name"]), stock, (" 製造中:%d" % qcnt) if qcnt > 0 else ""]
-			root_ctrl.draw_string(font, Vector2(tx, br.position.y + 18), hdr, HORIZONTAL_ALIGNMENT_LEFT, tw_i, 11, Color.WHITE if unl else Color(0.60, 0.66, 0.76))
-			root_ctrl.draw_string(font, Vector2(tx, br.position.y + 35), String(info["desc"]), HORIZONTAL_ALIGNMENT_LEFT, tw_i, 9, Color(0.76, 0.86, 0.96))
-			var sub := "%s  |  %.1f秒" % [State.format_cost(info["cost"]), float(info["craft_time"])] if unl else "要研究: 【%s】" % State.TECHS[String(info["req"])]["name"]
-			root_ctrl.draw_string(font, Vector2(tx, br.position.y + row_h - 8), sub, HORIZONTAL_ALIGNMENT_LEFT, tw_i, 9, Color(0.50, 0.96, 0.74) if can_b else Color(1.0, 0.68, 0.44))
+			var right_pad := (btn_w * 2.0 + 20.0) if has_place else (btn_w + 14.0)
+			var tx := br.position.x + isz + 22.0
+			var tw_i := int(card_w - (isz + 26.0) - right_pad)
+			var hdr := "%s（x%d%s）" % [String(info["name"]), stock, (" +%d" % qcnt) if qcnt > 0 else ""]
+			root_ctrl.draw_string(font, Vector2(tx, br.position.y + 23), hdr, HORIZONTAL_ALIGNMENT_LEFT, tw_i, 14, Color.WHITE if unl else Color(0.60, 0.66, 0.76))
+			if unl:
+				_draw_cost_icons(Vector2(tx, br.position.y + row_h - 26.0), info["cost"], font, 17.0, 13)
+			else:
+				root_ctrl.draw_string(font, Vector2(tx, br.position.y + row_h - 12.0), "要研究: %s" % State.TECHS[String(info["req"])]["name"], HORIZONTAL_ALIGNMENT_LEFT, tw_i, 13, Color(1.0, 0.72, 0.42))
 
-			var by_btn := br.position.y + (row_h - 34.0) * 0.5
+			var by_btn := br.position.y + (row_h - 40.0) * 0.5
 			if has_place:
-				var pl_r := Rect2(br.end.x - btn_w * 2.0 - 14.0, by_btn, btn_w, 34.0)
-				_panel(pl_r, Color(0.10, 0.24, 0.36, 0.96), Color(0.45, 0.96, 1.0), 1.5)
-				root_ctrl.draw_string(font, Vector2(pl_r.position.x, pl_r.position.y + 21), "配置する", HORIZONTAL_ALIGNMENT_CENTER, btn_w, 10, Color.WHITE)
+				var pl_r := Rect2(br.end.x - btn_w * 2.0 - 16.0, by_btn, btn_w, 40.0)
+				_panel(pl_r, Color(0.10, 0.24, 0.36, 0.96), Color(0.45, 0.96, 1.0), 1.6)
+				root_ctrl.draw_string(font, Vector2(pl_r.position.x, pl_r.position.y + 26), "配置", HORIZONTAL_ALIGNMENT_CENTER, btn_w, 14, Color.WHITE)
 				_add_hit(pl_r, "equip_place", bid)
 
-			var mk_r := Rect2(br.end.x - btn_w - 8.0, by_btn, btn_w, 34.0)
-			_panel(mk_r, Color(0.08, 0.28, 0.20, 0.96) if can_b else Color(0.09, 0.11, 0.17, 0.90), Color(0.38, 1.0, 0.72) if can_b else Color(0.30, 0.38, 0.48), 1.5)
-			root_ctrl.draw_string(font, Vector2(mk_r.position.x, mk_r.position.y + 21), "製造 (+1)" if unl else "未解放", HORIZONTAL_ALIGNMENT_CENTER, btn_w, 10, Color.WHITE if can_b else Color(0.55, 0.62, 0.70))
+			var mk_r := Rect2(br.end.x - btn_w - 8.0, by_btn, btn_w, 40.0)
+			_panel(mk_r, Color(0.08, 0.30, 0.22, 0.96) if can_b else Color(0.09, 0.11, 0.17, 0.90), Color(0.38, 1.0, 0.72) if can_b else Color(0.30, 0.38, 0.48), 1.6)
+			root_ctrl.draw_string(font, Vector2(mk_r.position.x, mk_r.position.y + 26), "製造" if unl else "未解放", HORIZONTAL_ALIGNMENT_CENTER, btn_w, 14, Color.WHITE if can_b else Color(0.55, 0.62, 0.70))
 			if tut_f == "craft_power" and (bid == "solar" or bid == "tesla") and can_b and (stock + qcnt + int(State.tut_placed.get(bid, 0))) == 0:
 				_pulse_frame(mk_r)
 			if can_b: _add_hit(mk_r, "craft_bld", bid)
+			y += row_h + 8.0
 
-			y += row_h + 6.0
-
-	# 下部: 製造キュー（Craft Queue）パネル
-	var qr := Rect2(r.position.x + 12, r.end.y - qh - 8, card_w, qh)
-	_panel(qr, Color(0.05, 0.08, 0.15, 0.96), Color(0.34, 0.68, 0.92), 1.5)
-	root_ctrl.draw_string(font, Vector2(qr.position.x + 10, qr.position.y + 18), "製造キュー（%d/12）  ※キュー内の項目をタップするとキャンセル＆資源返却" % State.craft_queue.size(), HORIZONTAL_ALIGNMENT_LEFT, int(card_w - 20), 10, Color(0.68, 0.88, 1.0))
-
+	# 製造キュー
+	var qr := Rect2(r.position.x + 12, r.end.y - qh - 10, card_w, qh)
+	_panel(qr, Color(0.05, 0.08, 0.15, 0.96), Color(0.34, 0.68, 0.92), 1.6)
+	root_ctrl.draw_string(font, Vector2(qr.position.x + 12, qr.position.y + 21), "製造キュー（%d/12）  タップで取消" % State.craft_queue.size(), HORIZONTAL_ALIGNMENT_LEFT, int(card_w - 24), 13, Color(0.68, 0.90, 1.0))
 	if State.craft_queue.is_empty():
-		root_ctrl.draw_string(font, Vector2(qr.position.x + 10, qr.position.y + 56), "現在製造中のアイテムはありません。上の「製造 (+1)」からキューに追加しよう！", HORIZONTAL_ALIGNMENT_LEFT, int(card_w - 20), 11, Color(0.58, 0.68, 0.80))
+		root_ctrl.draw_string(font, Vector2(qr.position.x + 12, qr.position.y + 58), "製造待機なし", HORIZONTAL_ALIGNMENT_LEFT, int(card_w - 24), 14, Color(0.56, 0.66, 0.78))
 	else:
 		var qx := qr.position.x + 10.0
-		var qy := qr.position.y + 26.0
+		var qy := qr.position.y + 28.0
 		var max_show := mini(State.craft_queue.size(), 5 if not portrait else 3)
 		var q_slot_w := (card_w - 20.0 - float(max_show - 1) * 6.0) / float(max_show)
 		for qi in range(max_show):
 			var q: Dictionary = State.craft_queue[qi]
-			var sr := Rect2(qx + float(qi) * (q_slot_w + 6.0), qy, q_slot_w, 58.0)
+			var sr := Rect2(qx + float(qi) * (q_slot_w + 6.0), qy, q_slot_w, 60.0)
 			var is_head := (qi == 0)
-			_panel(sr, Color(0.08, 0.20, 0.28, 0.96) if is_head else Color(0.07, 0.10, 0.17, 0.92), Color(0.40, 1.0, 0.78) if is_head else Color(0.30, 0.42, 0.56), 1.4)
-			root_ctrl.draw_string(font, Vector2(sr.position.x + 6, sr.position.y + 17), "#%d %s" % [qi + 1, String(q["name"])], HORIZONTAL_ALIGNMENT_LEFT, int(q_slot_w - 12), 10, Color.WHITE)
+			_panel(sr, Color(0.08, 0.22, 0.30, 0.96) if is_head else Color(0.07, 0.10, 0.17, 0.92), Color(0.40, 1.0, 0.78) if is_head else Color(0.30, 0.42, 0.56), 1.5)
+			root_ctrl.draw_string(font, Vector2(sr.position.x + 8, sr.position.y + 20), String(q["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(q_slot_w - 14), 12, Color.WHITE)
 			if is_head:
 				var pct := clampf(1.0 - float(q["time_left"]) / maxf(0.1, float(q["total_time"])), 0.0, 1.0)
-				root_ctrl.draw_string(font, Vector2(sr.position.x + 6, sr.position.y + 34), "残り %.1f秒" % maxf(0.0, float(q["time_left"])), HORIZONTAL_ALIGNMENT_LEFT, int(q_slot_w - 12), 9, Color(0.55, 1.0, 0.82))
-				root_ctrl.draw_rect(Rect2(sr.position.x + 6, sr.position.y + 42, q_slot_w - 12, 8), Color(0.10, 0.14, 0.22))
-				root_ctrl.draw_rect(Rect2(sr.position.x + 6, sr.position.y + 42, (q_slot_w - 12) * pct, 8), Color(0.36, 0.98, 0.74))
+				root_ctrl.draw_string(font, Vector2(sr.position.x + 8, sr.position.y + 38), "%.1f秒" % maxf(0.0, float(q["time_left"])), HORIZONTAL_ALIGNMENT_LEFT, int(q_slot_w - 14), 12, Color(0.55, 1.0, 0.82))
+				root_ctrl.draw_rect(Rect2(sr.position.x + 8, sr.position.y + 45, q_slot_w - 16, 8), Color(0.10, 0.14, 0.22))
+				root_ctrl.draw_rect(Rect2(sr.position.x + 8, sr.position.y + 45, (q_slot_w - 16) * pct, 8), Color(0.36, 0.98, 0.74))
 			else:
-				root_ctrl.draw_string(font, Vector2(sr.position.x + 6, sr.position.y + 38), "待機中（タップで中止）", HORIZONTAL_ALIGNMENT_LEFT, int(q_slot_w - 12), 9, Color(0.66, 0.76, 0.88))
+				root_ctrl.draw_string(font, Vector2(sr.position.x + 8, sr.position.y + 42), "待機 #%d" % (qi + 1), HORIZONTAL_ALIGNMENT_LEFT, int(q_slot_w - 14), 12, Color(0.68, 0.78, 0.90))
 			_add_hit(sr, "cancel_q", qi)
 
-# 8. Factorio式 技術ツリー研究画面 ([T])
+# 8. 技術ツリー ([T]) ＋ タップで開く専用「技術詳細ポップアップ」（右上閉じる＋下部横長「研究する」！）
 func _draw_tech_modal(vp: Vector2, portrait: bool, font: Font) -> void:
-	var mw := minf(vp.x - 20.0, 880.0)
-	var mh := minf(vp.y - 60.0, 540.0)
+	var mw := minf(vp.x - 16.0, 920.0)
+	var mh := minf(vp.y - 40.0, 560.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
-	_panel(r, Color(0.03, 0.05, 0.10, 0.97), Color(0.36, 0.86, 1.0), 2.0)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 24), "コロニー技術研究所 // 技術ツリー", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 90), 13, Color(0.48, 0.96, 1.0))
+	_panel(r, Color(0.03, 0.05, 0.10, 0.98), Color(0.36, 0.86, 1.0), 2.2)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "技術ツリー（カードをタップで詳細）", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.48, 0.96, 1.0))
 
-	var cr := Rect2(r.end.x - 68, r.position.y + 7, 58, 24)
-	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
-	_add_hit(cr, "close")
+	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
+	if not tech_detail_open:
+		_add_hit(cr, "close")
 
 	var cards: Dictionary = {}
-	var dh := 124.0
-	var gh := mh - dh - 48.0
+	var gh := mh - 62.0
 	if portrait:
-		var cw := (mw - 32.0) * 0.5; var ch := clampf((gh - 28.0) / 4.0, 44.0, 58.0)
+		var cw := (mw - 36.0) * 0.5
+		var ch := clampf((gh - 36.0) / 4.0, 82.0, 110.0)
 		for i in range(State.TECH_ORDER.size()):
 			var tid := State.TECH_ORDER[i]
-			cards[tid] = Rect2(r.position.x + 12 + float(i % 2) * (cw + 8), r.position.y + 40 + float(i / 2) * (ch + 8), cw, ch)
+			cards[tid] = Rect2(r.position.x + 14 + float(i % 2) * (cw + 8), r.position.y + 48 + float(i / 2) * (ch + 10), cw, ch)
 	else:
-		var cw := (mw - 76.0) / 6.0; var ch := 64.0; var rsp := gh / 3.0
+		var cw := (mw - 86.0) / 6.0
+		var ch := 112.0
+		var rsp := gh / 3.0
 		for tid in State.TECH_ORDER:
 			var t: Dictionary = State.TECHS[tid]
-			cards[tid] = Rect2(r.position.x + 16 + float(int(t["col"])) * (cw + 8), r.position.y + 42 + float(int(t["row"])) * rsp, cw, ch)
+			cards[tid] = Rect2(r.position.x + 18 + float(int(t["col"])) * (cw + 10), r.position.y + 52 + float(int(t["row"])) * rsp, cw, ch)
 
 	for tid in State.TECH_ORDER:
 		for rq in State.TECHS[tid]["req"]:
 			if cards.has(rq):
-				var col := Color(0.35, 0.96, 0.68, 0.85) if State.has_tech(tid) else Color(0.32, 0.46, 0.64, 0.55)
-				root_ctrl.draw_line(Rect2(cards[rq]).get_center(), Rect2(cards[tid]).get_center(), col, 2.0)
+				var col := Color(0.35, 0.96, 0.68, 0.88) if State.has_tech(tid) else Color(0.32, 0.46, 0.64, 0.58)
+				root_ctrl.draw_line(Rect2(cards[rq]).get_center(), Rect2(cards[tid]).get_center(), col, 2.6)
 
 	for i in range(State.TECH_ORDER.size()):
-		var tid := State.TECH_ORDER[i]; var t: Dictionary = State.TECHS[tid]; var box_r: Rect2 = cards[tid]
-		var done := State.has_tech(tid); var avail := State.can_research(tid); var sel := (i == tech_sel)
-		var bg := Color(0.06, 0.22, 0.16, 0.95) if done else (Color(0.10, 0.20, 0.34, 0.95) if sel else Color(0.06, 0.09, 0.15, 0.92))
-		var bd := Color(0.36, 1.0, 0.72) if done else (Color(1.0, 0.84, 0.34) if avail else (Color(0.42, 0.94, 1.0) if sel else Color(0.26, 0.36, 0.48)))
-		_panel(box_r, bg, bd, 2.2 if sel else 1.2)
-		root_ctrl.draw_string(font, Vector2(box_r.position.x + 8, box_r.position.y + 22), String(t["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(box_r.size.x - 14), 11, Color.WHITE)
-		var st := "研究済" if done else ("研究可能！" if avail else "未解放")
-		root_ctrl.draw_string(font, Vector2(box_r.position.x + 8, box_r.end.y - 8), st, HORIZONTAL_ALIGNMENT_LEFT, int(box_r.size.x - 14), 10, Color(0.45, 1.0, 0.72) if done else (Color(1.0, 0.84, 0.34) if avail else Color(0.56, 0.64, 0.76)))
-		_add_hit(box_r, "tech_sel", i)
+		var tid := State.TECH_ORDER[i]
+		var t: Dictionary = State.TECHS[tid]
+		var box_r: Rect2 = cards[tid]
+		var done := State.has_tech(tid)
+		var avail := State.can_research(tid)
+		var bg := Color(0.06, 0.22, 0.16, 0.96) if done else (Color(0.10, 0.20, 0.34, 0.96) if avail else Color(0.06, 0.09, 0.15, 0.94))
+		var bd := Color(0.36, 1.0, 0.72) if done else (Color(1.0, 0.84, 0.34) if avail else Color(0.28, 0.38, 0.52))
+		_panel(box_r, bg, bd, 2.2 if avail else 1.5)
 
-	var sid := State.TECH_ORDER[clampi(tech_sel, 0, State.TECH_ORDER.size() - 1)]
-	var td: Dictionary = State.TECHS[sid]
-	var dr := Rect2(r.position.x + 12, r.end.y - dh - 10, mw - 24, dh)
-	_panel(dr, Color(0.05, 0.08, 0.15, 0.96), Color(0.36, 0.78, 1.0), 1.5)
-	var bw := 102.0 if portrait else 156.0
-	var tw := int(dr.size.x - bw - 22)
-	var fs_h := 10 if portrait else 12
-	var fs_b := 9 if portrait else 11
-	var fs_s := 9 if portrait else 10
-	root_ctrl.draw_string(font, Vector2(dr.position.x + 10, dr.position.y + 22), "%s  |  解放: %s" % [String(td["name"]), "・".join(td["unlocks"])], HORIZONTAL_ALIGNMENT_LEFT, tw, fs_h, Color(0.46, 0.96, 1.0))
-	root_ctrl.draw_string(font, Vector2(dr.position.x + 10, dr.position.y + 46), String(td["summary"]), HORIZONTAL_ALIGNMENT_LEFT, tw, fs_b, Color(0.92, 0.95, 1.0))
-	root_ctrl.draw_string(font, Vector2(dr.position.x + 10, dr.position.y + 68), "流れ: " + String(td["flow"]), HORIZONTAL_ALIGNMENT_LEFT, tw, fs_s, Color(0.46, 0.96, 0.72))
-	var cp: Array[String] = []
-	for k in td["cost"].keys(): cp.append("%s %d/%d" % [State.res_name(String(k)), State.get_r(String(k)), int(td["cost"][k])])
-	root_ctrl.draw_string(font, Vector2(dr.position.x + 10, dr.position.y + 96), "必要資源: " + ("  ".join(cp) if not cp.is_empty() else "無料"), HORIZONTAL_ALIGNMENT_LEFT, tw, fs_b, Color(1.0, 0.82, 0.36))
+		# Pixel-art representative sprite right on the Tech Card!
+		var icon_t := _get_visual_tex(String(t.get("icon", "seed_core")))
+		var isz := 38.0 if portrait else 42.0
+		if icon_t:
+			root_ctrl.draw_texture_rect(icon_t, Rect2(box_r.position.x + (box_r.size.x - isz) * 0.5, box_r.position.y + 8, isz, isz), false, Color.WHITE if (done or avail) else Color(0.65, 0.70, 0.80, 0.85))
+		root_ctrl.draw_string(font, Vector2(box_r.position.x + 6, box_r.position.y + isz + 28), String(t["name"]), HORIZONTAL_ALIGNMENT_CENTER, int(box_r.size.x - 12), 13, Color.WHITE)
+		var st := "✓ 済" if done else ("★ 研究可" if avail else "未解放")
+		root_ctrl.draw_string(font, Vector2(box_r.position.x + 6, box_r.end.y - 8), st, HORIZONTAL_ALIGNMENT_CENTER, int(box_r.size.x - 12), 12, Color(0.45, 1.0, 0.72) if done else (Color(1.0, 0.86, 0.36) if avail else Color(0.58, 0.68, 0.80)))
+		if not tech_detail_open:
+			if avail and State.tut_enabled and State.tut_step == 2 and tid == "power_grid":
+				_pulse_frame(box_r)
+			_add_hit(box_r, "tech_open_card", i)
 
-	var rb := Rect2(dr.end.x - bw - 10, dr.position.y + 22, bw, dr.size.y - 44)
-	var can_r := State.can_research(sid)
-	_panel(rb, Color(0.08, 0.28, 0.20, 0.95) if can_r else Color(0.08, 0.11, 0.18, 0.92), Color(0.36, 1.0, 0.72) if can_r else Color(0.34, 0.44, 0.56), 1.8)
-	root_ctrl.draw_string(font, Vector2(rb.position.x, rb.position.y + rb.size.y * 0.5 + 5), "研究済" if State.has_tech(sid) else ("研究開始" if can_r else "条件不足"), HORIZONTAL_ALIGNMENT_CENTER, bw, 12, Color.WHITE if can_r else Color(0.6, 0.68, 0.78))
-	if can_r and State.tut_enabled and State.tut_step == 2 and sid == "power_grid":
-		_pulse_frame(rb)
-	if can_r: _add_hit(rb, "tech_buy", sid)
+	# 専用「技術詳細ポップアップウィンドウ」（右上「閉じる」＋ドット絵フロー図解＋下部横長「研究する」ボタン！）
+	if tech_detail_open:
+		root_ctrl.draw_rect(Rect2(Vector2.ZERO, vp), Color(0.0, 0.0, 0.0, 0.58))
+		_add_hit(Rect2(Vector2.ZERO, vp), "close_tech_detail")
 
-# 9. 指令・軌道マップ・メガ構造物・システムモーダル ([M])
+		var sid := State.TECH_ORDER[clampi(tech_sel, 0, State.TECH_ORDER.size() - 1)]
+		var td: Dictionary = State.TECHS[sid]
+		var pw := minf(vp.x - 24.0, 580.0)
+		var ph := minf(vp.y - 44.0, 440.0)
+		var pr := Rect2((vp.x - pw) * 0.5, (vp.y - ph) * 0.5, pw, ph)
+		_panel(pr, Color(0.04, 0.08, 0.15, 0.99), Color(0.42, 0.94, 1.0), 2.6)
+		_add_hit(pr, "noop") # Block backdrop click inside popup
+
+		# タイトル＆右上「閉じる」ボタン
+		var icon_h := _get_visual_tex(String(td.get("icon", "seed_core")))
+		if icon_h:
+			root_ctrl.draw_texture_rect(icon_h, Rect2(pr.position.x + 16, pr.position.y + 12, 36, 36), false)
+		root_ctrl.draw_string(font, Vector2(pr.position.x + 62, pr.position.y + 36), String(td["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(pw - 160), 19, Color(0.48, 0.98, 1.0))
+
+		var pcr := Rect2(pr.end.x - 84, pr.position.y + 12, 72, 32)
+		_panel(pcr, Color(0.32, 0.09, 0.11, 0.96), Color(1.0, 0.44, 0.44), 1.8)
+		root_ctrl.draw_string(font, Vector2(pcr.position.x, pcr.position.y + 22), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, pcr.size.x, 14, Color.WHITE)
+		_add_hit(pcr, "close_tech_detail")
+
+		# 解放アイテム・施設ドット絵一覧
+		var y := pr.position.y + 62.0
+		var u_keys: Array = td.get("unlock_keys", [])
+		var u_names: Array = td.get("unlocks", [])
+		root_ctrl.draw_string(font, Vector2(pr.position.x + 18, y + 14), "解放される設備・装備", HORIZONTAL_ALIGNMENT_LEFT, int(pw - 36), 13, Color(0.74, 0.90, 1.0))
+		y += 22.0
+		var ur := Rect2(pr.position.x + 16, y, pw - 32, 84)
+		_panel(ur, Color(0.06, 0.10, 0.18, 0.95), Color(0.28, 0.48, 0.68), 1.4)
+		var un := maxi(1, u_keys.size())
+		var uw := ur.size.x / float(un)
+		for ui in range(u_keys.size()):
+			var ucx := ur.position.x + (float(ui) + 0.5) * uw
+			var ut := _get_visual_tex(String(u_keys[ui]))
+			if ut:
+				root_ctrl.draw_texture_rect(ut, Rect2(ucx - 22, ur.position.y + 8, 44, 44), false)
+			var ulbl := String(u_names[ui]) if ui < u_names.size() else String(u_keys[ui])
+			root_ctrl.draw_string(font, Vector2(ur.position.x + float(ui) * uw, ur.end.y - 8), ulbl, HORIZONTAL_ALIGNMENT_CENTER, uw, 12, Color.WHITE)
+
+		# ドット絵フロー図解（文字を減らし視覚で伝える！）
+		y = ur.end.y + 14.0
+		root_ctrl.draw_string(font, Vector2(pr.position.x + 18, y + 14), "しくみ図解", HORIZONTAL_ALIGNMENT_LEFT, int(pw - 36), 13, Color(0.48, 0.98, 0.78))
+		y += 20.0
+		var fr := Rect2(pr.position.x + 16, y, pw - 32, 86)
+		_draw_flow_diagram(fr, td.get("flow_keys", []), font)
+		root_ctrl.draw_string(font, Vector2(pr.position.x + 18, fr.end.y + 20), String(td["summary"]), HORIZONTAL_ALIGNMENT_LEFT, int(pw - 36), 13, Color(0.92, 0.96, 1.0))
+
+		# コストアイコン列
+		var cost_y := pr.end.y - 104.0
+		root_ctrl.draw_string(font, Vector2(pr.position.x + 18, cost_y + 14), "必要資源:", HORIZONTAL_ALIGNMENT_LEFT, 82, 14, Color(1.0, 0.86, 0.40))
+		_draw_cost_icons(Vector2(pr.position.x + 98, cost_y - 2), td["cost"], font, 20.0, 15, true)
+
+		# 下部の横長・大型「研究する」ボタン！
+		var done_d := State.has_tech(sid)
+		var can_r := State.can_research(sid)
+		var rb := Rect2(pr.position.x + 16, pr.end.y - 68, pw - 32, 54)
+		_panel(rb, Color(0.08, 0.34, 0.24, 0.98) if can_r else (Color(0.06, 0.20, 0.16, 0.94) if done_d else Color(0.10, 0.12, 0.18, 0.94)),
+			Color(0.40, 1.0, 0.74) if can_r else (Color(0.36, 0.88, 0.66) if done_d else Color(0.36, 0.44, 0.56)), 2.2)
+		var btn_txt := "✓ 研究済み" if done_d else ("研究する" if can_r else "条件・資源不足")
+		root_ctrl.draw_string(font, Vector2(rb.position.x, rb.position.y + 34), btn_txt, HORIZONTAL_ALIGNMENT_CENTER, rb.size.x, 18, Color.WHITE if (can_r or done_d) else Color(0.62, 0.70, 0.80))
+		if can_r and State.tut_enabled and State.tut_step == 2 and sid == "power_grid":
+			_pulse_frame(rb)
+		if can_r:
+			_add_hit(rb, "tech_buy", sid)
+
+# 9. 星系地図・艦隊ドクトリン・メガ構造物 ([M])
 func _draw_command_modal(vp: Vector2, portrait: bool, font: Font) -> void:
-	var mw := minf(vp.x - 20.0, 560.0)
-	var mh := minf(vp.y - 40.0, 520.0)
+	var mw := minf(vp.x - 16.0, 580.0)
+	var mh := minf(vp.y - 32.0, 540.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
-	_panel(r, Color(0.04, 0.06, 0.12, 0.97), Color(0.62, 0.54, 1.0), 2.0)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 24), "軌道指令センター // マップ・艦隊・巨大構造物", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 90), 13, Color(0.76, 0.68, 1.0))
-
-	var cr := Rect2(r.end.x - 68, r.position.y + 7, 58, 24)
-	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+	_panel(r, Color(0.04, 0.06, 0.12, 0.98), Color(0.62, 0.54, 1.0), 2.2)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "星系指令・艦隊マップ", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.76, 0.68, 1.0))
+	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var y := r.position.y + 42.0
-	# 軌道全体マップ切替
-	var or_r := Rect2(r.position.x + 14, y, mw - 28, 36)
-	_panel(or_r, Color(0.08, 0.22, 0.34, 0.96), Color(0.42, 0.92, 1.0), 1.5)
-	root_ctrl.draw_string(font, Vector2(or_r.position.x, or_r.position.y + 23), "惑星・衛星 軌道全体マップを開く [M]" if not State.orbit_view else "通常視点に戻る [M]", HORIZONTAL_ALIGNMENT_CENTER, or_r.size.x, 12, Color.WHITE)
+	var y := r.position.y + 48.0
+	var or_r := Rect2(r.position.x + 14, y, mw - 28, 42)
+	_panel(or_r, Color(0.08, 0.24, 0.36, 0.96), Color(0.42, 0.92, 1.0), 1.8)
+	root_ctrl.draw_string(font, Vector2(or_r.position.x, or_r.position.y + 27), "太陽系全体マップを開く" if not State.orbit_view else "機体視点へ戻る", HORIZONTAL_ALIGNMENT_CENTER, or_r.size.x, 15, Color.WHITE)
 	_add_hit(or_r, "toggle_orbit")
-	y += 48.0
+	y += 52.0
 
-	# 艦隊ドクトリン（4種）
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 10), "スウォーム艦隊ドクトリン（現在艦隊: %d / 10,000）" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 11, Color(1.0, 0.86, 0.42))
-	y += 18.0
+	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 14), "艦隊ドクトリン（%d / 10,000）" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 14, Color(1.0, 0.86, 0.42))
+	y += 22.0
 	var dw := (mw - 28.0 - 18.0) / 4.0
 	for i in range(4):
-		var dr := Rect2(r.position.x + 14 + float(i) * (dw + 6.0), y, dw, 32)
+		var dr := Rect2(r.position.x + 14 + float(i) * (dw + 6.0), y, dw, 36)
 		var on := (State.doctrine == i)
-		_panel(dr, Color(0.14, 0.28, 0.40, 0.96) if on else Color(0.06, 0.09, 0.16, 0.90), Color(1.0, 0.84, 0.34) if on else Color(0.28, 0.38, 0.52), 1.5)
-		root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 21), State.DOCTRINE_NAMES[i], HORIZONTAL_ALIGNMENT_CENTER, dw, 11, Color.WHITE if on else Color(0.72, 0.80, 0.90))
+		_panel(dr, Color(0.14, 0.28, 0.42, 0.96) if on else Color(0.06, 0.09, 0.16, 0.90), Color(1.0, 0.84, 0.34) if on else Color(0.28, 0.38, 0.52), 1.6)
+		root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 24), State.DOCTRINE_NAMES[i], HORIZONTAL_ALIGNMENT_CENTER, dw, 14, Color.WHITE if on else Color(0.72, 0.80, 0.90))
 		_add_hit(dr, "doc", i)
-	y += 38.0
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 11), "効果: " + State.DOCTRINE_DESCS[State.doctrine], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 10, Color(0.76, 0.88, 0.98))
-	y += 26.0
+	y += 46.0
 
-	# 軌道メガストラクチャー建造
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 10), "軌道メガストラクチャー%s" % ("" if State.has_tech("megastructures") else "（要研究: 巨大構造物）"), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 11, Color(0.76, 0.68, 1.0))
-	y += 18.0
+	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 14), "軌道メガストラクチャー", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 14, Color(0.76, 0.68, 1.0))
+	y += 22.0
 	for mid in ["elevator", "dyson", "citadel", "warpgate"]:
 		var built := bool(State.megastructures[mid])
-		var mr := Rect2(r.position.x + 14, y, mw - 28, 44)
-		_panel(mr, Color(0.08, 0.26, 0.18, 0.94) if built else Color(0.07, 0.10, 0.17, 0.92), Color(0.36, 1.0, 0.72) if built else Color(0.38, 0.48, 0.64), 1.3)
-		root_ctrl.draw_string(font, Vector2(mr.position.x + 10, mr.position.y + 17), String(State.MEGAS[mid]["name"]) + ("【完成】" if built else ""), HORIZONTAL_ALIGNMENT_LEFT, int(mr.size.x - 20), 11, Color.WHITE)
-		root_ctrl.draw_string(font, Vector2(mr.position.x + 10, mr.position.y + 34), "%s  |  %s" % [String(State.MEGAS[mid]["desc"]), State.format_cost(State.MEGAS[mid]["cost"])], HORIZONTAL_ALIGNMENT_LEFT, int(mr.size.x - 20), 9, Color(0.74, 0.84, 0.94))
+		var mr := Rect2(r.position.x + 14, y, mw - 28, 48)
+		_panel(mr, Color(0.08, 0.26, 0.18, 0.94) if built else Color(0.07, 0.10, 0.17, 0.92), Color(0.36, 1.0, 0.72) if built else Color(0.38, 0.48, 0.64), 1.4)
+		root_ctrl.draw_string(font, Vector2(mr.position.x + 12, mr.position.y + 20), String(State.MEGAS[mid]["name"]) + (" ✓" if built else ""), HORIZONTAL_ALIGNMENT_LEFT, int(mr.size.x - 24), 14, Color.WHITE)
+		_draw_cost_icons(Vector2(mr.position.x + 12, mr.position.y + 26), State.MEGAS[mid]["cost"], font, 16.0, 12)
 		if not built: _add_hit(mr, "mega_buy", mid)
-		y += 48.0
+		y += 54.0
 
-	# システム（効果音・緊急再降下）
-	var sy := r.end.y - 44.0
+	var sy := r.end.y - 48.0
 	var hw := (mw - 34.0) * 0.5
-	var sr := Rect2(r.position.x + 14, sy, hw, 32)
-	_panel(sr, Color(0.06, 0.10, 0.18, 0.92), Color(0.38, 0.56, 0.74), 1.2)
-	root_ctrl.draw_string(font, Vector2(sr.position.x, sr.position.y + 20), "効果音: " + ("OFF" if Sfx.muted else "ON"), HORIZONTAL_ALIGNMENT_CENTER, hw, 11, Color.WHITE)
+	var sr := Rect2(r.position.x + 14, sy, hw, 36)
+	_panel(sr, Color(0.06, 0.10, 0.18, 0.92), Color(0.38, 0.56, 0.74), 1.4)
+	root_ctrl.draw_string(font, Vector2(sr.position.x, sr.position.y + 24), "効果音: " + ("OFF" if Sfx.muted else "ON"), HORIZONTAL_ALIGNMENT_CENTER, hw, 14, Color.WHITE)
 	_add_hit(sr, "mute")
 
-	var rr := Rect2(sr.end.x + 6, sy, hw, 32)
-	_panel(rr, Color(0.36, 0.08, 0.10, 0.95) if redrop_armed else Color(0.18, 0.07, 0.09, 0.92), Color(1.0, 0.42, 0.40), 1.2)
-	root_ctrl.draw_string(font, Vector2(rr.position.x, rr.position.y + 20), "本当に北極へ戻る？" if redrop_armed else "緊急再降下（詰み復帰）", HORIZONTAL_ALIGNMENT_CENTER, hw, 10 if portrait else 11, Color(1.0, 0.86, 0.86))
+	var rr := Rect2(sr.end.x + 6, sy, hw, 36)
+	_panel(rr, Color(0.36, 0.08, 0.10, 0.95) if redrop_armed else Color(0.18, 0.07, 0.09, 0.92), Color(1.0, 0.42, 0.40), 1.4)
+	root_ctrl.draw_string(font, Vector2(rr.position.x, rr.position.y + 24), "本当に帰還？" if redrop_armed else "北極へ緊急帰還", HORIZONTAL_ALIGNMENT_CENTER, hw, 14, Color(1.0, 0.86, 0.86))
 	_add_hit(rr, "redrop")
 
-# 10. 全要素インタラクティブガイド画面 ([H])
+# 10. 図解ガイド画面（ドット絵フロー図解メイン！）
 func _draw_guide_modal(vp: Vector2, portrait: bool, font: Font) -> void:
-	var mw := minf(vp.x - 20.0, 680.0)
-	var mh := minf(vp.y - 60.0, 440.0)
+	var mw := minf(vp.x - 16.0, 720.0)
+	var mh := minf(vp.y - 40.0, 480.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
-	_panel(r, Color(0.04, 0.07, 0.13, 0.97), Color(0.38, 0.92, 0.78), 2.0)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 24), "操作ガイド ＆ インタラクティブ・チュートリアル", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 90), 13, Color(0.46, 1.0, 0.82))
-
-	var cr := Rect2(r.end.x - 68, r.position.y + 7, 58, 24)
-	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+	_panel(r, Color(0.04, 0.07, 0.13, 0.98), Color(0.38, 0.92, 0.78), 2.2)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "図解プレイガイド", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.46, 1.0, 0.82))
+	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	# 現在のチュートリアルステップ表示 & ON/OFFトグル
-	var info := State.get_tutorial_info()
-	var tr := Rect2(r.position.x + 14, r.position.y + 38, mw - 28, 54)
-	_panel(tr, Color(0.06, 0.14, 0.22, 0.94), Color(1.0, 0.84, 0.34), 1.4)
-	root_ctrl.draw_string(font, Vector2(tr.position.x + 10, tr.position.y + 20), "現在の目標（%s）: %s" % [String(info["step"]), String(info["title"])], HORIZONTAL_ALIGNMENT_LEFT, int(tr.size.x - 130), 11, Color(1.0, 0.88, 0.40))
-	root_ctrl.draw_string(font, Vector2(tr.position.x + 10, tr.position.y + 40), String(info["hint"]), HORIZONTAL_ALIGNMENT_LEFT, int(tr.size.x - 130), 10, Color.WHITE)
-	var tb := Rect2(tr.end.x - 116, tr.position.y + 12, 106, 30)
-	_panel(tb, Color(0.08, 0.26, 0.20, 0.95) if State.tut_enabled else Color(0.16, 0.10, 0.12, 0.92), Color(0.42, 1.0, 0.74) if State.tut_enabled else Color(0.68, 0.42, 0.44), 1.3)
-	root_ctrl.draw_string(font, Vector2(tb.position.x, tb.position.y + 19), "上部表示: ON" if State.tut_enabled else "上部表示: OFF", HORIZONTAL_ALIGNMENT_CENTER, tb.size.x, 10, Color.WHITE)
-	_add_hit(tb, "tut_toggle")
+	var vis_guides: Array[Dictionary] = [
+		{"tab": "採掘・ドローン", "keys": ["seed_core", "ore_fe", "fab_drone"], "lbls": ["採掘スティック", "鉱石獲得", "ドローン増設"], "note": "左下移動 / 右下採掘 / 2本指ズーム（常に機体中心）"},
+		{"tab": "昼夜と電力網", "keys": ["solar", "battery", "tesla"], "lbls": ["昼発電", "夜間蓄電", "電線で配電"], "note": "夜間はソーラー停止！バッテリーと地熱で安定稼働"},
+		{"tab": "鉱床と搬送", "keys": ["drill", "depot", "smelter"], "lbls": ["硬質鉱床専用", "自由結束搬送", "精錬"], "note": "施設タップで中身確認 / 削除モードは2回タップ"},
+		{"tab": "ケプラー軌道", "keys": ["orbital_booster", "moon_luna", "orb_power"], "lbls": ["宇宙へ離脱", "月へ着陸OK", "軌道ロック"], "note": "入力停止で軌道ロック！近点で速く遠点で遅い実物理"},
+		{"tab": "軌道採掘工場", "keys": ["orb_laser", "orb_collector", "orb_station", "quantum_core"], "lbls": ["レーザー採掘", "落下前に回収", "軌道クラフト", "量子コア"], "note": "同一軌道に配置！未回収資源は重力で星へ落下"},
+		{"tab": "艦隊と勝利", "keys": ["gantry_printer", "mass_driver", "enemy_station"], "lbls": ["量産", "10,000機射出", "要塞撃破"], "note": "汚染要塞撃破 ＋ ワープゲート建造で星系解放！"},
+	]
 
-	# 6トピック選択ボタン（2行×3列）
-	var y := tr.end.y + 12.0
+	var y := r.position.y + 48.0
 	var bw := (mw - 28.0 - 12.0) / 3.0
-	for i in range(State.GUIDE_TOPICS.size()):
+	for i in range(vis_guides.size()):
 		var gx := r.position.x + 14.0 + float(i % 3) * (bw + 6.0)
-		var gy := y + float(i / 3) * 36.0
-		var gr := Rect2(gx, gy, bw, 30.0)
+		var gy := y + float(i / 3) * 40.0
+		var gr := Rect2(gx, gy, bw, 34.0)
 		var sel := (i == guide_tab)
-		_panel(gr, Color(0.12, 0.26, 0.36, 0.96) if sel else Color(0.06, 0.10, 0.17, 0.90), Color(0.42, 0.96, 1.0) if sel else Color(0.28, 0.38, 0.52), 1.3)
-		root_ctrl.draw_string(font, Vector2(gr.position.x + 6, gr.position.y + 20), String(State.GUIDE_TOPICS[i]["title"]), HORIZONTAL_ALIGNMENT_LEFT, int(bw - 12), 10 if portrait else 11, Color.WHITE if sel else Color(0.74, 0.84, 0.94))
+		_panel(gr, Color(0.12, 0.28, 0.38, 0.96) if sel else Color(0.06, 0.10, 0.17, 0.90), Color(0.42, 0.96, 1.0) if sel else Color(0.28, 0.38, 0.52), 1.5)
+		root_ctrl.draw_string(font, Vector2(gr.position.x, gr.position.y + 23), String(vis_guides[i]["tab"]), HORIZONTAL_ALIGNMENT_CENTER, bw, 13, Color.WHITE if sel else Color(0.74, 0.84, 0.94))
 		_add_hit(gr, "guide_tab", i)
 
-	# 選択トピックの詳細本文
-	var body_y := y + 80.0
-	var br := Rect2(r.position.x + 14, body_y, mw - 28, r.end.y - body_y - 12.0)
-	_panel(br, Color(0.05, 0.08, 0.15, 0.95), Color(0.32, 0.56, 0.74), 1.3)
-	var topic: Dictionary = State.GUIDE_TOPICS[clampi(guide_tab, 0, State.GUIDE_TOPICS.size() - 1)]
-	root_ctrl.draw_string(font, Vector2(br.position.x + 12, br.position.y + 24), String(topic["title"]), HORIZONTAL_ALIGNMENT_LEFT, int(br.size.x - 24), 13, Color(0.48, 0.96, 1.0))
-	var ly := br.position.y + 52.0
-	for ln in topic["lines"]:
-		root_ctrl.draw_string(font, Vector2(br.position.x + 12, ly), String(ln), HORIZONTAL_ALIGNMENT_LEFT, int(br.size.x - 24), 10 if portrait else 12, Color(0.92, 0.96, 1.0))
-		ly += 28.0 if not portrait else 24.0
+	var g: Dictionary = vis_guides[clampi(guide_tab, 0, vis_guides.size() - 1)]
+	var dr := Rect2(r.position.x + 14, y + 92, mw - 28, 150)
+	_draw_flow_diagram(dr, g["keys"], font, g["lbls"])
+	root_ctrl.draw_string(font, Vector2(r.position.x + 18, dr.end.y + 34), String(g["note"]), HORIZONTAL_ALIGNMENT_CENTER, int(mw - 36), 15, Color(0.92, 0.98, 1.0))
 
-# 11. カーゴデポ（4方向出力フィルタ付き倉庫）モーダル
+	var tb := Rect2(r.position.x + 14, r.end.y - 54, mw - 28, 40)
+	_panel(tb, Color(0.08, 0.26, 0.20, 0.95) if State.tut_enabled else Color(0.16, 0.10, 0.12, 0.92), Color(0.42, 1.0, 0.74) if State.tut_enabled else Color(0.68, 0.42, 0.44), 1.5)
+	root_ctrl.draw_string(font, Vector2(tb.position.x, tb.position.y + 26), "上部ガイド表示: ON" if State.tut_enabled else "上部ガイド表示: OFF", HORIZONTAL_ALIGNMENT_CENTER, tb.size.x, 14, Color.WHITE)
+	_add_hit(tb, "tut_toggle")
+
+# 11. カーゴデポ（倉庫）モーダル
 func _draw_depot_modal(vp: Vector2, font: Font) -> void:
 	if not grid: return
 	var snap: Dictionary = grid.get_depot_snap(depot_uid)
 	if snap.is_empty(): modal = Modal.NONE; return
-	var mw := minf(vp.x - 20.0, 520.0); var mh := 376.0
+	var mw := minf(vp.x - 16.0, 540.0); var mh := 430.0
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
-	_panel(r, Color(0.04, 0.06, 0.12, 0.97), Color(0.38, 0.88, 1.0), 2.0)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 24), "カーゴデポ（倉庫） // 在庫 %d / %d" % [int(snap["total"]), int(snap["cap"])], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 86), 13, Color(0.48, 0.96, 1.0))
-	var cr := Rect2(r.end.x - 66, r.position.y + 7, 56, 24)
-	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+	_panel(r, Color(0.04, 0.06, 0.12, 0.98), Color(0.38, 0.88, 1.0), 2.2)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "倉庫（%d / %d）" % [int(snap["total"]), int(snap["cap"])], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.48, 0.96, 1.0))
+	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var dr := Rect2(r.position.x + 14, r.position.y + 40, (mw - 34) * 0.56, 30)
-	_panel(dr, Color(0.08, 0.22, 0.30, 0.95), Color(0.42, 0.94, 1.0), 1.4)
-	root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 20), "鉱石をすべて預ける", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 11, Color.WHITE)
+	var dr := Rect2(r.position.x + 14, r.position.y + 46, (mw - 34) * 0.54, 36)
+	_panel(dr, Color(0.08, 0.22, 0.32, 0.95), Color(0.42, 0.94, 1.0), 1.5)
+	root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 24), "鉱石を全て預ける", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 13, Color.WHITE)
 	_add_hit(dr, "depot_all")
 
-	var cvr := Rect2(dr.end.x + 6, r.position.y + 40, (mw - 34) * 0.44, 30)
-	_panel(cvr, Color(0.22, 0.16, 0.06, 0.95), Color(1.0, 0.80, 0.30), 1.4)
-	root_ctrl.draw_string(font, Vector2(cvr.position.x, cvr.position.y + 20), "ここから搬送接続", HORIZONTAL_ALIGNMENT_CENTER, cvr.size.x, 11, Color.WHITE)
+	var cvr := Rect2(dr.end.x + 6, r.position.y + 46, (mw - 34) * 0.46, 36)
+	_panel(cvr, Color(0.22, 0.16, 0.06, 0.95), Color(1.0, 0.80, 0.30), 1.5)
+	root_ctrl.draw_string(font, Vector2(cvr.position.x, cvr.position.y + 24), "搬送接続 →", HORIZONTAL_ALIGNMENT_CENTER, cvr.size.x, 13, Color.WHITE)
 	_add_hit(cvr, "depot_conv")
 
-	var y := r.position.y + 84.0
+	var y := r.position.y + 94.0
 	var out_links: Array = snap.get("out_links", [])
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 10), "接続中の搬送ライン出力フィルタ（タップで出力資源を切替）：", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 10, Color(1.0, 0.84, 0.36))
-	y += 18.0
-	if out_links.is_empty():
-		var er := Rect2(r.position.x + 14, y, mw - 28, 36)
-		_panel(er, Color(0.06, 0.09, 0.15, 0.9), Color(0.28, 0.38, 0.50), 1.2)
-		root_ctrl.draw_string(font, Vector2(er.position.x, er.position.y + 22), "出力先の搬送ラインなし（「ここから搬送接続」で溶鉱炉等へ接続）", HORIZONTAL_ALIGNMENT_CENTER, er.size.x, 10, Color(0.68, 0.78, 0.90))
-	else:
+	if not out_links.is_empty():
 		var show_n := mini(out_links.size(), 4)
 		var fw := (mw - 28.0) / float(show_n)
 		for i in range(show_n):
 			var lk: Dictionary = out_links[i]
-			var fr := Rect2(r.position.x + 14 + float(i) * fw, y, fw - 6, 38)
+			var fr := Rect2(r.position.x + 14 + float(i) * fw, y, fw - 6, 44)
 			var raw_f := String(lk.get("filter", "auto"))
 			var fv := "停止" if raw_f == "none" else ("自動" if raw_f == "auto" else State.res_name(raw_f))
-			_panel(fr, Color(0.10, 0.22, 0.32, 0.95) if raw_f != "none" else Color(0.06, 0.09, 0.15, 0.9), Color(1.0, 0.80, 0.30) if raw_f != "none" else Color(0.28, 0.38, 0.50), 1.3)
-			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 15), "→" + String(lk["to_name"]), HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 9, Color(0.76, 0.88, 1.0))
-			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 31), fv, HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 11, Color.WHITE)
+			_panel(fr, Color(0.10, 0.22, 0.32, 0.95) if raw_f != "none" else Color(0.06, 0.09, 0.15, 0.9), Color(1.0, 0.80, 0.30) if raw_f != "none" else Color(0.28, 0.38, 0.50), 1.4)
+			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 17), "→ " + String(lk["to_name"]), HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 11, Color(0.76, 0.88, 1.0))
+			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 36), fv, HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 13, Color.WHITE)
 			_add_hit(fr, "depot_link_flt", int(lk["idx"]))
+		y += 54.0
 
-	y += 48.0
 	var inv: Dictionary = snap["inv"]
 	for it in ["fe", "cu", "si", "ti", "plate_fe", "wire_cu", "wafer_si", "circuit"]:
 		var cnt := int(inv.get(it, 0))
-		root_ctrl.draw_string(font, Vector2(r.position.x + 18, y + 16), "%s ： %d個" % [State.res_name(String(it)), cnt], HORIZONTAL_ALIGNMENT_LEFT, 180, 11, Color.WHITE if cnt > 0 else Color(0.45, 0.52, 0.62))
-		var tr := Rect2(r.end.x - 102, y, 86, 21)
-		_panel(tr, Color(0.08, 0.22, 0.20, 0.92) if cnt > 0 else Color(0.06, 0.08, 0.12, 0.7), Color(0.36, 0.92, 0.72) if cnt > 0 else Color(0.24, 0.30, 0.38), 1.1)
-		root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 15), "5個取出す", HORIZONTAL_ALIGNMENT_CENTER, tr.size.x, 10, Color.WHITE if cnt > 0 else Color(0.45, 0.50, 0.58))
+		var ic := ArtReg.get_icon(String(it))
+		if ic: root_ctrl.draw_texture_rect(ic, Rect2(r.position.x + 16, y + 3, 20, 20), false)
+		root_ctrl.draw_string(font, Vector2(r.position.x + 42, y + 19), "%s  ×%d" % [State.res_name(String(it)), cnt], HORIZONTAL_ALIGNMENT_LEFT, 220, 14, Color.WHITE if cnt > 0 else Color(0.45, 0.52, 0.62))
+		var tr := Rect2(r.end.x - 108, y, 92, 26)
+		_panel(tr, Color(0.08, 0.24, 0.20, 0.92) if cnt > 0 else Color(0.06, 0.08, 0.12, 0.7), Color(0.36, 0.92, 0.72) if cnt > 0 else Color(0.24, 0.30, 0.38), 1.2)
+		root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 18), "5個取出", HORIZONTAL_ALIGNMENT_CENTER, tr.size.x, 12, Color.WHITE if cnt > 0 else Color(0.45, 0.50, 0.58))
 		if cnt > 0: _add_hit(tr, "depot_take", it)
-		y += 24.0
+		y += 30.0
 
-# 11b. 全施設対応：施設の中身・稼働詳細インスペクタ（通常タップで開く！）
+# 11b. 地上施設詳細インスペクタ（アイコン＋進捗バー重視！）
 func _draw_building_modal(vp: Vector2, font: Font) -> void:
 	if not grid: return
 	var snap: Dictionary = grid.get_building_snap(inspect_uid)
 	if snap.is_empty(): modal = Modal.NONE; return
 	var bid := String(snap["id"])
-	var mw := minf(vp.x - 20.0, 480.0)
-	var mh := 346.0
+	var mw := minf(vp.x - 16.0, 500.0)
+	var mh := 366.0
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
-	_panel(r, Color(0.04, 0.06, 0.12, 0.97), Color(0.38, 0.90, 1.0), 2.0)
+	_panel(r, Color(0.04, 0.06, 0.12, 0.98), Color(0.38, 0.90, 1.0), 2.2)
 
 	var itex := ArtReg.get_t(String(snap["tex"]))
-	if itex:
-		root_ctrl.draw_texture_rect(itex, Rect2(r.position.x + 14, r.position.y + 10, 32, 32), false)
-	root_ctrl.draw_string(font, Vector2(r.position.x + 54, r.position.y + 30), "%s // 施設詳細" % String(snap["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 130), 13, Color(0.48, 0.96, 1.0))
-
-	var cr := Rect2(r.end.x - 66, r.position.y + 8, 56, 24)
-	_panel(cr, Color(0.28, 0.08, 0.10, 0.94), Color(1.0, 0.42, 0.42), 1.4)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 16), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 10, Color.WHITE)
+	if itex: root_ctrl.draw_texture_rect(itex, Rect2(r.position.x + 14, r.position.y + 10, 38, 38), false)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 60, r.position.y + 34), String(snap["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 150), 18, Color(0.48, 0.96, 1.0))
+	var cr := Rect2(r.end.x - 78, r.position.y + 10, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var y := r.position.y + 52.0
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 12), String(snap["desc"]), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 10, Color(0.80, 0.90, 0.98))
-	y += 26.0
-
-	# 稼働・電力ステータス枠
-	var st_r := Rect2(r.position.x + 14, y, mw - 28, 56)
-	_panel(st_r, Color(0.06, 0.10, 0.17, 0.95), Color(0.26, 0.42, 0.58), 1.2)
+	var y := r.position.y + 58.0
+	var st_r := Rect2(r.position.x + 14, y, mw - 28, 66)
+	_panel(st_r, Color(0.06, 0.10, 0.17, 0.95), Color(0.28, 0.44, 0.62), 1.4)
 	var pwr := float(snap["pwr_ratio"])
-	var p_txt := ""
 	var p_col := Color(0.45, 0.98, 0.72)
+	var p_txt := ""
 	if bool(snap["is_power"]):
-		var links: Array = snap["links"]
-		var lnk_s := ("接続先: " + "・".join(links)) if not links.is_empty() else "未配線（【配線】でテスラリレー等と接続）"
 		if bid == "battery":
-			var pct := int(round(float(snap["battery_kj"]) / maxf(1.0, float(snap["battery_cap"])) * 100.0))
-			p_txt = "蓄電量: %d / %d kJ (%d%%)" % [int(snap["battery_kj"]), int(snap["battery_cap"]), pct]
+			p_txt = "蓄電 %d / %d kJ" % [int(snap["battery_kj"]), int(snap["battery_cap"])]
 		elif float(snap["gen"]) > 0.1:
-			p_txt = "現在発電量: %.0fW（%s）" % [float(snap["gen"]), "通電中" if bool(snap["wired"]) else "未配線のため0W"]
+			p_txt = "発電 %.0fW（%s）" % [float(snap["gen"]), "通電" if bool(snap["wired"]) else "未配線"]
 		else:
-			p_txt = "電力供給ドーム: %s" % ("稼働中 (配電中)" if pwr > 0.1 else "未通電（発電機と配線してください）")
+			p_txt = "テスラ配電: %s" % ("稼働中" if pwr > 0.1 else "未通電")
 			if pwr <= 0.1: p_col = Color(1.0, 0.68, 0.36)
-		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 21), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 11, p_col)
-		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 43), lnk_s, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 10, Color(0.74, 0.88, 1.0))
 	else:
-		var use_w := float(snap["use"])
-		if use_w <= 0.01 or pwr > 0.1:
-			p_txt = "状態: 稼働中（消費電力 %.0fW）%s" % [use_w, "  ※出力満杯停止中" if bool(snap["blocked"]) else ""]
+		if float(snap["use"]) <= 0.01 or pwr > 0.1:
+			p_txt = "稼働中（%d%%）%s" % [int(round(pwr * 100.0)), "  ※満杯" if bool(snap["blocked"]) else ""]
 		else:
-			p_txt = "状態: 電力不足（テスラリレーの青い範囲内に設置してください）"
+			p_txt = "電力不足（テスラ範囲外）"
 			p_col = Color(1.0, 0.46, 0.40)
-		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 21), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 20), 10, p_col)
-		var sub_info := ""
-		if bid == "drill":
-			sub_info = "採掘中の鉱脈: %s" % State.res_name(String(snap["ore_target"]))
-		elif bid == "belt" or bid == "lift":
-			sub_info = "搬送方向: %s" % ("右方向 / 上方向" if int(snap["dir"]) > 0 else "左方向 / 下方向")
-		elif bid == "assembler":
-			sub_info = "現在の製造レシピ: %s" % State.res_name(String(snap["recipe"]))
-		else:
-			sub_info = "電力効率: %d%%" % int(round(pwr * 100.0))
-		root_ctrl.draw_string(font, Vector2(st_r.position.x + 10, st_r.position.y + 43), sub_info, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 126), 10, Color(0.76, 0.90, 1.0))
-		if bool(snap.get("has_prog", false)):
-			var pg := clampf(float(snap.get("prog", 0.0)), 0.0, 1.0)
-			var pgr := Rect2(st_r.end.x - 112, st_r.position.y + 33, 102, 12)
-			root_ctrl.draw_rect(pgr, Color(0.08, 0.14, 0.22))
-			root_ctrl.draw_rect(Rect2(pgr.position, Vector2(pgr.size.x * pg, pgr.size.y)), Color(1.0, 0.72, 0.22) if bid == "smelter" else Color(0.36, 0.96, 0.74))
-			root_ctrl.draw_rect(pgr, Color(0.38, 0.56, 0.72), false, 1.0)
+	root_ctrl.draw_string(font, Vector2(st_r.position.x + 12, st_r.position.y + 26), p_txt, HORIZONTAL_ALIGNMENT_LEFT, int(st_r.size.x - 24), 15, p_col)
 
-	y += 66.0
-	# 中身（入力バッファ＆出力バッファ）表示
-	var buf_r := Rect2(r.position.x + 14, y, mw - 28, 92)
-	_panel(buf_r, Color(0.05, 0.08, 0.14, 0.95), Color(0.28, 0.44, 0.62), 1.2)
+	if bool(snap.get("has_prog", false)):
+		var pg := clampf(float(snap.get("prog", 0.0)), 0.0, 1.0)
+		var pgr := Rect2(st_r.position.x + 12, st_r.position.y + 38, st_r.size.x - 24, 16)
+		root_ctrl.draw_rect(pgr, Color(0.08, 0.14, 0.22))
+		root_ctrl.draw_rect(Rect2(pgr.position, Vector2(pgr.size.x * pg, pgr.size.y)), Color(1.0, 0.72, 0.22) if bid == "smelter" else Color(0.36, 0.96, 0.74))
+		root_ctrl.draw_rect(pgr, Color(0.38, 0.56, 0.72), false, 1.2)
+
+	y += 76.0
+	var buf_r := Rect2(r.position.x + 14, y, mw - 28, 98)
+	_panel(buf_r, Color(0.05, 0.08, 0.14, 0.95), Color(0.28, 0.44, 0.62), 1.4)
 	var in_d: Dictionary = snap["in_buf"]
 	var out_d: Dictionary = snap["out_buf"]
-	var in_parts: Array[String] = []
-	for k in in_d.keys(): in_parts.append("%s ×%d" % [State.res_name(String(k)), int(in_d[k])])
-	var out_parts: Array[String] = []
-	for k in out_d.keys(): out_parts.append("%s ×%d" % [State.res_name(String(k)), int(out_d[k])])
-	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 22), "内部の材料（入力）: " + ("  ".join(in_parts) if not in_parts.is_empty() else "空"), HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 11, Color(0.88, 0.94, 1.0))
-	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 52), "内部の完成品（出力）: " + ("  ".join(out_parts) if not out_parts.is_empty() else "空"), HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 11, Color(0.46, 0.98, 0.78) if not out_parts.is_empty() else Color(0.60, 0.68, 0.78))
-	var conv_out: Array = snap.get("conv_out", [])
-	var conv_hint := ("搬送ライン接続先: " + "  ".join(conv_out)) if not conv_out.is_empty() else "※【搬送】で他施設と自由結束すると自動で入出力されます。"
-	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 10, buf_r.position.y + 78), conv_hint, HORIZONTAL_ALIGNMENT_LEFT, int(buf_r.size.x - 20), 9, Color(1.0, 0.84, 0.42) if not conv_out.is_empty() else Color(0.64, 0.74, 0.86))
+	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 12, buf_r.position.y + 26), "入力:", HORIZONTAL_ALIGNMENT_LEFT, 54, 14, Color(0.76, 0.88, 1.0))
+	if in_d.is_empty():
+		root_ctrl.draw_string(font, Vector2(buf_r.position.x + 68, buf_r.position.y + 26), "空", HORIZONTAL_ALIGNMENT_LEFT, 60, 14, Color(0.50, 0.58, 0.68))
+	else:
+		_draw_cost_icons(Vector2(buf_r.position.x + 68, buf_r.position.y + 10), in_d, font, 20.0, 14)
 
-	# 操作アクションボタン列
-	y += 102.0
+	root_ctrl.draw_string(font, Vector2(buf_r.position.x + 12, buf_r.position.y + 66), "出力:", HORIZONTAL_ALIGNMENT_LEFT, 54, 14, Color(0.46, 0.98, 0.78))
+	if out_d.is_empty():
+		root_ctrl.draw_string(font, Vector2(buf_r.position.x + 68, buf_r.position.y + 66), "空", HORIZONTAL_ALIGNMENT_LEFT, 60, 14, Color(0.50, 0.58, 0.68))
+	else:
+		_draw_cost_icons(Vector2(buf_r.position.x + 68, buf_r.position.y + 50), out_d, font, 20.0, 14)
+
+	y += 108.0
 	var acts: Array[Dictionary] = []
-	if not out_d.is_empty():
-		acts.append({"lbl": "完成品を回収", "a": "bld_collect", "c": Color(0.38, 0.98, 0.74)})
-	if bid in ["smelter", "assembler", "gantry_printer"]:
-		acts.append({"lbl": "材料を手動投入", "a": "bld_feed", "c": Color(0.42, 0.90, 1.0)})
-	if bid == "assembler":
-		acts.append({"lbl": "レシピ切替", "a": "bld_recipe", "c": Color(1.0, 0.84, 0.36)})
-	if bool(snap.get("is_logi", false)):
-		acts.append({"lbl": "搬送ライン接続", "a": "bld_conv", "c": Color(1.0, 0.80, 0.30)})
-	if bool(snap["is_power"]):
-		acts.append({"lbl": "電線をつなぐ", "a": "bld_wire", "c": Color(0.42, 0.96, 1.0)})
+	if not out_d.is_empty(): acts.append({"lbl": "回収", "a": "bld_collect", "c": Color(0.38, 0.98, 0.74)})
+	if bid in ["smelter", "assembler", "gantry_printer"]: acts.append({"lbl": "材料投入", "a": "bld_feed", "c": Color(0.42, 0.90, 1.0)})
+	if bid == "assembler": acts.append({"lbl": "レシピ: %s" % State.res_name(String(snap["recipe"])), "a": "bld_recipe", "c": Color(1.0, 0.84, 0.36)})
+	if bool(snap.get("is_logi", false)): acts.append({"lbl": "搬送接続", "a": "bld_conv", "c": Color(1.0, 0.80, 0.30)})
+	if bool(snap["is_power"]): acts.append({"lbl": "配線", "a": "bld_wire", "c": Color(0.42, 0.96, 1.0)})
 
 	if not acts.is_empty():
 		var aw := (mw - 28.0 - float(acts.size() - 1) * 6.0) / float(acts.size())
 		for ai in range(acts.size()):
-			var ar := Rect2(r.position.x + 14 + float(ai) * (aw + 6.0), y, aw, 32)
-			_panel(ar, Color(0.08, 0.22, 0.30, 0.95), Color(acts[ai]["c"]), 1.4)
-			root_ctrl.draw_string(font, Vector2(ar.position.x, ar.position.y + 21), String(acts[ai]["lbl"]), HORIZONTAL_ALIGNMENT_CENTER, aw, 11, Color.WHITE)
+			var ar := Rect2(r.position.x + 14 + float(ai) * (aw + 6.0), y, aw, 42)
+			_panel(ar, Color(0.08, 0.22, 0.30, 0.95), Color(acts[ai]["c"]), 1.6)
+			root_ctrl.draw_string(font, Vector2(ar.position.x, ar.position.y + 27), String(acts[ai]["lbl"]), HORIZONTAL_ALIGNMENT_CENTER, aw, 14, Color.WHITE)
 			_add_hit(ar, String(acts[ai]["a"]))
 
-	# 下段：この施設を削除・回収ボタン
-	var del_r := Rect2(r.position.x + 14, r.end.y - 42, mw - 28, 30)
-	_panel(del_r, Color(0.24, 0.08, 0.10, 0.92), Color(1.0, 0.44, 0.42), 1.3)
-	root_ctrl.draw_string(font, Vector2(del_r.position.x, del_r.position.y + 19), "この施設を削除・回収して所持リストへ戻す", HORIZONTAL_ALIGNMENT_CENTER, del_r.size.x, 10, Color(1.0, 0.86, 0.86))
+	var del_r := Rect2(r.position.x + 14, r.end.y - 48, mw - 28, 36)
+	_panel(del_r, Color(0.26, 0.08, 0.10, 0.94), Color(1.0, 0.44, 0.42), 1.5)
+	root_ctrl.draw_string(font, Vector2(del_r.position.x, del_r.position.y + 24), "削除・回収", HORIZONTAL_ALIGNMENT_CENTER, del_r.size.x, 14, Color(1.0, 0.86, 0.86))
 	_add_hit(del_r, "bld_salvage")
 
-# 12. タッチ仮想コントロール（左：移動スティック / 右：方向指定採掘スティック！）
-func _draw_touch_controls(font: Font) -> void:
-	# 左下: 移動ジョイスティック
-	root_ctrl.draw_circle(joy_center, joy_r, Color(0.04, 0.08, 0.14, 0.52))
-	root_ctrl.draw_arc(joy_center, joy_r, 0.0, TAU, 32, Color(0.36, 0.80, 1.0, 0.74), 2.0)
-	var pk := joy_center + joy_vec * (joy_r * 0.62)
-	root_ctrl.draw_circle(pk, 18.0, Color(0.10, 0.24, 0.38, 0.88))
-	root_ctrl.draw_arc(pk, 18.0, 0.0, TAU, 24, Color(0.45, 0.96, 1.0), 2.0)
+# 11c. 軌道施設インスペクタ（軌道発電・軌道採掘レーザー・軌道回収・軌道クラフト局！）
+func _draw_orbital_modal(vp: Vector2, font: Font) -> void:
+	if not orbital: return
+	var snap: Dictionary = orbital.get_module_snap(orbital_uid)
+	if snap.is_empty(): modal = Modal.NONE; return
+	var bid := String(snap["id"])
+	var mw := minf(vp.x - 16.0, 500.0)
+	var mh := 374.0
+	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
+	_panel(r, Color(0.04, 0.07, 0.14, 0.98), Color(0.42, 0.96, 1.0), 2.2)
 
-	# 右下: ツインスティック採掘パッド（ドラッグした方向へ正確に採掘ビーム照射！）
+	var itex := ArtReg.get_t(String(snap["tex"]))
+	if itex: root_ctrl.draw_texture_rect(itex, Rect2(r.position.x + 14, r.position.y + 10, 42, 42), false)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 64, r.position.y + 36), String(snap["name"]), HORIZONTAL_ALIGNMENT_LEFT, int(mw - 150), 17, Color(0.48, 0.98, 1.0))
+	var cr := Rect2(r.end.x - 78, r.position.y + 10, 68, 30)
+	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
+	_add_hit(cr, "close")
+
+	var y := r.position.y + 62.0
+	var pwr := int(round(float(snap["pwr_ratio"]) * 100.0))
+	var status_s := "軌道出力 %d%%" % pwr
+	if bid == "orb_collector": status_s += "  |  累計回収: %d" % int(snap["collected"])
+	elif bid == "orb_laser" and String(snap["laser_ore"]) != "": status_s += "  |  採掘中: %s" % State.res_name(String(snap["laser_ore"]))
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, y + 18), status_s, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 32), 15, Color(0.46, 1.0, 0.80))
+	y += 30.0
+
+	if bid == "orb_station":
+		var rinfo: Dictionary = snap["recipe_info"]
+		if not rinfo.is_empty():
+			var rec_r := Rect2(r.position.x + 14, y, mw - 28, 52)
+			_draw_recipe_visual(rec_r, rinfo["in"], String(rinfo["out"]), int(rinfo["qty"]), font)
+			y += 60.0
+		var pg := clampf(float(snap["prog"]), 0.0, 1.0)
+		var pgr := Rect2(r.position.x + 14, y, mw - 28, 16)
+		root_ctrl.draw_rect(pgr, Color(0.08, 0.14, 0.22))
+		root_ctrl.draw_rect(Rect2(pgr.position, Vector2(pgr.size.x * pg, pgr.size.y)), Color(0.42, 0.98, 0.82))
+		root_ctrl.draw_rect(pgr, Color(0.38, 0.56, 0.72), false, 1.2)
+		y += 28.0
+		var in_d: Dictionary = snap["in_buf"]
+		root_ctrl.draw_string(font, Vector2(r.position.x + 16, y + 18), "入力在庫:", HORIZONTAL_ALIGNMENT_LEFT, 86, 14, Color(0.76, 0.90, 1.0))
+		if in_d.is_empty():
+			root_ctrl.draw_string(font, Vector2(r.position.x + 104, y + 18), "回収モジュールから自動受信待ち", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 120), 13, Color(0.58, 0.68, 0.80))
+		else:
+			_draw_cost_icons(Vector2(r.position.x + 104, y + 2), in_d, font, 19.0, 14)
+		y += 40.0
+		var hw := (mw - 34.0) * 0.5
+		var rr := Rect2(r.position.x + 14, y, hw, 42)
+		_panel(rr, Color(0.10, 0.22, 0.34, 0.96), Color(1.0, 0.84, 0.36), 1.6)
+		root_ctrl.draw_string(font, Vector2(rr.position.x, rr.position.y + 27), "レシピ切替", HORIZONTAL_ALIGNMENT_CENTER, hw, 14, Color.WHITE)
+		_add_hit(rr, "orb_recipe")
+		var fr := Rect2(rr.end.x + 6, y, hw, 42)
+		_panel(fr, Color(0.08, 0.28, 0.24, 0.96), Color(0.42, 0.96, 1.0), 1.6)
+		root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 27), "材料を手動投入", HORIZONTAL_ALIGNMENT_CENTER, hw, 14, Color.WHITE)
+		_add_hit(fr, "orb_feed")
+	else:
+		var flow_k := ["orb_power", "tesla"] if bid == "orb_power" else (["orb_laser", "ore_fe", "orb_collector"] if bid == "orb_laser" else ["orb_collector", "orb_station", "quantum_core"])
+		_draw_flow_diagram(Rect2(r.position.x + 14, y, mw - 28, 120), flow_k, font)
+
+	var del_r := Rect2(r.position.x + 14, r.end.y - 52, mw - 28, 38)
+	_panel(del_r, Color(0.26, 0.08, 0.10, 0.94), Color(1.0, 0.44, 0.42), 1.5)
+	root_ctrl.draw_string(font, Vector2(del_r.position.x, del_r.position.y + 25), "軌道施設を回収", HORIZONTAL_ALIGNMENT_CENTER, del_r.size.x, 14, Color(1.0, 0.86, 0.86))
+	_add_hit(del_r, "orb_salvage")
+
+# 12. タッチ仮想コントロール（移動スティック / 方向指定採掘スティック）
+func _draw_touch_controls(font: Font) -> void:
+	root_ctrl.draw_circle(joy_center, joy_r, Color(0.04, 0.08, 0.14, 0.54))
+	root_ctrl.draw_arc(joy_center, joy_r, 0.0, TAU, 32, Color(0.36, 0.80, 1.0, 0.78), 2.2)
+	var pk := joy_center + joy_vec * (joy_r * 0.62)
+	root_ctrl.draw_circle(pk, 19.0, Color(0.10, 0.24, 0.38, 0.90))
+	root_ctrl.draw_arc(pk, 19.0, 0.0, TAU, 24, Color(0.45, 0.96, 1.0), 2.2)
+
 	if State.selected_tool == "mine":
-		root_ctrl.draw_circle(act_center, mine_r, Color(0.04, 0.13, 0.11, 0.56))
-		root_ctrl.draw_arc(act_center, mine_r, 0.0, TAU, 32, Color(0.35, 0.96, 0.68, 0.82), 2.2)
-		# 十字ガイド目盛
+		root_ctrl.draw_circle(act_center, mine_r, Color(0.04, 0.13, 0.11, 0.58))
+		root_ctrl.draw_arc(act_center, mine_r, 0.0, TAU, 32, Color(0.35, 0.96, 0.68, 0.84), 2.4)
 		for a_deg in [0.0, 90.0, 180.0, 270.0]:
 			var dv := Vector2.from_angle(deg_to_rad(a_deg))
-			root_ctrl.draw_line(act_center + dv * (mine_r - 9.0), act_center + dv * (mine_r - 2.0), Color(0.38, 0.96, 0.76, 0.45), 1.6)
+			root_ctrl.draw_line(act_center + dv * (mine_r - 9.0), act_center + dv * (mine_r - 2.0), Color(0.38, 0.96, 0.76, 0.45), 1.8)
 		var mpk := act_center + mine_vec * (mine_r * 0.64)
 		if mine_vec.length() > 0.12:
 			var md := mine_vec.normalized()
-			root_ctrl.draw_line(act_center, act_center + md * (mine_r + 12.0), Color(0.42, 1.0, 0.86, 0.85), 2.6)
-		root_ctrl.draw_circle(mpk, 19.0, Color(0.08, 0.28, 0.22, 0.92))
-		root_ctrl.draw_arc(mpk, 19.0, 0.0, TAU, 24, Color(0.42, 1.0, 0.80), 2.2)
-		root_ctrl.draw_string(font, mpk + Vector2(-20, 4), "採掘", HORIZONTAL_ALIGNMENT_CENTER, 40, 10, Color.WHITE)
+			root_ctrl.draw_line(act_center, act_center + md * (mine_r + 12.0), Color(0.42, 1.0, 0.86, 0.88), 2.8)
+		root_ctrl.draw_circle(mpk, 20.0, Color(0.08, 0.28, 0.22, 0.94))
+		root_ctrl.draw_arc(mpk, 20.0, 0.0, TAU, 24, Color(0.42, 1.0, 0.80), 2.2)
+		root_ctrl.draw_string(font, mpk + Vector2(-22, 5), "採掘", HORIZONTAL_ALIGNMENT_CENTER, 44, 12, Color.WHITE)
 	else:
-		root_ctrl.draw_circle(act_center, 36.0, Color(0.06, 0.16, 0.14, 0.82))
-		root_ctrl.draw_arc(act_center, 36.0, 0.0, TAU, 24, Color(0.35, 0.96, 0.68), 2.2)
+		root_ctrl.draw_circle(act_center, 38.0, Color(0.06, 0.16, 0.14, 0.86))
+		root_ctrl.draw_arc(act_center, 38.0, 0.0, TAU, 24, Color(0.35, 0.96, 0.68), 2.4)
 		var act_lbl := "接続" if State.selected_tool == "wire" else ("搬送" if State.selected_tool == "conveyor" else ("削除" if State.selected_tool == "salvage" else "設置"))
-		root_ctrl.draw_string(font, act_center + Vector2(-30, 5), act_lbl, HORIZONTAL_ALIGNMENT_CENTER, 60, 12, Color.WHITE)
+		root_ctrl.draw_string(font, act_center + Vector2(-30, 6), act_lbl, HORIZONTAL_ALIGNMENT_CENTER, 60, 14, Color.WHITE)
 
-	root_ctrl.draw_circle(brk_center, 25.0, Color(0.18, 0.07, 0.09, 0.80))
-	root_ctrl.draw_arc(brk_center, 25.0, 0.0, TAU, 24, Color(1.0, 0.44, 0.42), 2.0)
-	root_ctrl.draw_string(font, brk_center + Vector2(-24, 4), "停止", HORIZONTAL_ALIGNMENT_CENTER, 48, 10, Color.WHITE)
+	root_ctrl.draw_circle(brk_center, 26.0, Color(0.18, 0.07, 0.09, 0.82))
+	root_ctrl.draw_arc(brk_center, 26.0, 0.0, TAU, 24, Color(1.0, 0.44, 0.42), 2.2)
+	root_ctrl.draw_string(font, brk_center + Vector2(-24, 5), "停止", HORIZONTAL_ALIGNMENT_CENTER, 48, 12, Color.WHITE)
