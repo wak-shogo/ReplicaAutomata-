@@ -525,6 +525,9 @@ func damage_building_uid(uid: int, dmg: float) -> bool:
 	for i in range(buildings.size()):
 		if int(buildings[i]["uid"]) == uid:
 			var b: Dictionary = buildings[i]
+			# 最初の惑星（テラ-I）の施設は聖域として保護（敵に攻撃されない）
+			if String(b.get("body_id", "terra")) == "terra":
+				return false
 			b["hp"] = maxf(0.0, float(b.get("hp", 100.0)) - dmg)
 			if planet:
 				planet.spawn_sparks(Vector2(b["pos"]), Color(1.0, 0.36, 0.28), 6)
@@ -611,10 +614,15 @@ func find_nearest(pos: Vector2, max_d: float = 110.0, ids: Array = []) -> Dictio
 	return best
 
 func find_nearest_on_body(pos: Vector2, body_id: String) -> Dictionary:
+	if body_id == "terra":
+		return {}
 	var best: Dictionary = {}
 	var bd := 1e9
 	for b in buildings:
-		if body_id != "" and String(b.get("body_id", "terra")) != body_id:
+		var b_body := String(b.get("body_id", "terra"))
+		if b_body == "terra":
+			continue
+		if body_id != "" and b_body != body_id:
 			continue
 		var d := Vector2(b["pos"]).distance_to(pos)
 		if d < bd:

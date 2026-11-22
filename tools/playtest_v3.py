@@ -143,13 +143,20 @@ def main():
         page.keyboard.press("Escape")
         time.sleep(0.2)
 
-        # 4. Open Complete Item & Facility Recipe Tree [I] -> Tap 'alloy' card to verify trace highlight!
+        # 4. Open Complete Item & Facility Recipe Tree [I] -> Verify wide spacing & 2D scroll!
         page.keyboard.press("KeyI")
         time.sleep(0.35)
         t_it = tel(page)
         print("ITEM TREE MODAL:", "modal=", t_it["modal"], "sel=", t_it["item_tree_sel"], flush=True)
         page.screenshot(path=os.path.join(SHOT_DIR, "v5_05_visual_guide.png"))
         assert t_it["modal"] == 8, f"KeyI must open Complete Item & Facility Recipe Tree (modal==8)! {t_it}"
+        # Drag-scroll the Recipe Tree horizontally & vertically to inspect middle/right columns!
+        page.mouse.move(850, 320)
+        page.mouse.down()
+        page.mouse.move(420, 260, steps=10)
+        page.mouse.up()
+        time.sleep(0.35)
+        page.screenshot(path=os.path.join(SHOT_DIR, "v5_05b_recipe_tree_scrolled.png"))
         page.keyboard.press("Escape")
         time.sleep(0.2)
 

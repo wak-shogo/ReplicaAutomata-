@@ -20,6 +20,11 @@ var craft_tab: int = 0
 var tech_sel: int = 1
 var tech_detail_open: bool = false
 var item_tree_sel: String = "circuit"
+var item_tree_scroll: Vector2 = Vector2.ZERO
+var _tree_drag_pid: int = -999
+var _tree_drag_last: Vector2 = Vector2.ZERO
+var _tree_view_rect: Rect2 = Rect2()
+var _tree_max_scroll: Vector2 = Vector2(900.0, 260.0)
 var guide_tab: int = 0
 var depot_uid: int = -1
 var inspect_uid: int = -1
@@ -144,7 +149,11 @@ func _input(event: InputEvent) -> void:
 		touch_ui_active = true
 		_last_touch_ms = Time.get_ticks_msec()
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
-		if event.index == joy_pid:
+		if modal == Modal.ITEM_TREE and event.index == _tree_drag_pid:
+			_pan_item_tree(_tree_drag_last - p)
+			_tree_drag_last = p
+			get_viewport().set_input_as_handled()
+		elif event.index == joy_pid:
 			_upd_joy(p)
 			get_viewport().set_input_as_handled()
 		elif event.index == act_pid:
@@ -167,6 +176,25 @@ func _input(event: InputEvent) -> void:
 		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
 			return
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
+		if modal == Modal.ITEM_TREE and event.pressed:
+			if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				if Input.is_key_pressed(KEY_SHIFT) or _tree_max_scroll.y <= 12.0:
+					_pan_item_tree(Vector2(130.0, 0.0))
+				else:
+					_pan_item_tree(Vector2(75.0, 55.0))
+				get_viewport().set_input_as_handled()
+				return
+			elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				if Input.is_key_pressed(KEY_SHIFT) or _tree_max_scroll.y <= 12.0:
+					_pan_item_tree(Vector2(-130.0, 0.0))
+				else:
+					_pan_item_tree(Vector2(-75.0, -55.0))
+				get_viewport().set_input_as_handled()
+				return
+			elif event.button_index == MOUSE_BUTTON_WHEEL_RIGHT:
+				_pan_item_tree(Vector2(130.0, 0.0)); get_viewport().set_input_as_handled(); return
+			elif event.button_index == MOUSE_BUTTON_WHEEL_LEFT:
+				_pan_item_tree(Vector2(-130.0, 0.0)); get_viewport().set_input_as_handled(); return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed: _on_down(-10, p, event.position)
 			else: _on_up(-10, event.position)
@@ -184,7 +212,10 @@ func _input(event: InputEvent) -> void:
 		if event.device == InputEvent.DEVICE_ID_EMULATION or (Time.get_ticks_msec() - _last_touch_ms) < 450:
 			return
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
-		if joy_pid == -10: _upd_joy(p)
+		if modal == Modal.ITEM_TREE and _tree_drag_pid == -10:
+			_pan_item_tree(_tree_drag_last - p)
+			_tree_drag_last = p
+		elif joy_pid == -10: _upd_joy(p)
 		elif act_pid == -10: _upd_mine_stick(p)
 
 func _on_key(code: int) -> void:
@@ -241,11 +272,19 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 		if pos.distance_to(brk_center) <= 30.0:
 			brk_pid = pid; get_viewport().set_input_as_handled(); return
 
+	if modal == Modal.ITEM_TREE and _tree_view_rect.has_point(pos):
+		_tree_drag_pid = pid
+		_tree_drag_last = pos
+
 	for i in range(_hits.size() - 1, -1, -1):
 		if Rect2(_hits[i]["r"]).has_point(pos):
 			_exec(_hits[i])
 			get_viewport().set_input_as_handled()
 			return
+
+	if modal == Modal.ITEM_TREE and _tree_view_rect.has_point(pos):
+		get_viewport().set_input_as_handled()
+		return
 
 	if modal == Modal.NONE:
 		if pid == -10:
@@ -267,6 +306,7 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 				_tap_moved = false
 
 func _on_up(pid: int, raw_pos: Vector2 = Vector2.ZERO) -> void:
+	if pid == _tree_drag_pid: _tree_drag_pid = -999
 	if pid == joy_pid: joy_pid = -1; joy_vec = Vector2.ZERO
 	if pid == act_pid: act_pid = -1; mine_vec = Vector2.ZERO
 	if pid == brk_pid: brk_pid = -1
@@ -306,6 +346,11 @@ func _pick_tool(tid: String) -> void:
 		if tid != "salvage": grid.salvage_armed_uid = -1
 	Sfx.play("select")
 
+func _pan_item_tree(delta_s: Vector2) -> void:
+	item_tree_scroll.x = clampf(item_tree_scroll.x + delta_s.x, 0.0, maxf(0.0, _tree_max_scroll.x))
+	item_tree_scroll.y = clampf(item_tree_scroll.y + delta_s.y, 0.0, maxf(0.0, _tree_max_scroll.y))
+	root_ctrl.queue_redraw()
+
 func _exec(h: Dictionary) -> void:
 	var act := String(h["a"])
 	match act:
@@ -315,12 +360,15 @@ func _exec(h: Dictionary) -> void:
 			if modal == Modal.CRAFT:
 				if State.tut_step == 1: craft_tab = 0
 				elif State.tut_step == 3: craft_tab = 1
+				elif State.tut_step == 10: craft_tab = 3
 			Sfx.play("select")
 		"open_tech":
 			tech_detail_open = false
 			modal = Modal.NONE if modal == Modal.TECH else Modal.TECH
-			if modal == Modal.TECH and State.tut_step == 2:
-				tech_sel = 1
+			if modal == Modal.TECH:
+				if State.tut_step == 2: tech_sel = 1
+				elif State.tut_step == 9: tech_sel = 4
+				elif State.tut_step == 12: tech_sel = 5
 			Sfx.play("select")
 		"open_cmd":
 			tech_detail_open = false
@@ -336,6 +384,16 @@ func _exec(h: Dictionary) -> void:
 			Sfx.play("select")
 		"item_tree_pick":
 			item_tree_sel = String(h["v"])
+			Sfx.play("click")
+		"tree_pan_x":
+			_pan_item_tree(Vector2(float(h["v"]), 0.0))
+			Sfx.play("click")
+		"tree_pan_y":
+			_pan_item_tree(Vector2(0.0, float(h["v"])))
+			Sfx.play("click")
+		"tree_jump_col":
+			var target_col := float(h["v"])
+			item_tree_scroll.x = clampf(target_col * 256.0, 0.0, maxf(0.0, _tree_max_scroll.x))
 			Sfx.play("click")
 		"close":
 			modal = Modal.NONE; tech_detail_open = false; redrop_armed = false; Sfx.play("click")
@@ -675,7 +733,7 @@ func _draw_top_right_menu(vp: Vector2, portrait: bool, font: Font) -> void:
 	var c_lbl := ("クラフト(%d)" % qn) if qn > 0 else "クラフト"
 	_panel(cr, Color(0.08, 0.22, 0.34, 0.95) if modal == Modal.CRAFT else Color(0.05, 0.09, 0.16, 0.92), Color(0.42, 0.94, 1.0), 1.8)
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 25), c_lbl, HORIZONTAL_ALIGNMENT_CENTER, bw, 14, Color.WHITE)
-	if modal == Modal.NONE and (tut_f == "craft_drone" or tut_f == "craft_power"):
+	if modal == Modal.NONE and (tut_f in ["craft_drone", "craft_power", "smelt_orbit", "assemble_circuit"]):
 		_pulse_frame(cr)
 	_add_hit(cr, "open_craft")
 	y += 44.0
@@ -686,7 +744,7 @@ func _draw_top_right_menu(vp: Vector2, portrait: bool, font: Font) -> void:
 	var tr := Rect2(x, y, bw, 38)
 	_panel(tr, Color(0.12, 0.22, 0.34, 0.95) if modal == Modal.TECH else Color(0.05, 0.09, 0.16, 0.92), Color(1.0, 0.84, 0.32) if ready_t else Color(0.36, 0.78, 1.0), 1.8)
 	root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 25), "研究 %d/8" % State.unlocked_techs.size(), HORIZONTAL_ALIGNMENT_CENTER, bw, 14, Color(1.0, 0.92, 0.56) if ready_t else Color.WHITE)
-	if modal == Modal.NONE and tut_f == "research_power":
+	if modal == Modal.NONE and (tut_f in ["research_power", "logistics", "research_circuits", "orbital_and_defense"]):
 		_pulse_frame(tr)
 	_add_hit(tr, "open_tech")
 	y += 44.0
@@ -705,14 +763,14 @@ func _draw_top_right_menu(vp: Vector2, portrait: bool, font: Font) -> void:
 # 4. ビジュアル重視のコンパクト目標バー（アイコン＋短い誘導のみ！）
 func _draw_tutorial_banner(vp: Vector2, portrait: bool, font: Font) -> void:
 	var info := State.get_tutorial_info()
-	var w := minf(vp.x - 16.0, 480.0) if not portrait else (vp.x - 16.0)
+	var w := minf(vp.x - 16.0, 520.0) if not portrait else (vp.x - 16.0)
 	var h := 48.0
 	var x := (vp.x - w) * 0.5 if not portrait else 8.0
 	var y := 8.0 if not portrait else 184.0
 	var r := Rect2(x, y, w, h)
 	_panel(r, Color(0.05, 0.11, 0.19, 0.92), Color(1.0, 0.84, 0.34, 0.94), 1.8)
 
-	# 目標ステップに合わせたアイコン表示
+	# 目標ステップに合わせたアイコン表示 (全14ステップ対応)
 	var icon_k := "ore_fe"
 	match State.tut_step:
 		0: icon_k = "ore_fe"
@@ -722,6 +780,10 @@ func _draw_tutorial_banner(vp: Vector2, portrait: bool, font: Font) -> void:
 		5: icon_k = "tesla"
 		6: icon_k = "drill"
 		7: icon_k = "orbital_booster"
+		8: icon_k = "moon_luna"
+		9, 10: icon_k = "assembler"
+		11: icon_k = "item_sci_pack"
+		12: icon_k = "orb_station"
 		_: icon_k = "mass_driver"
 	var it := _get_visual_tex(icon_k)
 	if it:
@@ -1224,37 +1286,120 @@ func _draw_guide_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	root_ctrl.draw_string(font, Vector2(tb.position.x, tb.position.y + 26), "上部ガイド表示: ON" if State.tut_enabled else "上部ガイド表示: OFF", HORIZONTAL_ALIGNMENT_CENTER, tb.size.x, 14, Color.WHITE)
 	_add_hit(tb, "tut_toggle")
 
-# 10b. 完全網羅アイテム＆施設レシピツリー画面 ([I] または右上「レシピ図」ボタン)
+# 10b. 完全網羅アイテム＆施設レシピツリー画面（ドラッグ／ホイール／ボタンで2Dスクロール可能＆広間隔カード配置！）
+func _draw_clipped_hline(x1: float, x2: float, y: float, clip_r: Rect2, col: Color, width: float) -> void:
+	if y < clip_r.position.y or y > clip_r.end.y:
+		return
+	var xa := clampf(minf(x1, x2), clip_r.position.x, clip_r.end.x)
+	var xb := clampf(maxf(x1, x2), clip_r.position.x, clip_r.end.x)
+	if xb - xa > 0.5:
+		root_ctrl.draw_line(Vector2(xa, y), Vector2(xb, y), col, width)
+
+func _draw_clipped_vline(x: float, y1: float, y2: float, clip_r: Rect2, col: Color, width: float) -> void:
+	if x < clip_r.position.x or x > clip_r.end.x:
+		return
+	var ya := clampf(minf(y1, y2), clip_r.position.y, clip_r.end.y)
+	var yb := clampf(maxf(y1, y2), clip_r.position.y, clip_r.end.y)
+	if yb - ya > 0.5:
+		root_ctrl.draw_line(Vector2(x, ya), Vector2(x, yb), col, width)
+
+func _draw_clipped_ortho_edge(p1: Vector2, mid_x: float, p2: Vector2, clip_r: Rect2, col: Color, width: float, draw_endpoints: bool) -> void:
+	_draw_clipped_hline(p1.x, mid_x, p1.y, clip_r, col, width)
+	_draw_clipped_vline(mid_x, p1.y, p2.y, clip_r, col, width)
+	_draw_clipped_hline(mid_x, p2.x, p2.y, clip_r, col, width)
+	if draw_endpoints:
+		if clip_r.has_point(p1):
+			root_ctrl.draw_circle(p1, 3.8, col)
+		if clip_r.has_point(p2) and p2.x - 10.0 >= clip_r.position.x:
+			root_ctrl.draw_polygon(PackedVector2Array([p2, p2 + Vector2(-10, -5.5), p2 + Vector2(-10, 5.5)]), PackedColorArray([col]))
+
 func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
-	var mw := minf(vp.x - 12.0, 1120.0)
-	var mh := minf(vp.y - 24.0, 670.0)
+	var mw := minf(vp.x - 12.0, 1140.0)
+	var mh := minf(vp.y - 20.0, 690.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
 	_panel(r, Color(0.03, 0.05, 0.10, 0.98), Color(0.40, 0.96, 0.84), 2.2)
 
-	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "アイテム＆施設レシピツリー（カードをタップで経路ハイライト）", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 210), 16 if not portrait else 13, Color(0.48, 1.0, 0.86))
-	var gb := Rect2(r.end.x - 192, r.position.y + 8, 106, 30)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 27), "アイテム＆施設レシピ図（ドラッグ・ボタンでスクロール／カードタップで経路表示）", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 206), 15 if not portrait else 12, Color(0.48, 1.0, 0.86))
+	var gb := Rect2(r.end.x - 192, r.position.y + 7, 106, 28)
 	_panel(gb, Color(0.08, 0.20, 0.30, 0.95), Color(0.42, 0.90, 1.0), 1.5)
-	root_ctrl.draw_string(font, Vector2(gb.position.x, gb.position.y + 20), "操作ガイド", HORIZONTAL_ALIGNMENT_CENTER, gb.size.x, 13, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(gb.position.x, gb.position.y + 19), "操作ガイド", HORIZONTAL_ALIGNMENT_CENTER, gb.size.x, 12, Color.WHITE)
 	_add_hit(gb, "open_guide")
 
-	var cr := Rect2(r.end.x - 78, r.position.y + 8, 68, 30)
+	var cr := Rect2(r.end.x - 78, r.position.y + 7, 68, 28)
 	_panel(cr, Color(0.28, 0.08, 0.10, 0.95), Color(1.0, 0.42, 0.42), 1.6)
-	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 19), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 12, Color.WHITE)
 	_add_hit(cr, "close")
 
-	# 列ヘッダ (Col 0..6)
-	var col_titles := ["1.惑星原石", "2.採掘/溶鉱炉", "3.基礎素材", "4.組立機/電力", "5.回路/合金", "6.高度/軌道局", "7.最終/研究pt"]
-	var gx := r.position.x + 10.0
-	var gy := r.position.y + 44.0
-	var gw := mw - 20.0
-	var detail_h := 94.0
-	var gh := mh - 48.0 - detail_h - 12.0
-	var col_w := gw / 7.0
-	var row_h := (gh - 24.0) / 7.0
+	# ステージジャンプ＆スクロール操作バー
+	var nav_y := r.position.y + 40.0
+	var nav_items: Array[Dictionary] = [
+		{"lbl": "◀ 左へ", "a": "tree_pan_x", "v": -258.0, "w": 74.0},
+		{"lbl": "1. 原石 → 精錬・素材", "a": "tree_jump_col", "v": 0.0, "w": 154.0},
+		{"lbl": "2. 組立機 → 回路・合金", "a": "tree_jump_col", "v": 1.6, "w": 164.0},
+		{"lbl": "3. 軌道・艦隊 → 研究pt", "a": "tree_jump_col", "v": 3.3, "w": 168.0},
+		{"lbl": "右へ ▶", "a": "tree_pan_x", "v": 258.0, "w": 74.0},
+		{"lbl": "▲ 上", "a": "tree_pan_y", "v": -135.0, "w": 62.0},
+		{"lbl": "▼ 下", "a": "tree_pan_y", "v": 135.0, "w": 62.0},
+	]
+	var nx := r.position.x + 12.0
+	var avail_nav_w := mw - 24.0
+	var base_nav_w := 74.0 + 154.0 + 164.0 + 168.0 + 74.0 + 62.0 + 62.0 + 6.0 * 6.0
+	var nav_scale := minf(1.0, avail_nav_w / base_nav_w)
+	for ni in nav_items:
+		var bw_n := float(ni["w"]) * nav_scale
+		var nr_btn := Rect2(nx, nav_y, bw_n, 28.0)
+		var is_jmp := String(ni["a"]) == "tree_jump_col"
+		_panel(nr_btn, Color(0.08, 0.22, 0.32, 0.95) if is_jmp else Color(0.10, 0.16, 0.26, 0.95), Color(0.42, 0.94, 1.0) if is_jmp else Color(0.56, 0.76, 0.96), 1.4)
+		root_ctrl.draw_string(font, Vector2(nr_btn.position.x, nr_btn.position.y + 19), String(ni["lbl"]), HORIZONTAL_ALIGNMENT_CENTER, bw_n, 11 if not portrait else 9, Color.WHITE)
+		_add_hit(nr_btn, String(ni["a"]), ni["v"])
+		nx += bw_n + 6.0 * nav_scale
 
+	# スクロール可能なツリー表示ビューポート領域
+	var detail_h := 92.0
+	var vx := r.position.x + 12.0
+	var vy := r.position.y + 74.0
+	var vw := mw - 24.0
+	var vh := mh - 74.0 - detail_h - 14.0
+	_tree_view_rect = Rect2(vx, vy, vw, vh)
+	root_ctrl.draw_rect(_tree_view_rect, Color(0.02, 0.04, 0.08, 0.96))
+
+	# 広いカードサイズと十分な配線スペース (横間隔 92px、縦間隔 28px！)
+	var card_w := 166.0
+	var card_h := 62.0
+	var col_gap := 92.0
+	var row_gap := 28.0
+	var col_step := card_w + col_gap
+	var row_step := card_h + row_gap
+	var header_h := 28.0
+	var pad_l := 18.0
+	var pad_t := 12.0
+
+	var content_w := pad_l * 2.0 + 7.0 * col_step - col_gap + 16.0
+	var content_h := header_h + pad_t * 2.0 + 7.0 * row_step - row_gap + 14.0
+	_tree_max_scroll = Vector2(maxf(0.0, content_w - vw), maxf(0.0, content_h - vh))
+	item_tree_scroll.x = clampf(item_tree_scroll.x, 0.0, _tree_max_scroll.x)
+	item_tree_scroll.y = clampf(item_tree_scroll.y, 0.0, _tree_max_scroll.y)
+
+	# 列ヘッダ (横スクロールに連動、縦はビューポート上部に固定)
+	var col_titles := ["1. 惑星原石", "2. 採掘 / 溶鉱炉", "3. 基礎素材", "4. 組立機 / 電力", "5. 回路 / 合金", "6. 高度 / 軌道局", "7. 最終 / 研究pt"]
+	var hdr_rect := Rect2(vx, vy, vw, header_h)
+	root_ctrl.draw_rect(hdr_rect, Color(0.05, 0.10, 0.18, 0.96))
 	for ci in range(7):
-		var cx := gx + float(ci) * col_w
-		root_ctrl.draw_string(font, Vector2(cx, gy + 14), col_titles[ci], HORIZONTAL_ALIGNMENT_CENTER, col_w, 10 if portrait else 12, Color(0.68, 0.88, 1.0))
+		var col_x := vx + pad_l + float(ci) * col_step - item_tree_scroll.x
+		var h_box := Rect2(col_x, vy + 3.0, card_w, header_h - 6.0)
+		var h_vis := h_box.intersection(hdr_rect)
+		if h_vis.size.x > 24.0:
+			root_ctrl.draw_rect(h_vis, Color(0.08, 0.18, 0.28, 0.92))
+			root_ctrl.draw_rect(h_vis, Color(0.32, 0.62, 0.84, 0.65), false, 1.0)
+			if h_box.position.x >= vx - 12.0 and h_box.end.x <= vx + vw + 12.0:
+				root_ctrl.draw_string(font, Vector2(h_box.position.x, vy + 19.0), col_titles[ci], HORIZONTAL_ALIGNMENT_CENTER, card_w, 12, Color(0.72, 0.92, 1.0))
+
+	var cards_clip_r := Rect2(vx + 2.0, vy + header_h + 2.0, vw - 12.0, vh - header_h - 12.0)
+
+	# 背景グリッド縦ライン（各列の区切りを視覚化）
+	for ci in range(7):
+		var sep_x := vx + pad_l + float(ci) * col_step + card_w + col_gap * 0.5 - item_tree_scroll.x
+		_draw_clipped_vline(sep_x, cards_clip_r.position.y, cards_clip_r.end.y, cards_clip_r, Color(0.14, 0.22, 0.34, 0.35), 1.0)
 
 	var node_rects: Dictionary = {}
 	var node_map: Dictionary = {}
@@ -1263,13 +1408,11 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		node_map[nid] = nd
 		var c_idx := int(nd["col"])
 		var r_idx := int(nd["row"])
-		var cw_box := col_w - (6.0 if portrait else 12.0)
-		var ch_box := row_h - 5.0
-		var bx := gx + float(c_idx) * col_w + (col_w - cw_box) * 0.5
-		var by := gy + 22.0 + float(r_idx) * row_h
-		node_rects[nid] = Rect2(bx, by, cw_box, ch_box)
+		var bx := vx + pad_l + float(c_idx) * col_step - item_tree_scroll.x
+		var by := vy + header_h + pad_t + float(r_idx) * row_step - item_tree_scroll.y
+		node_rects[nid] = Rect2(bx, by, card_w, card_h)
 
-	# 選択カードの上流チェーン（一番左の原石 → 精錬器 → 中間素材 → 組立機 → 選択アイテム！）を再帰的に全て収集
+	# 選択カードの上流チェーン（一番左の原石 → 溶鉱炉 → 中間素材 → 組立機 → 選択アイテム！）を再帰的に全て収集
 	var up_nodes: Dictionary = {}
 	var q_up: Array[String] = [item_tree_sel]
 	while not q_up.is_empty():
@@ -1286,7 +1429,7 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		if String(ed[0]) == item_tree_sel:
 			down_nodes[String(ed[1])] = true
 
-	# 1) 背景の非アクティブ接続エッジを先に描画
+	# 1) 背景の非アクティブ接続エッジ（92pxの広い列間スペース内で縦レーンをずらして配線！）
 	for ed in State.ITEM_TREE_EDGES:
 		var u := String(ed[0]); var v := String(ed[1])
 		if not node_rects.has(u) or not node_rects.has(v): continue
@@ -1294,34 +1437,44 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		var is_out_edge := (u == item_tree_sel and down_nodes.has(v))
 		if is_up_edge or is_out_edge: continue
 		var ru: Rect2 = node_rects[u]; var rv: Rect2 = node_rects[v]
-		var p1 := Vector2(ru.end.x, ru.get_center().y)
-		var p2 := Vector2(rv.position.x, rv.get_center().y)
-		var mid_x := (p1.x + p2.x) * 0.5
-		root_ctrl.draw_polyline(PackedVector2Array([p1, Vector2(mid_x, p1.y), Vector2(mid_x, p2.y), p2]), Color(0.28, 0.40, 0.54, 0.28), 1.2)
+		var r_u := int(node_map[u]["row"]); var r_v := int(node_map[v]["row"])
+		var y_off_u := clampf(float(r_v - r_u) * 3.5, -14.0, 14.0)
+		var y_off_v := clampf(float(r_u - r_v) * 3.5, -14.0, 14.0)
+		var p1 := Vector2(ru.end.x, ru.get_center().y + y_off_u)
+		var p2 := Vector2(rv.position.x, rv.get_center().y + y_off_v)
+		var lane := (r_u * 3 + r_v * 5) % 7
+		var mid_x := p1.x + 16.0 + float(lane) * 10.0
+		_draw_clipped_ortho_edge(p1, mid_x, p2, cards_clip_r, Color(0.32, 0.48, 0.64, 0.34), 1.4, false)
 
-	# 2) 全資源・全施設カード描画
+	# 2) 全資源・全施設カード描画（ビューポート内にクリップして描画）
 	for nd in State.ITEM_TREE_NODES:
 		var nid := String(nd["id"])
 		var nr: Rect2 = node_rects[nid]
+		var vis_r := nr.intersection(cards_clip_r)
+		if vis_r.size.x <= 4.0 or vis_r.size.y <= 4.0:
+			continue
 		var is_sel := (nid == item_tree_sel)
 		var is_in := up_nodes.has(nid)
 		var is_out := down_nodes.has(nid)
 		var is_fac := String(nd["kind"]) == "fac"
-		var bg := Color(0.16, 0.34, 0.46, 0.99) if is_sel else (Color(0.09, 0.24, 0.34, 0.98) if is_in else (Color(0.08, 0.18, 0.26, 0.95) if is_fac else Color(0.06, 0.10, 0.17, 0.94)))
-		var bd := Color(1.0, 0.92, 0.36) if is_sel else (Color(0.32, 0.98, 1.0) if is_in else (Color(1.0, 0.78, 0.28) if is_out else (Color(0.34, 0.62, 0.82, 0.75) if is_fac else Color(0.24, 0.36, 0.50, 0.75))))
-		_panel(nr, bg, bd, 2.5 if (is_sel or is_in or is_out) else 1.2)
+		var bg := Color(0.16, 0.36, 0.48, 0.99) if is_sel else (Color(0.09, 0.25, 0.36, 0.98) if is_in else (Color(0.08, 0.19, 0.28, 0.96) if is_fac else Color(0.06, 0.10, 0.17, 0.95)))
+		var bd := Color(1.0, 0.92, 0.36) if is_sel else (Color(0.32, 0.98, 1.0) if is_in else (Color(1.0, 0.78, 0.28) if is_out else (Color(0.36, 0.66, 0.86, 0.82) if is_fac else Color(0.26, 0.40, 0.56, 0.80))))
+		_panel(vis_r, bg, bd, 2.6 if (is_sel or is_in or is_out) else 1.4)
 
 		var it := _get_visual_tex(String(nd["icon"]))
-		var isz := clampf(nr.size.y - 10.0, 16.0, 28.0)
-		if it:
-			root_ctrl.draw_texture_rect(it, Rect2(nr.position.x + 5, nr.position.y + (nr.size.y - isz) * 0.5, isz, isz), false)
-		var tx := nr.position.x + isz + 9.0
-		var tw_c := int(maxf(20.0, nr.size.x - isz - 12.0))
-		root_ctrl.draw_string(font, Vector2(tx, nr.position.y + nr.size.y * 0.46), String(nd["name"]), HORIZONTAL_ALIGNMENT_LEFT, tw_c, 10 if portrait else 12, Color.WHITE)
-		root_ctrl.draw_string(font, Vector2(tx, nr.position.y + nr.size.y * 0.84), String(nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, tw_c, 9 if portrait else 10, Color(0.68, 0.88, 1.0) if is_fac else Color(0.55, 0.98, 0.80))
-		_add_hit(nr, "item_tree_pick", nid)
+		var isz := 34.0
+		var ic_r := Rect2(nr.position.x + 8.0, nr.position.y + (nr.size.y - isz) * 0.5, isz, isz)
+		if it and cards_clip_r.encloses(ic_r):
+			root_ctrl.draw_texture_rect(it, ic_r, false)
+		var tx := nr.position.x + isz + 14.0
+		if nr.position.y >= cards_clip_r.position.y - 4.0 and nr.end.y <= cards_clip_r.end.y + 4.0 and tx < cards_clip_r.end.x - 16.0:
+			var max_tw := int(minf(nr.end.x - tx - 6.0, cards_clip_r.end.x - tx - 4.0))
+			if max_tw > 20 and tx >= cards_clip_r.position.x:
+				root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 26.0), String(nd["name"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, 13, Color.WHITE)
+				root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 48.0), String(nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, 11, Color(0.70, 0.90, 1.0) if is_fac else Color(0.55, 0.98, 0.80))
+		_add_hit(vis_r, "item_tree_pick", nid)
 
-	# 2b) アクティブな上流チェーン（青線: 原石→溶鉱炉→鉄板/銅線→組立機→完成品）＆下流エッジ（黄線）を最前面にくっきり描画！
+	# 2b) アクティブな上流チェーン（シアン太線: 原石→溶鉱炉→基礎素材→組立機→完成品）＆下流エッジ（ゴールド太線）を最前面に描画！
 	for ed in State.ITEM_TREE_EDGES:
 		var u := String(ed[0]); var v := String(ed[1])
 		if not node_rects.has(u) or not node_rects.has(v): continue
@@ -1329,12 +1482,31 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		var is_out_edge := (u == item_tree_sel and down_nodes.has(v))
 		if not is_up_edge and not is_out_edge: continue
 		var ru: Rect2 = node_rects[u]; var rv: Rect2 = node_rects[v]
-		var p1 := Vector2(ru.end.x, ru.get_center().y)
-		var p2 := Vector2(rv.position.x, rv.get_center().y)
-		var lcol := Color(0.32, 0.98, 1.0, 0.98) if is_up_edge else Color(1.0, 0.84, 0.28, 0.96)
-		var mid_x := (p1.x + p2.x) * 0.5
-		root_ctrl.draw_polyline(PackedVector2Array([p1, Vector2(mid_x, p1.y), Vector2(mid_x, p2.y), p2]), lcol, 3.0)
-		root_ctrl.draw_polygon(PackedVector2Array([p2, p2 + Vector2(-8, -5), p2 + Vector2(-8, 5)]), PackedColorArray([lcol]))
+		var r_u := int(node_map[u]["row"]); var r_v := int(node_map[v]["row"])
+		var y_off_u := clampf(float(r_v - r_u) * 3.5, -14.0, 14.0)
+		var y_off_v := clampf(float(r_u - r_v) * 3.5, -14.0, 14.0)
+		var p1 := Vector2(ru.end.x, ru.get_center().y + y_off_u)
+		var p2 := Vector2(rv.position.x, rv.get_center().y + y_off_v)
+		var lane := (r_u * 3 + r_v * 5) % 7
+		var mid_x := p1.x + 16.0 + float(lane) * 10.0
+		var lcol := Color(0.32, 0.98, 1.0, 0.98) if is_up_edge else Color(1.0, 0.84, 0.28, 0.98)
+		_draw_clipped_ortho_edge(p1, mid_x, p2, cards_clip_r, Color(0.02, 0.05, 0.10, 0.92), 5.6, false)
+		_draw_clipped_ortho_edge(p1, mid_x, p2, cards_clip_r, lcol, 3.2, true)
+
+	# ビューポート外枠と2Dスクロールバー描画
+	root_ctrl.draw_rect(_tree_view_rect, Color(0.30, 0.56, 0.74, 0.85), false, 1.5)
+	if _tree_max_scroll.x > 1.0:
+		var sb_w := vw - 16.0
+		var thumb_w := maxf(48.0, sb_w * (vw / content_w))
+		var thumb_x := vx + 4.0 + (sb_w - thumb_w) * clampf(item_tree_scroll.x / _tree_max_scroll.x, 0.0, 1.0)
+		root_ctrl.draw_rect(Rect2(vx + 4.0, vy + vh - 8.0, sb_w, 5.0), Color(0.08, 0.14, 0.22, 0.9))
+		root_ctrl.draw_rect(Rect2(thumb_x, vy + vh - 8.0, thumb_w, 5.0), Color(0.42, 0.94, 1.0, 0.92))
+	if _tree_max_scroll.y > 1.0:
+		var sb_h := vh - header_h - 14.0
+		var thumb_h := maxf(36.0, sb_h * (vh / content_h))
+		var thumb_y := vy + header_h + 4.0 + (sb_h - thumb_h) * clampf(item_tree_scroll.y / _tree_max_scroll.y, 0.0, 1.0)
+		root_ctrl.draw_rect(Rect2(vx + vw - 8.0, vy + header_h + 4.0, 5.0, sb_h), Color(0.08, 0.14, 0.22, 0.9))
+		root_ctrl.draw_rect(Rect2(vx + vw - 8.0, thumb_y, 5.0, thumb_h), Color(0.42, 0.94, 1.0, 0.92))
 
 	# 3) 下部：選択カードの詳細工程＆必要材料チェーン表示
 	var dr := Rect2(r.position.x + 12, r.end.y - detail_h - 8, mw - 24, detail_h)

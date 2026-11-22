@@ -835,24 +835,40 @@ func update_tutorial() -> void:
 				if propulsion_tier >= 1:
 					tut_step = 8; changed = true
 			8:
-				if get_r("ti") >= 4 or total_launches >= 1:
+				if get_r("ti") >= 6:
 					tut_step = 9; changed = true
+			9:
+				if has_tech("circuits_geo"):
+					tut_step = 10; changed = true
+			10:
+				if int(tut_placed.get("assembler", 0)) >= 1 and get_r("circuit") >= 2:
+					tut_step = 11; changed = true
+			11:
+				if get_r("sci_pack") >= 20:
+					tut_step = 12; changed = true
+			12:
+				var orb_cnt := int(tut_placed.get("orb_power", 0)) + int(tut_placed.get("orb_laser", 0)) + int(tut_placed.get("orb_collector", 0)) + int(tut_placed.get("orb_station", 0))
+				if has_tech("deep_space") and (int(tut_placed.get("turret", 0)) >= 1 or orb_cnt >= 1):
+					tut_step = 13; changed = true
+			13:
+				if game_won:
+					tut_step = 14; changed = true
 
 func get_tutorial_info() -> Dictionary:
 	match tut_step:
 		0:
 			return {
-				"step": "1/9", "title": "鉱石を採掘しよう",
+				"step": "1/14", "title": "鉱石を採掘しよう",
 				"hint": "右下スティック（PCはSPACE）で狙った方向を掘ろう！",
 				"focus": "mine",
 			}
 		1:
 			var qd := count_queued("drone")
 			var h := "製造キュー進行中…完成すると自動で自機にドッキング！" if qd > 0 else "右上の【クラフト】を開き『ドローン増設』を製造！"
-			return {"step": "2/9", "title": "ドローンをクラフト増設", "hint": h, "focus": "craft_drone"}
+			return {"step": "2/14", "title": "ドローンをクラフト増設", "hint": h, "focus": "craft_drone"}
 		2:
 			return {
-				"step": "3/9", "title": "電力を研究しよう",
+				"step": "3/14", "title": "電力を研究しよう",
 				"hint": "右上の【研究】から『電力とテスラ』カードをタップして研究！",
 				"focus": "research_power",
 			}
@@ -860,45 +876,69 @@ func get_tutorial_info() -> Dictionary:
 			var s_ok := (get_stock("solar") + int(tut_placed.get("solar", 0))) >= 1
 			var t_ok := (get_stock("tesla") + int(tut_placed.get("tesla", 0))) >= 1
 			return {
-				"step": "4/9", "title": "発電装置をクラフト",
+				"step": "4/14", "title": "発電装置をクラフト",
 				"hint": "【クラフト】→『電力・防衛』でソーラー(%s)とテスラ(%s)を製造！" % ["済" if s_ok else "未", "済" if t_ok else "未"],
 				"focus": "craft_power",
 			}
 		4:
 			return {
-				"step": "5/9", "title": "地表に装置を設置",
+				"step": "5/14", "title": "地表に装置を設置",
 				"hint": "下部バーの『ソーラー』と『テスラ』を選び地表をタップして設置！",
 				"focus": "place_power",
 			}
 		5:
 			return {
-				"step": "6/9", "title": "電線を張って通電",
+				"step": "6/14", "title": "電線を張って通電",
 				"hint": "下部バーの【配線】を選び、ソーラー → テスラの順にタップ！",
 				"focus": "wire_power",
 			}
 		6:
 			return {
-				"step": "7/9", "title": "鉱床ドリルと自動配線コンベア",
+				"step": "7/14", "title": "鉱床ドリルと自動配線コンベア",
 				"hint": "『洞窟物流ライン』研究→硬質鉱床にドリル＆倉庫を置き【搬送】で接続！",
 				"focus": "logistics",
 			}
 		7:
 			return {
-				"step": "8/9", "title": "軌道ブースターで衛星ルナへ！",
-				"hint": "溶鉱炉で鉄板を作り【クラフト】で軌道ブースターを製造して宇宙へ！",
+				"step": "8/14", "title": "溶鉱炉と軌道ブースター製造",
+				"hint": "『精錬と軌道進出』を研究→溶鉱炉で鉄板・銅線を作り、軌道ブースターを製造！",
 				"focus": "smelt_orbit",
 			}
 		8:
 			return {
-				"step": "9/9", "title": "衛星ルナでチタン採掘＆研究ポイント生産",
-				"hint": "衛星ルナでチタンを掘り、軌道施設や組立機で研究ポイント1,000を目指そう！",
-				"focus": "swarm",
+				"step": "9/14", "title": "衛星ルナへ飛んでチタンを採掘",
+				"hint": "宇宙へ飛び立ち、地球を公転する『衛星ルナ』に着陸してチタンを6個掘ろう！",
+				"focus": "mine_luna_ti",
+			}
+		9:
+			return {
+				"step": "10/14", "title": "『電子回路と防衛』を研究しよう",
+				"hint": "溶鉱炉で鉄板6・銅線4を揃え、右上の【研究】で『電子回路と防衛』を解放！",
+				"focus": "research_circuits",
+			}
+		10:
+			return {
+				"step": "11/14", "title": "自動組立機で『回路』を生産",
+				"hint": "【クラフト】で自動組立機を製造・設置し、倉庫から搬送接続して回路を2個作ろう！",
+				"focus": "assemble_circuit",
+			}
+		11:
+			return {
+				"step": "12/14", "title": "研究ポイントの生産方法",
+				"hint": "自動組立機をタップ→『レシピ: 回路』を押して【研究ポイント】に切替！（1,000ptでクリア）",
+				"focus": "produce_sci_pack",
+			}
+		12:
+			return {
+				"step": "13/14", "title": "軌道施設と月面・他惑星の防衛",
+				"hint": "『惑星開拓と軌道工場』を研究！周回軌道への軌道施設配置や、月面へのレーザー砲台設置を行おう！",
+				"focus": "orbital_and_defense",
 			}
 		_:
 			return {
-				"step": "完了", "title": "研究ポイント1,000＆アストラ-V制圧",
-				"hint": "研究ポイント1,000pt達成でクリア！艦隊で敵拠点アストラ-Vも制圧しよう！",
-				"focus": "none",
+				"step": "14/14", "title": "研究ポイント1,000達成＆アストラ-V制圧",
+				"hint": "研究ポイントを1,000pt貯めるか、3Dプリンタ＋射出機で艦隊を量産し敵拠点アストラ-Vを制圧！",
+				"focus": "swarm",
 			}
 
 func add_log(msg: String, kind: String = "info") -> void:

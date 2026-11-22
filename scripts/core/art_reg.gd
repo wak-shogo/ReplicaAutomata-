@@ -26,7 +26,7 @@ func _ready() -> void:
 		"drill", "belt", "lift", "solar", "tesla", "battery", "geothermal", "turret",
 		"orb_power", "orb_laser", "orb_collector", "orb_station",
 		"crystal_si", "ore_fe", "ore_cu", "ore_ti",
-		"enemy_station", "moon_luna", "moon_ignis", "moon_cryo", "planet_astra",
+		"enemy_station", "enemy_probe", "moon_luna", "moon_ignis", "moon_cryo", "planet_astra",
 		"ast_fe", "ast_cu", "ast_si", "ast_ti",
 		"icon_strip", "glow",
 	]

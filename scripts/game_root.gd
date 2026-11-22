@@ -319,17 +319,47 @@ func _run_tests() -> void:
 		"PCB Autorouter MUST reject route when all non-overlapping grid paths are blocked! got=%s" % str(blocked_res))
 	grid.conveyors.pop_back()
 
-	# 3f. Building Durability HP, Non-Starter Planet Pollution & ASTRA-V Fleet Liberation + Research Points 1,000 Victory!
+	# 3f. Starter Planet (TERRA-I) Sanctuary Protection + Luna Building Durability HP + Pollution + ASTRA-V Fleet Liberation!
 	var sol_uid := int(grid.buildings[0]["uid"])
 	var hp_pre := float(grid.buildings[0]["hp"])
 	grid.damage_building_uid(sol_uid, 25.0)
-	_chk(float(grid.buildings[0]["hp"]) < hp_pre, "Building HP did not decrease on enemy damage!")
+	_chk(float(grid.buildings[0]["hp"]) == hp_pre and grid.find_nearest_on_body(Vector2.ZERO, "terra").is_empty(),
+		"Starter planet TERRA-I facilities must NEVER be targeted or damaged by enemy raiders!")
+	# Place a Solar facility on LUNA and verify raiders target and damage LUNA facilities (not TERRA-I)
+	_chk(_craft_and_finish("building", "solar"), "Craft Luna Solar failed")
+	var luna_surf_local := (Vector2(planet.bodies["luna"]["pos"]) - planet.get_terra_pos()) + Vector2(0.0, -float(planet.bodies["luna"]["rad"]))
+	_chk(grid.try_place_at("solar", luna_surf_local), "Place Solar on LUNA failed")
+	var luna_bld: Dictionary = grid.buildings[grid.buildings.size() - 1]
+	_chk(String(luna_bld["body_id"]) == "luna", "Building placed on LUNA did not get body_id=luna!")
+	var luna_hp_pre := float(luna_bld["hp"])
+	grid.damage_building_uid(int(luna_bld["uid"]), 25.0)
+	_chk(float(luna_bld["hp"]) < luna_hp_pre, "LUNA facility HP did not decrease on enemy raider damage!")
 	State.add_pollution("luna", 22.0)
 	State.add_pollution("terra", 22.0)
 	_chk(State.get_pollution("luna") >= 20.0 and State.get_pollution("terra") == 0.0, "Starter planet terra must stay 0 pollution while luna accumulates pollution!")
 	_chk(not State.astra_liberated and State.astra_bastions_left == 6, "ASTRA-V must start fortified with 6 bastions!")
 	planet.damage_astra_bastions(1000.0)
 	_chk(State.astra_liberated and State.astra_bastions_left == 0, "Swarm fleet assault failed to liberate ASTRA-V!")
+
+	# 3g. Red Self-Replicating Enemy Probe Sprite + Boids Non-Overlapping Separation Test!
+	_chk(ArtReg.get_t("enemy_probe") != null, "enemy_probe.png sprite texture missing!")
+	swarm.raiders.clear()
+	for _rw in range(5):
+		swarm.spawn_raider_wave("terra", false) # Must auto-redirect from terra -> luna!
+	_chk(swarm.raiders.size() == 5, "Failed to spawn 5 enemy probes!")
+	for rd_chk in swarm.raiders:
+		_chk(String(rd_chk["target_body"]) != "terra", "Raider must NEVER have target_body == terra!")
+		# Force all 5 raiders onto the exact same coordinate to test anti-overlap separation
+		rd_chk["pos"] = Vector2(luna_bld["pos"]) + Vector2(0.0, -45.0)
+	for _sep in range(8):
+		swarm._process(0.05)
+	var min_pair_d := 1e9
+	for i in range(swarm.raiders.size()):
+		for j in range(i + 1, swarm.raiders.size()):
+			var pd := Vector2(swarm.raiders[i]["pos"]).distance_to(Vector2(swarm.raiders[j]["pos"]))
+			min_pair_d = minf(min_pair_d, pd)
+	_chk(min_pair_d >= 42.0, "Enemy probes overlapped at the same position! min_pair_d=%.2f" % min_pair_d)
+	swarm.raiders.clear()
 
 	# 4. EXACT ANALYTICAL KEPLERIAN ON-RAILS ORBIT (Eccentric e=0.14, 5 FULL REVOLUTIONS, ZERO DRIFT, VIS-VIVA SPEED!)
 	_chk(_craft_and_finish("propulsion", "1") and State.propulsion_tier == 1, "Orbital Booster craft failed")

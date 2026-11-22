@@ -494,6 +494,28 @@ def make_crystals_and_celestials():
     d.ellipse([75, 55, 85, 65], fill=(255, 226, 198, 255))
     outline(im).save(os.path.join(OUT, "enemy_station.png"))
 
+    # Hostile Self-Replicating Red Probe (36x36, facing +X right)
+    im = Image.new("RGBA", (36, 36), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    # Rear crimson thruster nozzles
+    d.rectangle([3, 10, 9, 15], fill=(180, 32, 42, 255), outline=DK)
+    d.rectangle([3, 21, 9, 26], fill=(180, 32, 42, 255), outline=DK)
+    # Swept dark-crimson delta wings
+    d.polygon([(7, 4), (24, 13), (18, 16), (5, 11)], fill=(128, 22, 34, 255), outline=DK)
+    d.polygon([(7, 32), (24, 23), (18, 20), (5, 25)], fill=(128, 22, 34, 255), outline=DK)
+    d.line([8, 6, 21, 13], fill=(242, 68, 76, 255))
+    d.line([8, 30, 21, 23], fill=(242, 68, 76, 255))
+    # Forward self-replicating harvester pincer mandibles (+X nose)
+    d.polygon([(22, 11), (34, 14), (26, 16)], fill=(214, 48, 56, 255), outline=DK)
+    d.polygon([(22, 25), (34, 22), (26, 20)], fill=(214, 48, 56, 255), outline=DK)
+    # Armored octagonal probe hull
+    d.polygon([(8, 12), (20, 10), (27, 15), (27, 21), (20, 26), (8, 24)], fill=(48, 24, 34, 255), outline=DK)
+    d.polygon([(10, 14), (19, 12), (24, 16), (24, 20), (19, 24), (10, 22)], fill=(86, 30, 42, 255))
+    # Glowing red optic core
+    d.ellipse([14, 14, 22, 22], fill=(255, 46, 58, 255), outline=DK)
+    d.ellipse([16, 16, 20, 20], fill=(255, 214, 186, 255))
+    outline(im).save(os.path.join(OUT, "enemy_probe.png"))
+
     # 3 Shaded Moons + 4 Asteroids
     def sphere(fname, sz, base, hi, dark, crat, seed):
         sim = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))

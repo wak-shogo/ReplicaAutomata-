@@ -104,23 +104,34 @@ func damage_raider_near(p: Vector2, dmg: float) -> void:
 
 func spawn_raider_wave(target_body: String, from_offmap: bool = false) -> void:
 	if not planet or raiders.size() >= 14: return
+	# 最初の惑星（テラ-I）には敵が一切来ないように保護（月ルナや他惑星のみ襲撃）
+	var safe_target := target_body
+	if safe_target == "" or safe_target == "terra":
+		safe_target = "luna"
 	var terra_p := Vector2(planet.bodies["terra"]["pos"])
 	var spawn_l := boss_pos
+	var idx_seed := raiders.size()
+	var slot_a := wrapf(float(idx_seed) * 0.92 - 1.15, -1.45, 1.45) + randf_range(-0.14, 0.14)
+	var h_rad := 54.0 + float(idx_seed % 4) * 24.0 + randf_range(-5.0, 7.0)
 	if from_offmap:
 		var ang := randf_range(0.0, TAU)
 		var off_world := Vector2(cos(ang), sin(ang)) * 72000.0
 		spawn_l = off_world - terra_p
-	elif planet.bodies.has(target_body):
-		var bp := Vector2(planet.bodies[target_body]["pos"]) - terra_p
-		var a := randf_range(0.0, TAU)
-		spawn_l = bp + Vector2(cos(a), sin(a)) * (float(planet.bodies[target_body]["rad"]) + 2400.0)
+	elif planet.bodies.has(safe_target):
+		var bp := Vector2(planet.bodies[safe_target]["pos"]) - terra_p
+		var a := -PI * 0.5 + slot_a * 0.65
+		spawn_l = bp + Vector2(cos(a), sin(a)) * (float(planet.bodies[safe_target]["rad"]) + 1800.0)
+	var spread_off := Vector2.from_angle(float(idx_seed) * 1.25 + randf_range(-0.2, 0.2)) * (64.0 + float(idx_seed) * 18.0)
 	raiders.append({
-		"pos": spawn_l + Vector2(randf_range(-80, 80), randf_range(-80, 80)),
+		"pos": spawn_l + spread_off,
 		"vel": Vector2.ZERO,
 		"hp": 65.0,
 		"max_hp": 65.0,
-		"target_body": target_body,
+		"target_body": safe_target,
 		"atk_t": 0.0,
+		"slot_ang": slot_a,
+		"hover_r": h_rad,
+		"rot": 0.0,
 	})
 
 func damage_boss(dmg: float) -> void:
@@ -155,43 +166,95 @@ func _process(delta: float) -> void:
 					State.add_log("警告: %s の汚染(%d%%)に反応して敵襲撃機が飛来！" % [planet.bodies[bid]["name"], int(pol)], "warn")
 				break
 
-	# 2. Continuous Off-Map Random Enemy Raids (persists even after ASTRA-V is liberated!)
+	# 2. Continuous Off-Map Random Enemy Raids (NEVER attacks starter planet TERRA-I; attacks Luna & other planets!)
 	_offmap_raid_t += delta
-	if _offmap_raid_t >= 16.0 and grid and not grid.buildings.is_empty():
+	if _offmap_raid_t >= 16.0 and grid:
 		_offmap_raid_t = 0.0
-		# Target a random planet that currently has player facilities
 		var b_targets: Array[String] = []
 		for b in grid.buildings:
 			var bid_b := String(b.get("body_id", "terra"))
-			if not (bid_b in b_targets):
+			if bid_b != "terra" and not (bid_b in b_targets):
 				b_targets.append(bid_b)
-		if not b_targets.is_empty() and (State.astra_liberated or State.propulsion_tier >= 1 or b_targets.size() > 1):
+		if b_targets.is_empty() and (State.astra_liberated or State.propulsion_tier >= 1):
+			b_targets.append("luna")
+		if not b_targets.is_empty():
 			var chosen_b: String = b_targets[randi() % b_targets.size()]
 			spawn_raider_wave(chosen_b, true)
-			if planet:
-				State.add_log("星系外縁から敵襲撃部隊が %s の施設へ接近中！" % planet.bodies[chosen_b]["name"], "warn")
+			if planet and planet.bodies.has(chosen_b):
+				State.add_log("星系外縁から敵性の自己複製探査機が %s へ接近中！" % planet.bodies[chosen_b]["name"], "warn")
 
-	# 3. Raider AI: fly toward nearest player facility on target planet & attack its HP!
-	for rd in raiders:
-		var t_pos := Vector2(0.0, -SphericalPlanet.R_SURFACE - 120.0)
+	# 3. Raider AI: fly toward nearest player facility on non-starter planet (Luna/Ignis/Cryo/Astra) & Boids anti-overlap!
+	for i in range(raiders.size()):
+		var rd: Dictionary = raiders[i]
+		var tbody := String(rd.get("target_body", "luna"))
+		if tbody == "" or tbody == "terra":
+			tbody = "luna"
+			rd["target_body"] = "luna"
+		var slot_a := float(rd.get("slot_ang", float(i) * 0.85 - 1.0))
+		var h_rad := float(rd.get("hover_r", 62.0))
+		var t_pos := boss_pos
+		if planet and planet.bodies.has(tbody):
+			var bp := Vector2(planet.bodies[tbody]["pos"]) - Vector2(planet.bodies["terra"]["pos"])
+			var brad := float(planet.bodies[tbody]["rad"])
+			var p_ang := -PI * 0.5 + slot_a
+			t_pos = bp + Vector2(cos(p_ang), sin(p_ang)) * (brad + 95.0 + h_rad)
+
 		var best_b: Dictionary = {}
 		if grid and grid.has_method("find_nearest_on_body"):
-			best_b = grid.find_nearest_on_body(Vector2(rd["pos"]), String(rd.get("target_body", "")))
-			if not best_b.is_empty():
-				t_pos = Vector2(best_b["pos"]) + Vector2(best_b["normal"]) * 36.0
+			best_b = grid.find_nearest_on_body(Vector2(rd["pos"]), tbody)
+			if not best_b.is_empty() and String(best_b.get("body_id", "terra")) != "terra":
+				var b_norm := Vector2(best_b["normal"])
+				var fan_dir := b_norm.rotated(slot_a * 0.62)
+				t_pos = Vector2(best_b["pos"]) + fan_dir * h_rad
+			else:
+				best_b = {}
+
 		var to_t := t_pos - Vector2(rd["pos"])
 		var dist := to_t.length()
-		var desired_v := to_t.normalized() * (260.0 if dist > 110.0 else 45.0)
-		rd["vel"] = Vector2(rd["vel"]).lerp(desired_v, clampf(delta * 2.2, 0.0, 1.0))
+		var desired_v := (to_t / maxf(0.01, dist)) * (260.0 if dist > 110.0 else (55.0 if dist > 18.0 else 0.0))
+
+		# Boids pairwise separation force so multiple raiders never stack on the same spot
+		var sep_v := Vector2.ZERO
+		for j in range(raiders.size()):
+			if i == j: continue
+			var diff := Vector2(rd["pos"]) - Vector2(raiders[j]["pos"])
+			var d := diff.length()
+			if d < 78.0:
+				var dir_sep := (diff / d) if d > 0.01 else Vector2.from_angle(float(i - j) * 1.37)
+				sep_v += dir_sep * ((78.0 - d) * 5.2)
+
+		rd["vel"] = Vector2(rd["vel"]).lerp(desired_v + sep_v, clampf(delta * 3.0, 0.0, 1.0))
 		rd["pos"] = Vector2(rd["pos"]) + Vector2(rd["vel"]) * delta
 
-		if not best_b.is_empty() and dist <= 135.0:
+		# Rotate red probe toward target facility when attacking, or along velocity vector when flying
+		if not best_b.is_empty() and Vector2(rd["pos"]).distance_to(Vector2(best_b["pos"])) <= 185.0:
+			var aim_v := Vector2(best_b["pos"]) - Vector2(rd["pos"])
+			if aim_v.length() > 1.0:
+				rd["rot"] = aim_v.angle()
+		elif Vector2(rd["vel"]).length() > 8.0:
+			rd["rot"] = Vector2(rd["vel"]).angle()
+
+		if not best_b.is_empty() and Vector2(rd["pos"]).distance_to(Vector2(best_b["pos"])) <= 165.0:
 			rd["atk_t"] = float(rd.get("atk_t", 0.0)) + delta
 			if float(rd["atk_t"]) >= 0.75:
 				rd["atk_t"] = 0.0
 				var b_hit_pos := Vector2(best_b["pos"]) + Vector2(best_b["normal"]) * 24.0
 				tracers.append({"a": Vector2(rd["pos"]), "b": b_hit_pos, "c": Color(1.0, 0.24, 0.32, 0.92), "life": 0.20})
 				grid.damage_building_uid(int(best_b["uid"]), 18.0)
+
+	# Hard pairwise position constraint so two enemy probes can never overlap even when spawning or cornered
+	for i in range(raiders.size()):
+		for j in range(i + 1, raiders.size()):
+			var pi := Vector2(raiders[i]["pos"])
+			var pj := Vector2(raiders[j]["pos"])
+			var diff := pi - pj
+			var d := diff.length()
+			var min_sep := 44.0
+			if d < min_sep:
+				var push_dir := (diff / d) if d > 0.01 else Vector2.from_angle(float(i + j * 3) * 1.1)
+				var push := push_dir * ((min_sep - d) * 0.52)
+				raiders[i]["pos"] = pi + push
+				raiders[j]["pos"] = pj - push
 
 	# 4. Swarm Fleet Doctrines (HARVEST, REPLICATE, DEFEND, ASSAULT on ASTRA-V!)
 	_doc_t += delta
@@ -246,13 +309,29 @@ func _draw() -> void:
 		var f := clampf(State.boss_hp / maxf(1.0, State.boss_max_hp), 0.0, 1.0)
 		draw_rect(Rect2(boss_pos.x - 74, boss_pos.y - 108, 148, 9), Color(0.06, 0.08, 0.12, 0.9))
 		draw_rect(Rect2(boss_pos.x - 72, boss_pos.y - 106, 144 * f, 5), Color(1.0, 0.28, 0.34))
+	var probe_tex := ArtReg.get_t("enemy_probe")
 	for rd in raiders:
 		var rp: Vector2 = rd["pos"]
-		draw_circle(rp, 11.0, Color(0.24, 0.06, 0.10, 0.92))
-		draw_circle(rp, 8.0, Color(1.0, 0.24, 0.32))
+		var rot := float(rd.get("rot", 0.0))
+		if glow:
+			draw_texture_rect(glow, Rect2(rp.x - 30, rp.y - 30, 60, 60), false, Color(1.0, 0.16, 0.24, 0.28))
+		draw_set_transform(rp, rot, Vector2.ONE)
+		# Crimson plasma thruster plume behind the self-replicating probe
+		draw_polygon(
+			PackedVector2Array([Vector2(-15, -4), Vector2(-28, 0), Vector2(-15, 4)]),
+			PackedColorArray([Color(1.0, 0.28, 0.22, 0.85), Color(1.0, 0.72, 0.26, 0.15), Color(1.0, 0.28, 0.22, 0.85)])
+		)
+		if probe_tex:
+			draw_texture_rect(probe_tex, Rect2(-20, -20, 40, 40), false)
+		else:
+			draw_polygon(
+				PackedVector2Array([Vector2(18, 0), Vector2(-12, -13), Vector2(-7, 0), Vector2(-12, 13)]),
+				PackedColorArray([Color(0.92, 0.16, 0.24)])
+			)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 		var rf := clampf(float(rd["hp"]) / maxf(1.0, float(rd.get("max_hp", 65.0))), 0.0, 1.0)
-		draw_rect(Rect2(rp.x - 14, rp.y - 18, 28, 4), Color(0.08, 0.08, 0.12, 0.9))
-		draw_rect(Rect2(rp.x - 14, rp.y - 18, 28 * rf, 4), Color(1.0, 0.30, 0.36))
+		draw_rect(Rect2(rp.x - 16, rp.y - 24, 32, 4), Color(0.08, 0.08, 0.12, 0.92))
+		draw_rect(Rect2(rp.x - 16, rp.y - 24, 32 * rf, 4), Color(1.0, 0.30, 0.36))
 	for tr in tracers:
 		draw_line(tr["a"], tr["b"], tr["c"], 2.8)
 		draw_line(tr["a"], tr["b"], Color(1.0, 0.98, 0.86, 0.9), 1.0)
