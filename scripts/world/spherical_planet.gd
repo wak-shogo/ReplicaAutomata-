@@ -78,6 +78,10 @@ var sparks: Array[Dictionary] = []
 var smokes: Array[Dictionary] = []
 var popups: Array[Dictionary] = []
 
+# Persistent mined voxel deltas for Browser Save/Load
+var carved_terra: Dictionary = {} # "c,r" -> true
+var carved_extra: Dictionary = {} # body_id -> {"c,r": true}
+
 func _ready() -> void:
 	z_index = 0
 	process_physics_priority = -20
@@ -300,6 +304,7 @@ func generate_planet() -> void:
 	cell_hp.resize(n)
 	crystal_props.clear()
 	drill_nodes.clear()
+	carved_terra.clear()
 	sparks.clear(); smokes.clear(); popups.clear()
 
 	var rng := RandomNumberGenerator.new()
@@ -498,6 +503,7 @@ func _init_extra_planets() -> void:
 			old_v["root"].queue_free()
 	extra_vox.clear()
 	dirty_extra.clear()
+	carved_extra.clear()
 
 	var next_dn_id := drill_nodes.size() + 1
 	var terra_p := Vector2(bodies["terra"]["pos"])
@@ -1235,6 +1241,7 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 					mat[idx] = 4 if r < ROWS - 5 else 0
 					ore[idx] = 0
 					cell_hp[idx] = 0.0
+					carved_terra["%d,%d" % [wc, r]] = true
 					touched_chunks[wc / CHUNK_COLS] = true
 					touched_chunks[wrap_col(wc - 1) / CHUNK_COLS] = true
 					touched_chunks[wrap_col(wc + 1) / CHUNK_COLS] = true
@@ -1283,6 +1290,8 @@ func damage_target(tgt: Dictionary, dmg: float) -> bool:
 					e_mat[idx] = 4 if r < EX_ROWS - 3 else 0
 					e_ore[idx] = 0
 					e_hp[idx] = 0.0
+					if not carved_extra.has(bid): carved_extra[bid] = {}
+					carved_extra[bid]["%d,%d" % [wc, r]] = true
 					touched_e[wc / EX_CHUNK_COLS] = true
 					touched_e[wrap_ex_col(wc - 1) / EX_CHUNK_COLS] = true
 					touched_e[wrap_ex_col(wc + 1) / EX_CHUNK_COLS] = true
@@ -1499,3 +1508,87 @@ func _draw() -> void:
 	for pp in popups:
 		var c: Color = pp["col"]; c.a = clampf(float(pp["life"]), 0.0, 1.0)
 		draw_string(font_dn, pp["pos"], String(pp["txt"]), HORIZONTAL_ALIGNMENT_CENTER, -1, 14, c)
+
+func export_save_data() -> Dictionary:
+	var angs: Dictionary = {}
+	for bid in body_order:
+		angs[bid] = float(bodies[bid]["ang"])
+	var bsts: Array = []
+	for bst in astra_bastions:
+		bsts.append({"hp": float(bst["hp"]), "alive": bool(bst["alive"])})
+	var ct: Array = []
+	for k in carved_terra.keys():
+		ct.append(String(k))
+	var ce: Dictionary = {}
+	for bid in carved_extra.keys():
+		var arr: Array = []
+		for k in carved_extra[bid].keys():
+			arr.append(String(k))
+		ce[String(bid)] = arr
+	return {
+		"body_angles": angs,
+		"carved_terra": ct,
+		"carved_extra": ce,
+		"astra_bastions": bsts,
+	}
+
+func import_save_data(d: Dictionary) -> void:
+	if d.is_empty(): return
+	var angs: Dictionary = d.get("body_angles", {})
+	for bid in angs.keys():
+		if bodies.has(String(bid)):
+			bodies[String(bid)]["ang"] = float(angs[bid])
+	step_celestials(0.0, true)
+
+	# Restore carved Terra voxels
+	var touched_t: Dictionary = {}
+	for k_v in d.get("carved_terra", []):
+		var ks := String(k_v)
+		var ps := ks.split(",")
+		if ps.size() != 2: continue
+		var wc := wrap_col(int(ps[0]))
+		var r := clampi(int(ps[1]), 6, ROWS - 1)
+		var idx := r * COLS + wc
+		mat[idx] = 4 if r < ROWS - 5 else 0
+		ore[idx] = 0
+		cell_hp[idx] = 0.0
+		carved_terra[ks] = true
+		touched_t[wc / CHUNK_COLS] = true
+	for ci in touched_t.keys():
+		_bake_chunk(int(ci))
+	_sync_terra_occ_all()
+
+	# Restore carved extra planet voxels
+	var ce: Dictionary = d.get("carved_extra", {})
+	for bid_v in ce.keys():
+		var bid := String(bid_v)
+		if not extra_vox.has(bid): continue
+		var ev: Dictionary = extra_vox[bid]
+		var e_mat: PackedByteArray = ev["mat"]
+		var e_ore: PackedByteArray = ev["ore"]
+		var e_hp: PackedFloat32Array = ev["hp"]
+		if not carved_extra.has(bid): carved_extra[bid] = {}
+		var touched_e: Dictionary = {}
+		for k_v in ce[bid_v]:
+			var ks := String(k_v)
+			var ps := ks.split(",")
+			if ps.size() != 2: continue
+			var wc := wrap_ex_col(int(ps[0]))
+			var r := clampi(int(ps[1]), 4, EX_ROWS - 1)
+			var idx := r * EX_COLS + wc
+			e_mat[idx] = 4 if r < EX_ROWS - 3 else 0
+			e_ore[idx] = 0
+			e_hp[idx] = 0.0
+			carved_extra[bid][ks] = true
+			touched_e[wc / EX_CHUNK_COLS] = true
+		for ci in touched_e.keys():
+			_bake_extra_chunk(bid, int(ci))
+		_sync_extra_occ_body(bid)
+
+	# Restore ASTRA-V enemy facilities
+	var bsts: Array = d.get("astra_bastions", [])
+	for i in range(mini(bsts.size(), astra_bastions.size())):
+		if bsts[i] is Dictionary:
+			astra_bastions[i]["hp"] = float(bsts[i].get("hp", 1400.0))
+			astra_bastions[i]["alive"] = bool(bsts[i].get("alive", true))
+	sync_astra_facility_counts()

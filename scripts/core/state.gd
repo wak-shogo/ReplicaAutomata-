@@ -307,7 +307,7 @@ const BLD: Dictionary = {
 	"depot": {
 		"name": "カーゴデポ", "short": "倉庫", "tex": "depot", "req": "cave_logistics",
 		"cost": {"fe": 16, "cu": 6}, "craft_time": 3.5, "gen": 0.0, "use": 0.0, "w": 100, "h": 60, "hp": 200.0,
-		"desc": "資源240個保管。接続先のレシピに応じて必要材料だけを賢く自動供給！",
+		"desc": "資源1,200個保管。全鉱石を均等に預入でき、接続先のレシピに応じて必要材料だけを賢く自動供給！",
 	},
 	"smelter": {
 		"name": "溶鉱炉", "short": "溶鉱炉", "tex": "smelter", "req": "smelting_booster",
@@ -950,3 +950,79 @@ func add_log(msg: String, kind: String = "info") -> void:
 	logs.append({"msg": msg, "kind": kind})
 	if logs.size() > 8: logs.pop_front()
 	log_added.emit(msg, kind)
+
+func export_save_data() -> Dictionary:
+	return {
+		"res": res.duplicate(),
+		"bld_stock": bld_stock.duplicate(),
+		"craft_queue": craft_queue.duplicate(true),
+		"unlocked_techs": unlocked_techs.duplicate(),
+		"attached_drones": attached_drones,
+		"propulsion_tier": propulsion_tier,
+		"hp": hp, "max_hp": max_hp, "fuel": fuel, "max_fuel": max_fuel, "ion_bat": ion_bat, "max_ion_bat": max_ion_bat,
+		"swarm_fleet": swarm_fleet, "enemy_swarm_fleet": enemy_swarm_fleet,
+		"enemy_printers_left": enemy_printers_left, "enemy_drivers_left": enemy_drivers_left,
+		"enemy_launch_slow_t": enemy_launch_slow_t, "total_launches": total_launches,
+		"doctrine": doctrine, "boss_hp": boss_hp, "boss_dead": boss_dead,
+		"astra_liberated": astra_liberated, "astra_bastions_left": astra_bastions_left,
+		"game_won": game_won,
+		"planet_pollution": planet_pollution.duplicate(),
+		"megastructures": megastructures.duplicate(),
+		"tut_enabled": tut_enabled, "tut_step": tut_step, "tut_placed": tut_placed.duplicate(),
+		"tut_opened_depot": tut_opened_depot, "tut_opened_orbit": tut_opened_orbit,
+	}
+
+func import_save_data(d: Dictionary) -> void:
+	if d.is_empty(): return
+	reset_all()
+	var s_res: Dictionary = d.get("res", {})
+	for k in s_res.keys():
+		res[String(k)] = int(s_res[k])
+	var s_stk: Dictionary = d.get("bld_stock", {})
+	for k in s_stk.keys():
+		bld_stock[String(k)] = int(s_stk[k])
+	craft_queue.clear()
+	for q in d.get("craft_queue", []):
+		if q is Dictionary:
+			craft_queue.append(q.duplicate(true))
+	unlocked_techs.clear()
+	for t in d.get("unlocked_techs", ["seed_core"]):
+		unlocked_techs.append(String(t))
+	if not unlocked_techs.has("seed_core"):
+		unlocked_techs.insert(0, "seed_core")
+	attached_drones = clampi(int(d.get("attached_drones", 0)), 0, MAX_DRONES)
+	propulsion_tier = clampi(int(d.get("propulsion_tier", 0)), 0, 3)
+	max_hp = float(d.get("max_hp", 100.0))
+	hp = clampf(float(d.get("hp", max_hp)), 1.0, max_hp)
+	max_fuel = float(d.get("max_fuel", 120.0))
+	fuel = clampf(float(d.get("fuel", max_fuel)), 0.0, max_fuel)
+	max_ion_bat = float(d.get("max_ion_bat", 100.0))
+	ion_bat = clampf(float(d.get("ion_bat", max_ion_bat)), 0.0, max_ion_bat)
+	swarm_fleet = clampi(int(d.get("swarm_fleet", 0)), 0, SWARM_MAX)
+	enemy_swarm_fleet = clampi(int(d.get("enemy_swarm_fleet", 120)), 0, ENEMY_SWARM_MAX)
+	enemy_printers_left = clampi(int(d.get("enemy_printers_left", 4)), 0, 4)
+	enemy_drivers_left = clampi(int(d.get("enemy_drivers_left", 4)), 0, 4)
+	enemy_launch_slow_t = maxf(0.0, float(d.get("enemy_launch_slow_t", 0.0)))
+	total_launches = int(d.get("total_launches", 0))
+	doctrine = clampi(int(d.get("doctrine", Doctrine.HARVEST)), 0, DOCTRINE_NAMES.size() - 1)
+	boss_hp = clampf(float(d.get("boss_hp", boss_max_hp)), 0.0, boss_max_hp)
+	boss_dead = bool(d.get("boss_dead", false))
+	astra_liberated = bool(d.get("astra_liberated", false))
+	astra_bastions_left = int(d.get("astra_bastions_left", 8))
+	game_won = bool(d.get("game_won", false))
+	var s_pol: Dictionary = d.get("planet_pollution", {})
+	for k in planet_pollution.keys():
+		if s_pol.has(k): planet_pollution[k] = clampf(float(s_pol[k]), 0.0, 100.0)
+	planet_pollution["terra"] = 0.0
+	var s_mg: Dictionary = d.get("megastructures", {})
+	for k in megastructures.keys():
+		if s_mg.has(k): megastructures[k] = bool(s_mg[k])
+	tut_enabled = bool(d.get("tut_enabled", true))
+	tut_step = int(d.get("tut_step", 0))
+	tut_placed.clear()
+	var s_tp: Dictionary = d.get("tut_placed", {})
+	for k in s_tp.keys():
+		tut_placed[String(k)] = int(s_tp[k])
+	tut_opened_depot = bool(d.get("tut_opened_depot", false))
+	tut_opened_orbit = bool(d.get("tut_opened_orbit", false))
+	update_tutorial()

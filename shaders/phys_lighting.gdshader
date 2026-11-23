@@ -88,7 +88,7 @@ vec3 atmos_transmittance(int bidx, vec2 p, vec2 sun_dir) {
 	if (t_exit <= 0.0) {
 		return vec3(1.0);
 	}
-	const int ASTEPS = 8;
+	const int ASTEPS = 5;
 	float dt = t_exit / float(ASTEPS);
 	float opt_R = 0.0;
 	float opt_M = 0.0;
@@ -244,13 +244,20 @@ void fragment() {
 			// Check whether pixel is inside the planet's terrain zone vs open sky above surface
 			float in_planet_zone = 1.0 - smoothstep(r_surf + 12.0, r_surf + 145.0, r);
 
-			// Real ray-traced voxel sunlight (traces through actual hills, craters, dug caves, and planet curvature!)
+			// Real ray-traced voxel sunlight when zoomed in (u_cam_zoom >= 0.30);
+			// fast analytic sphere-horizon + core ray-tracing when zoomed out so mobile WebGL stays silky 60 FPS!
 			float sun_vis = 1.0;
 			if (r < r_surf + 150.0) {
-				sun_vis = trace_voxel_sunlight(dom_idx, p, sun_dir);
-				float horizon_soft = smoothstep(-0.18, 0.24, sun_dot);
-				float surf_mix = smoothstep(r_surf - 140.0, r_surf - 10.0, r);
-				sun_vis *= mix(1.0, horizon_soft, surf_mix * 0.72);
+				if (u_cam_zoom >= 0.30) {
+					sun_vis = trace_voxel_sunlight(dom_idx, p, sun_dir);
+					float horizon_soft = smoothstep(-0.18, 0.24, sun_dot);
+					float surf_mix = smoothstep(r_surf - 140.0, r_surf - 10.0, r);
+					sun_vis *= mix(1.0, horizon_soft, surf_mix * 0.72);
+				} else {
+					float horizon_soft = smoothstep(-0.14, 0.28, sun_dot);
+					float crust_pen = exp(-max(0.0, r_surf - r) / 145.0);
+					sun_vis = horizon_soft * crust_pen;
+				}
 			} else {
 				vec2 to_c = -rel;
 				float proj = dot(to_c, sun_dir);

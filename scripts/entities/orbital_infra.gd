@@ -10,13 +10,6 @@ extends Node2D
 signal orbital_inspected(uid: int)
 
 const ORB_RECIPES: Array[String] = ["quantum_core", "dyson_panel", "antimatter", "probe_stock", "sci_pack"]
-const STATION_RECIPES: Dictionary = {
-	"quantum_core": {"in": {"si": 2, "cu": 2}, "out": "quantum_core", "qty": 1, "time": 2.8},
-	"dyson_panel":  {"in": {"fe": 2, "si": 2}, "out": "dyson_panel",  "qty": 1, "time": 3.0},
-	"antimatter":   {"in": {"quantum_core": 1, "fe": 2}, "out": "antimatter", "qty": 1, "time": 3.2},
-	"probe_stock":  {"in": {"fe": 2, "quantum_core": 1}, "out": "probe_stock", "qty": 6, "time": 3.0},
-	"sci_pack":     {"in": {"quantum_core": 1, "ti": 1}, "out": "sci_pack", "qty": 60, "time": 2.8},
-}
 
 var planet: SphericalPlanet = null
 var player: Node2D = null
@@ -168,7 +161,7 @@ func get_module_snap(oid: int) -> Dictionary:
 	var bid := String(m["id"])
 	var info: Dictionary = State.BLD[bid]
 	var rec := String(m["recipe"])
-	var rinfo: Dictionary = STATION_RECIPES.get(rec, {})
+	var rinfo: Dictionary = State.ORB_STATION_RECIPES.get(rec, {})
 	var cyc := float(rinfo.get("time", 3.0)) if bid == "orb_station" else (1.6 if bid == "orb_laser" else 0.0)
 	var prog := clampf(float(m["timer"]) / maxf(0.1, cyc), 0.0, 1.0) if cyc > 0.0 else 0.0
 	return {
@@ -205,7 +198,7 @@ func module_collect(oid: int) -> int:
 func module_hand_feed(oid: int) -> bool:
 	var m := _by_oid(oid)
 	if m.is_empty() or String(m["id"]) != "orb_station": return false
-	var rinfo: Dictionary = STATION_RECIPES.get(String(m["recipe"]), {})
+	var rinfo: Dictionary = State.ORB_STATION_RECIPES.get(String(m["recipe"]), {})
 	var req: Dictionary = rinfo.get("in", {})
 	var fed := false
 	for k in req.keys():
@@ -282,7 +275,7 @@ func _physics_process(delta: float) -> void:
 					_launch_mined_packet(m, sample)
 		elif bid == "orb_station" and pwr > 0.1:
 			var rec := String(m["recipe"])
-			var rinfo: Dictionary = STATION_RECIPES.get(rec, {})
+			var rinfo: Dictionary = State.ORB_STATION_RECIPES.get(rec, {})
 			var req: Dictionary = rinfo.get("in", {})
 			var ib: Dictionary = m["in_buf"]
 			var ok_in := not req.is_empty()
@@ -448,10 +441,11 @@ func _draw() -> void:
 			pts.append(bp + Vector2(cos(a), sin(a)) * (bcore + 10.0))
 		draw_colored_polygon(pts, Color(0.01, 0.015, 0.038, 0.56))
 		if z < 0.45:
-			var fs := int(clampf(14.0 * z_inv, 13.0, 520.0))
 			var tag := String(b["name"]) + (" [敵中枢拠点]" if (bid == "astra" and not State.astra_liberated) else "")
 			var lcol := Color(1.0, 0.46, 0.52) if (bid == "astra" and not State.astra_liberated) else Color(0.92, 0.96, 1.0, 0.92)
-			draw_string(font, bp + Vector2(-110.0 * z_inv, -br - 16.0 * z_inv), tag, HORIZONTAL_ALIGNMENT_CENTER, int(220.0 * z_inv), fs, lcol)
+			draw_set_transform(bp + Vector2(0.0, -br - 16.0 * z_inv), 0.0, Vector2(z_inv, z_inv))
+			draw_string(font, Vector2(-110.0, 0.0), tag, HORIZONTAL_ALIGNMENT_CENTER, 220, 14, lcol)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# 2. World-Space Asteroids
 	if z >= 0.05:
@@ -497,13 +491,16 @@ func _draw() -> void:
 				var pe_w := bp + Vector2(orb["pe_rel"])
 				var ap_w := bp + Vector2(orb["ap_rel"])
 				var mr := maxf(7.0, 6.0 * z_inv)
-				var fs := int(clampf(13.0 * z_inv, 12.0, 340.0))
-				# Pe (Periapsis) Marker
+				# Pe (Periapsis) Marker (fixed 14px glyph + GPU transform scale -> zero FreeType atlas growth!)
 				draw_circle(pe_w, mr, Color(0.34, 1.0, 0.74))
-				draw_string(font, pe_w + Vector2(mr + 4.0 * z_inv, 4.0 * z_inv), "Pe %dm" % int(maxf(0.0, float(orb["rp"]) - brad)), HORIZONTAL_ALIGNMENT_LEFT, int(140.0 * z_inv), fs, Color(0.42, 1.0, 0.78))
+				draw_set_transform(pe_w + Vector2(mr + 4.0 * z_inv, 4.0 * z_inv), 0.0, Vector2(z_inv, z_inv))
+				draw_string(font, Vector2.ZERO, "Pe %dm" % int(maxf(0.0, float(orb["rp"]) - brad)), HORIZONTAL_ALIGNMENT_LEFT, 140, 14, Color(0.42, 1.0, 0.78))
 				# Ap (Apoapsis) Marker
+				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 				draw_circle(ap_w, mr, Color(1.0, 0.84, 0.32))
-				draw_string(font, ap_w + Vector2(mr + 4.0 * z_inv, 4.0 * z_inv), "Ap %dm" % int(maxf(0.0, float(orb["ra"]) - brad)), HORIZONTAL_ALIGNMENT_LEFT, int(140.0 * z_inv), fs, Color(1.0, 0.88, 0.42))
+				draw_set_transform(ap_w + Vector2(mr + 4.0 * z_inv, 4.0 * z_inv), 0.0, Vector2(z_inv, z_inv))
+				draw_string(font, Vector2.ZERO, "Ap %dm" % int(maxf(0.0, float(orb["ra"]) - brad)), HORIZONTAL_ALIGNMENT_LEFT, 140, 14, Color(1.0, 0.88, 0.42))
+				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 			else:
 				var rel := player.position - bp
 				var arc := Kepler.predict_open_arc(rel, player.velocity, float(b["gm"]), bp, brad, float(b["soi_r"]), 70, 0.65)
@@ -578,3 +575,58 @@ func _draw() -> void:
 			draw_texture_rect(ic, Rect2(pp.x - psz * 0.5, pp.y - psz * 0.5, psz, psz), false)
 		else:
 			draw_circle(pp, psz * 0.4, oc)
+
+func export_save_data() -> Dictionary:
+	var m_arr: Array = []
+	for m in modules:
+		var o: Dictionary = m["orb"]
+		var o_save := {}
+		for k in o.keys():
+			var v = o[k]
+			if v is Vector2:
+				o_save[String(k)] = [v.x, v.y]
+			else:
+				o_save[String(k)] = v
+		m_arr.append({
+			"uid": int(m["uid"]), "id": String(m["id"]),
+			"orb": o_save, "recipe": String(m.get("recipe", "quantum_core")),
+			"in_buf": m["in_buf"].duplicate(), "out_buf": m["out_buf"].duplicate(),
+			"collected": int(m.get("collected", 0)),
+		})
+	return {"next_oid": next_oid, "modules": m_arr}
+
+func import_save_data(d: Dictionary) -> void:
+	if d.is_empty() or not planet: return
+	clear_all()
+	next_oid = maxi(1, int(d.get("next_oid", 1)))
+	for mv in d.get("modules", []):
+		if not (mv is Dictionary): continue
+		var md: Dictionary = mv
+		var bid := String(md.get("id", ""))
+		if not State.BLD.has(bid): continue
+		var o_raw: Dictionary = md.get("orb", {})
+		var orb: Dictionary = {}
+		for k in o_raw.keys():
+			var v = o_raw[k]
+			if v is Array and v.size() == 2 and (String(k).ends_with("_rel") or String(k) == "e_vec"):
+				orb[String(k)] = Vector2(float(v[0]), float(v[1]))
+			else:
+				orb[String(k)] = v
+		if not orb.has("body_id") or not orb.has("a"): continue
+		var st := Kepler.eval_state(orb, float(orb.get("M", 0.0)))
+		var b := planet.get_body(String(orb["body_id"]))
+		var ib_d: Dictionary = {}
+		for k in md.get("in_buf", {}).keys(): ib_d[String(k)] = int(md["in_buf"][k])
+		var ob_d: Dictionary = {}
+		for k in md.get("out_buf", {}).keys(): ob_d[String(k)] = int(md["out_buf"][k])
+		var uid := int(md.get("uid", next_oid))
+		next_oid = maxi(next_oid, uid + 1)
+		modules.append({
+			"uid": uid, "id": bid, "orb": orb,
+			"pos": Vector2(b["pos"]) + Vector2(st["pos_rel"]),
+			"vel": Vector2(st["vel_rel"]),
+			"powered": false, "pwr_ratio": 0.0, "timer": 0.0,
+			"laser_target": Vector2.ZERO, "laser_ore": "", "power_beam_to": Vector2.ZERO,
+			"recipe": String(md.get("recipe", "quantum_core")),
+			"in_buf": ib_d, "out_buf": ob_d, "collected": int(md.get("collected", 0)),
+		})

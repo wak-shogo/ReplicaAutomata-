@@ -19,7 +19,12 @@ const BATTERY_CAP_KJ: float = 18000.0
 const DRILL_BUF: int = 6
 const IN_CAP: int = 12
 const OUT_CAP: int = 8
-const DEPOT_CAP: int = 240
+const DEPOT_CAP: int = 1200
+const DEPOT_ITEMS: Array[String] = [
+	"fe", "cu", "si", "ti", "ignis_ore", "ice", "astra_shard",
+	"plate_fe", "wire_cu", "wafer_si", "circuit", "alloy",
+	"plasma_cell", "cryo_rod", "probe_stock",
+]
 const RECIPES: Array[String] = ["circuit", "alloy", "plasma_cell", "cryo_rod", "sci_pack"]
 
 var planet: SphericalPlanet = null
@@ -1004,10 +1009,85 @@ func depot_transfer(uid: int, item: String, to_depot: bool, qty: int = 5) -> boo
 	return true
 
 func depot_deposit_all(uid: int) -> int:
-	var tot := 0
-	for r in ["fe", "cu", "si", "ti", "ignis_ore", "ice", "astra_shard", "plate_fe", "wire_cu", "wafer_si", "alloy", "circuit"]:
+	var d := _by_uid(uid)
+	if d.is_empty(): return 0
+	var inv: Dictionary = d["inv"]
+	var free_cap := maxi(0, DEPOT_CAP - _buf_sum(inv))
+	if free_cap <= 0:
+		Sfx.play("error")
+		State.add_log("倉庫が満杯です（%d / %d）。" % [_buf_sum(inv), DEPOT_CAP], "warn")
+		return 0
+
+	# Collect all held depositable resources (> 0)
+	var held: Array[String] = []
+	var total_held := 0
+	for r in DEPOT_ITEMS:
 		var a := State.get_r(r)
-		if a > 0 and depot_transfer(uid, r, true, a): tot += a
+		if a > 0:
+			held.append(r)
+			total_held += a
+	if held.is_empty():
+		return 0
+
+	# Fair balanced water-filling distribution so one abundant ore (e.g. Fe=307 or Ti=1266)
+	# NEVER fills the entire warehouse and starves Cu/Si/processed materials!
+	var alloc: Dictionary = {}
+	for r in held:
+		alloc[r] = 0
+	if total_held <= free_cap:
+		for r in held:
+			alloc[r] = State.get_r(r)
+	else:
+		var rem_cap := free_cap
+		var active: Array[String] = held.duplicate()
+		while rem_cap > 0 and not active.is_empty():
+			var share := maxi(1, rem_cap / active.size())
+			var next_active: Array[String] = []
+			var moved_round := 0
+			for r in active:
+				if rem_cap <= 0: break
+				var avail := State.get_r(r) - int(alloc[r])
+				if avail <= 0: continue
+				var take := mini(mini(avail, share), rem_cap)
+				alloc[r] = int(alloc[r]) + take
+				rem_cap -= take
+				moved_round += take
+				if State.get_r(r) - int(alloc[r]) > 0:
+					next_active.append(r)
+			if moved_round <= 0:
+				break
+			active = next_active
+
+	var tot := 0
+	var parts: Array[String] = []
+	for r in held:
+		var mv := int(alloc.get(r, 0))
+		if mv > 0:
+			State.add_r(r, -mv)
+			_buf_add(inv, r, mv)
+			tot += mv
+			if parts.size() < 5:
+				parts.append("%s+%d" % [State.res_name(r), mv])
+	if tot > 0:
+		Sfx.play("pop")
+		var suffix := " 他" if held.size() > 5 else ""
+		State.add_log("倉庫へ計%d個預入（%s%s）" % [tot, ", ".join(parts), suffix], "good")
+	return tot
+
+func depot_withdraw_all(uid: int) -> int:
+	var d := _by_uid(uid)
+	if d.is_empty(): return 0
+	var inv: Dictionary = d["inv"]
+	var tot := 0
+	for k in inv.keys().duplicate():
+		var q := int(inv[k])
+		if q > 0:
+			State.add_r(String(k), q)
+			tot += q
+		inv.erase(k)
+	if tot > 0:
+		Sfx.play("pop")
+		State.add_log("倉庫から全%d個を取り出しました。" % tot, "info")
 	return tot
 
 func depot_cycle_filter(uid: int, dir_key: String) -> String:
@@ -1686,3 +1766,118 @@ func _draw_split_conveyor_preview(p1: Vector2, p2: Vector2, pts: PackedVector2Ar
 		draw_rect(Rect2(mid.x - 156, mid.y - 30, 312, 26), Color(0.24, 0.04, 0.06, 0.95))
 		draw_rect(Rect2(mid.x - 156, mid.y - 30, 312, 26), Color(1.0, 0.30, 0.28), false, 1.6)
 		draw_string(font, Vector2(mid.x - 156, mid.y - 12), lbl, HORIZONTAL_ALIGNMENT_CENTER, 312, 12, Color(1.0, 0.88, 0.86))
+
+func export_save_data() -> Dictionary:
+	var b_arr: Array = []
+	for b in buildings:
+		b_arr.append({
+			"uid": int(b["uid"]), "id": String(b["id"]),
+			"body_id": String(b.get("body_id", "terra")),
+			"col": int(b["col"]), "row": int(b["row"]),
+			"dir": int(b.get("dir", 1)),
+			"recipe": String(b.get("recipe", "circuit")),
+			"ore_target": String(b.get("ore_target", "fe")),
+			"hp": float(b.get("hp", 150.0)), "max_hp": float(b.get("max_hp", 150.0)),
+			"battery_kj": float(b.get("battery_kj", 0.0)),
+			"pipe_prog": float(b.get("pipe_prog", 1.0)),
+			"in_buf": b["in_buf"].duplicate(),
+			"out_buf": b["out_buf"].duplicate(),
+			"inv": b["inv"].duplicate(),
+			"out_filters": b["out_filters"].duplicate(),
+		})
+	var c_arr: Array = []
+	for cv in conveyors:
+		var cls: Array = []
+		for cc in cv.get("cells", []):
+			var vc: Vector2i = cc
+			cls.append([vc.x, vc.y])
+		c_arr.append({
+			"from": int(cv["from"]), "to": int(cv["to"]),
+			"body_id": String(cv.get("body_id", "terra")),
+			"cost_fe": int(cv.get("cost_fe", 2)),
+			"filter": String(cv.get("filter", "auto")),
+			"cells": cls,
+		})
+	var w_arr: Array = []
+	for w in wires:
+		w_arr.append([int(w[0]), int(w[1])])
+	return {"next_uid": next_uid, "buildings": b_arr, "wires": w_arr, "conveyors": c_arr}
+
+func import_save_data(d: Dictionary) -> void:
+	if d.is_empty() or not planet: return
+	clear_all()
+	next_uid = maxi(1, int(d.get("next_uid", 1)))
+	for bd_v in d.get("buildings", []):
+		if not (bd_v is Dictionary): continue
+		var bd: Dictionary = bd_v
+		var bid := String(bd.get("id", ""))
+		if not State.BLD.has(bid): continue
+		var body_id := String(bd.get("body_id", "terra"))
+		var col := int(bd.get("col", 0))
+		var row := int(bd.get("row", 0))
+		var pose := planet.get_body_pose_at(body_id, col, row)
+		var uid := int(bd.get("uid", next_uid))
+		next_uid = maxi(next_uid, uid + 1)
+		var ib_d: Dictionary = {}
+		for k in bd.get("in_buf", {}).keys(): ib_d[String(k)] = int(bd["in_buf"][k])
+		var ob_d: Dictionary = {}
+		for k in bd.get("out_buf", {}).keys(): ob_d[String(k)] = int(bd["out_buf"][k])
+		var inv_d: Dictionary = {}
+		for k in bd.get("inv", {}).keys(): inv_d[String(k)] = int(bd["inv"][k])
+		var flt_d: Dictionary = {"left": "none", "right": "none", "up": "none"}
+		for k in bd.get("out_filters", {}).keys(): flt_d[String(k)] = String(bd["out_filters"][k])
+		var def_hp := float(State.BLD[bid].get("hp", 150.0))
+		buildings.append({
+			"uid": uid, "id": bid, "body_id": body_id,
+			"col": int(pose["col"]), "row": int(pose["row"]),
+			"local_pos": Vector2(pose["local_pos"]), "pos": Vector2(pose["pos"]),
+			"normal": Vector2(pose["normal"]), "rot": float(pose["rot"]),
+			"dir": int(bd.get("dir", 1)),
+			"hp": clampf(float(bd.get("hp", def_hp)), 1.0, float(bd.get("max_hp", def_hp))),
+			"max_hp": float(bd.get("max_hp", def_hp)),
+			"pwr_ratio": 0.0, "wired": false,
+			"battery_kj": float(bd.get("battery_kj", 0.0)),
+			"pipe_prog": clampf(float(bd.get("pipe_prog", 1.0)), 0.0, 1.0),
+			"timer": 0.0, "push_t": 0.0, "smoke_t": 0.0, "fire_flash": 0.0,
+			"blocked": false,
+			"ore_target": String(bd.get("ore_target", "fe")),
+			"recipe": String(bd.get("recipe", "circuit")),
+			"in_buf": ib_d, "out_buf": ob_d, "inv": inv_d, "out_filters": flt_d,
+		})
+	for w_v in d.get("wires", []):
+		if w_v is Array and w_v.size() >= 2:
+			var u1 := int(w_v[0]); var u2 := int(w_v[1])
+			if not _by_uid(u1).is_empty() and not _by_uid(u2).is_empty():
+				wires.append([u1, u2])
+	for cv_v in d.get("conveyors", []):
+		if not (cv_v is Dictionary): continue
+		var cv: Dictionary = cv_v
+		var u1 := int(cv.get("from", -1)); var u2 := int(cv.get("to", -1))
+		var b1 := _by_uid(u1); var b2 := _by_uid(u2)
+		if b1.is_empty() or b2.is_empty(): continue
+		var bid_c := String(cv.get("body_id", String(b1.get("body_id", "terra"))))
+		var meta := _body_grid_meta(bid_c)
+		var b_off: Vector2 = meta["b_off"]
+		var cells: Array[Vector2i] = []
+		for cp in cv.get("cells", []):
+			if cp is Array and cp.size() >= 2:
+				cells.append(Vector2i(int(cp[0]), int(cp[1])))
+		var l_pts := PackedVector2Array()
+		var w_pts := PackedVector2Array()
+		var p1 := _conv_anchor(b1); var p2 := _conv_anchor(b2)
+		l_pts.append(p1 - b_off); w_pts.append(p1)
+		for cc in cells:
+			var lp := _cell_to_local_pt(meta, cc.x, cc.y)
+			l_pts.append(lp); w_pts.append(b_off + lp)
+		l_pts.append(p2 - b_off); w_pts.append(p2)
+		var tot_l := 0.0
+		for i in range(l_pts.size() - 1):
+			tot_l += l_pts[i].distance_to(l_pts[i + 1])
+		conveyors.append({
+			"from": u1, "to": u2, "body_id": bid_c,
+			"cost_fe": int(cv.get("cost_fe", 2)),
+			"filter": String(cv.get("filter", "auto")),
+			"cells": cells, "local_pts": l_pts, "pts": w_pts, "total_len": maxf(40.0, tot_l),
+		})
+	_sync_multiplanet_positions()
+	_solve_power(0.016)

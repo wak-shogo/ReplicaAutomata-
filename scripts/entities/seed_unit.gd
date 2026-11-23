@@ -511,3 +511,55 @@ func _draw() -> void:
 		if glow:
 			var gr := 24.0 if hit else 14.0
 			draw_texture_rect(glow, Rect2(lt.x - gr, lt.y - gr, gr * 2.0, gr * 2.0), false, bc)
+
+func export_save_data() -> Dictionary:
+	var b := planet.get_body(active_body_id) if planet else {"pos": Vector2.ZERO}
+	var rel := position - Vector2(b["pos"])
+	var r_orb_save := {}
+	if on_rails and not rails_orb.is_empty():
+		for k in rails_orb.keys():
+			var v = rails_orb[k]
+			r_orb_save[String(k)] = [v.x, v.y] if (v is Vector2) else v
+	return {
+		"active_body_id": active_body_id,
+		"rel_pos": [rel.x, rel.y],
+		"vel": [velocity.x, velocity.y],
+		"rot": rotation,
+		"anchored": anchored,
+		"anchored_body_id": anchored_body_id,
+		"anchor_rel": [anchor_rel.x, anchor_rel.y],
+		"on_rails": on_rails,
+		"rails_orb": r_orb_save,
+	}
+
+func import_save_data(d: Dictionary) -> void:
+	if d.is_empty() or not planet: return
+	var bid := String(d.get("active_body_id", "terra"))
+	if not planet.bodies.has(bid): bid = "terra"
+	active_body_id = bid
+	var b := planet.get_body(bid)
+	var rp: Array = d.get("rel_pos", [0.0, -(SphericalPlanet.R_SURFACE + 28.0)])
+	var vl: Array = d.get("vel", [0.0, 0.0])
+	position = Vector2(b["pos"]) + Vector2(float(rp[0]), float(rp[1]))
+	velocity = Vector2(float(vl[0]), float(vl[1]))
+	rotation = float(d.get("rot", 0.0))
+	anchored = bool(d.get("anchored", false))
+	anchored_body_id = String(d.get("anchored_body_id", ""))
+	var ar: Array = d.get("anchor_rel", [0.0, 0.0])
+	anchor_rel = Vector2(float(ar[0]), float(ar[1]))
+	if anchored and anchored_body_id != "" and planet.bodies.has(anchored_body_id):
+		position = Vector2(planet.bodies[anchored_body_id]["pos"]) + anchor_rel
+		velocity = Vector2.ZERO
+	on_rails = bool(d.get("on_rails", false))
+	rails_orb.clear()
+	if on_rails:
+		var ro: Dictionary = d.get("rails_orb", {})
+		for k in ro.keys():
+			var v = ro[k]
+			if v is Array and v.size() == 2 and (String(k).ends_with("_rel") or String(k) == "e_vec"):
+				rails_orb[String(k)] = Vector2(float(v[0]), float(v[1]))
+			else:
+				rails_orb[String(k)] = v
+		if not bool(rails_orb.get("closed", false)):
+			on_rails = false
+	orbit_info = rails_orb.duplicate() if on_rails else {}

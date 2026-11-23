@@ -143,9 +143,9 @@ void fragment() {
 		float rho_R = exp(-h / max(1.0, H_R)) * shell_fade;
 		float rho_M = exp(-h / max(1.0, H_M)) * shell_fade;
 
-		// March sun ray from p to the outer boundary of this planet's atmosphere
+		// March sun ray from p to the outer boundary of this planet's atmosphere (6 midpoint steps: fast & smooth!)
 		float t_exit = ray_circle_exit(p, sun_dir, b_pos, r_atmos);
-		const int STEPS = 10;
+		const int STEPS = 6;
 		float dt = t_exit / float(STEPS);
 		float opt_R = 0.0;
 		float opt_M = 0.0;

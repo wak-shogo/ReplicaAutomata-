@@ -74,9 +74,11 @@ func _draw() -> void:
 			bc.a = clampf((0.22 - z) / 0.14, 0.0, 1.0) * 0.28
 			draw_arc(Vector2.ZERO, float(b["orbit_r"]), 0.0, TAU, 160, bc, 1.8 * z_inv)
 
-	# Sun name label when zoomed out (actual Sun photosphere & corona are shader-rendered in PhysAtmosphere)
+	# Sun name label when zoomed out (fixed 16px glyph size + transform scale to avoid FreeType atlas thrash!)
 	var sun_r := SphericalPlanet.SUN_RAD
 	var vrect := Rect2(tl - Vector2(sun_r * 3.0, sun_r * 3.0), span + Vector2(sun_r * 6.0, sun_r * 6.0))
 	if vrect.has_point(Vector2.ZERO) and z < 0.18:
 		var font := ArtReg.get_font()
-		draw_string(font, Vector2(-120.0 * z_inv, -sun_r - 22.0 * z_inv), "恒星ソラリス", HORIZONTAL_ALIGNMENT_CENTER, int(240.0 * z_inv), int(clampf(16.0 * z_inv, 14.0, 900.0)), Color(1.0, 0.92, 0.58))
+		draw_set_transform(Vector2(0.0, -sun_r - 22.0 * z_inv), 0.0, Vector2(z_inv, z_inv))
+		draw_string(font, Vector2(-120.0, 0.0), "恒星ソラリス", HORIZONTAL_ALIGNMENT_CENTER, 240, 16, Color(1.0, 0.92, 0.58))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

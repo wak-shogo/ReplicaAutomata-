@@ -32,6 +32,7 @@ var depot_uid: int = -1
 var inspect_uid: int = -1
 var orbital_uid: int = -1
 var redrop_armed: bool = false
+var reset_save_armed: bool = false
 var anim_t: float = 0.0
 
 # モバイル／タッチ仮想コントロール
@@ -48,8 +49,9 @@ var act_pid: int = -1
 var brk_center: Vector2 = Vector2.ZERO
 var brk_pid: int = -1
 
-# 2本指ピンチズーム & 単タップ判定
+# 2本指ピンチズーム & 単タップ判定（Android Chromeのtouchcancel／指抜け固着防止付き！）
 var _pinch_pts: Dictionary = {}
+var _pinch_ts: Dictionary = {}
 var _pinch_dist: float = 0.0
 var _pinch_active: bool = false
 var _tap_pid: int = -1
@@ -136,6 +138,26 @@ func _handle_world_tap(wp: Vector2) -> bool:
 		return true
 	return false
 
+func _purge_stale_touches() -> void:
+	if _pinch_pts.is_empty(): return
+	var now := Time.get_ticks_msec()
+	for k in _pinch_pts.keys().duplicate():
+		if (now - int(_pinch_ts.get(k, now))) > 1400:
+			_pinch_pts.erase(k)
+			_pinch_ts.erase(k)
+	if _pinch_pts.size() < 2:
+		_pinch_dist = 0.0
+	if _pinch_pts.is_empty():
+		_pinch_active = false
+
+func _clear_pinch_state() -> void:
+	_pinch_pts.clear()
+	_pinch_ts.clear()
+	_pinch_dist = 0.0
+	_pinch_active = false
+	_tap_pid = -1
+	_tree_drag_pid = -999
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		_on_key(event.keycode)
@@ -144,16 +166,25 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		touch_ui_active = true
 		_last_touch_ms = Time.get_ticks_msec()
+		_purge_stale_touches()
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
-		if event.pressed: _on_down(event.index, p, event.position)
-		else: _on_up(event.index, event.position)
+		if event.canceled:
+			_on_up(event.index, event.position)
+			_clear_pinch_state()
+		elif event.pressed:
+			_on_down(event.index, p, event.position)
+		else:
+			_on_up(event.index, event.position)
 	elif event is InputEventScreenDrag:
 		touch_ui_active = true
-		_last_touch_ms = Time.get_ticks_msec()
+		var now_d := Time.get_ticks_msec()
+		_last_touch_ms = now_d
+		_purge_stale_touches()
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if modal == Modal.ITEM_TREE:
 			if _pinch_pts.has(event.index):
 				_pinch_pts[event.index] = p
+				_pinch_ts[event.index] = now_d
 				if _pinch_pts.size() >= 2:
 					var ks := _pinch_pts.keys()
 					var p0 := Vector2(_pinch_pts[ks[0]])
@@ -161,7 +192,7 @@ func _input(event: InputEvent) -> void:
 					var new_d: float = p0.distance_to(p1)
 					var mid_p: Vector2 = (p0 + p1) * 0.5
 					if _pinch_dist > 10.0 and new_d > 10.0:
-						_zoom_item_tree(new_d / _pinch_dist, mid_p)
+						_zoom_item_tree(clampf(new_d / _pinch_dist, 0.72, 1.38), mid_p)
 					_pinch_dist = new_d
 					_pinch_active = true
 					_tree_drag_pid = -999
@@ -180,11 +211,12 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif _pinch_pts.has(event.index):
 			_pinch_pts[event.index] = event.position
+			_pinch_ts[event.index] = now_d
 			if _pinch_pts.size() >= 2:
 				var ks := _pinch_pts.keys()
 				var new_d: float = Vector2(_pinch_pts[ks[0]]).distance_to(Vector2(_pinch_pts[ks[1]]))
 				if _pinch_dist > 12.0 and new_d > 12.0 and game_root:
-					game_root.adjust_zoom(new_d / _pinch_dist)
+					game_root.adjust_zoom(clampf(new_d / _pinch_dist, 0.72, 1.38))
 				_pinch_dist = new_d
 				_pinch_active = true
 				_tap_pid = -1
@@ -294,6 +326,7 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 	if modal == Modal.ITEM_TREE and _tree_view_rect.has_point(pos):
 		if pid >= 0:
 			_pinch_pts[pid] = pos
+			_pinch_ts[pid] = Time.get_ticks_msec()
 			if _pinch_pts.size() >= 2:
 				var ks := _pinch_pts.keys()
 				_pinch_dist = Vector2(_pinch_pts[ks[0]]).distance_to(Vector2(_pinch_pts[ks[1]]))
@@ -323,6 +356,7 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 					get_viewport().set_input_as_handled()
 		else:
 			_pinch_pts[pid] = raw_pos
+			_pinch_ts[pid] = Time.get_ticks_msec()
 			if _pinch_pts.size() >= 2:
 				var ks := _pinch_pts.keys()
 				_pinch_dist = Vector2(_pinch_pts[ks[0]]).distance_to(Vector2(_pinch_pts[ks[1]]))
@@ -339,6 +373,7 @@ func _on_up(pid: int, raw_pos: Vector2 = Vector2.ZERO) -> void:
 	if pid == act_pid: act_pid = -1; mine_vec = Vector2.ZERO
 	if pid == brk_pid: brk_pid = -1
 	if _pinch_pts.has(pid): _pinch_pts.erase(pid)
+	if _pinch_ts.has(pid): _pinch_ts.erase(pid)
 	if pid == _tap_pid:
 		var was_tap := (not _pinch_active) and (not _tap_moved) and modal == Modal.NONE
 		_tap_pid = -1
@@ -441,7 +476,7 @@ func _exec(h: Dictionary) -> void:
 			_zoom_item_tree(float(h["v"]), _tree_view_rect.get_center())
 			Sfx.play("click")
 		"close":
-			modal = Modal.NONE; tech_detail_open = false; redrop_armed = false; Sfx.play("click")
+			modal = Modal.NONE; tech_detail_open = false; redrop_armed = false; reset_save_armed = false; _clear_pinch_state(); Sfx.play("click")
 		"close_tech_detail":
 			tech_detail_open = false; Sfx.play("click")
 		"noop":
@@ -499,15 +534,29 @@ func _exec(h: Dictionary) -> void:
 			State.tut_enabled = not State.tut_enabled; Sfx.play("click")
 		"guide_tab":
 			guide_tab = int(h["v"]); Sfx.play("click")
+		"save_now":
+			if game_root: game_root.save_game(false)
+		"reset_save":
+			if not reset_save_armed:
+				reset_save_armed = true
+				Sfx.play("click")
+			else:
+				reset_save_armed = false
+				modal = Modal.NONE
+				if game_root: game_root.clear_save_and_reset()
 		"depot_all":
 			if grid: grid.depot_deposit_all(depot_uid)
+		"depot_take_all":
+			if grid: grid.depot_withdraw_all(depot_uid)
+		"depot_put":
+			if grid: grid.depot_transfer(depot_uid, String(h["v"]), true, 10)
 		"depot_link_flt":
 			if grid: grid.depot_cycle_link_filter(int(h["v"]))
 		"depot_conv":
 			if grid:
 				grid.start_conveyor_from(depot_uid); modal = Modal.NONE
 		"depot_take":
-			if grid: grid.depot_transfer(depot_uid, String(h["v"]), false, 5)
+			if grid: grid.depot_transfer(depot_uid, String(h["v"]), false, 10)
 		"bld_collect":
 			if grid: grid.building_collect(inspect_uid)
 		"bld_feed":
@@ -827,7 +876,7 @@ func _draw_tutorial_banner(vp: Vector2, portrait: bool, font: Font) -> void:
 		7: icon_k = "orbital_booster"
 		8: icon_k = "moon_luna"
 		9, 10: icon_k = "assembler"
-		11: icon_k = "item_sci_pack"
+		11: icon_k = "sci_pack"
 		12: icon_k = "orb_station"
 		_: icon_k = "mass_driver"
 	var it := _get_visual_tex(icon_k)
@@ -1235,7 +1284,7 @@ func _draw_tech_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 # 9. 星系地図・艦隊ドクトリン・メガ構造物 ([M])
 func _draw_command_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	var mw := minf(vp.x - 16.0, 580.0)
-	var mh := minf(vp.y - 32.0, 540.0)
+	var mh := minf(vp.y - 24.0, 554.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
 	_panel(r, Color(0.04, 0.06, 0.12, 0.98), Color(0.62, 0.54, 1.0), 2.2)
 	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "星系指令・艦隊マップ", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.76, 0.68, 1.0))
@@ -1244,49 +1293,61 @@ func _draw_command_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var y := r.position.y + 48.0
-	var or_r := Rect2(r.position.x + 14, y, mw - 28, 42)
+	var y := r.position.y + 44.0
+	var or_r := Rect2(r.position.x + 14, y, mw - 28, 38)
 	_panel(or_r, Color(0.08, 0.24, 0.36, 0.96), Color(0.42, 0.92, 1.0), 1.8)
-	root_ctrl.draw_string(font, Vector2(or_r.position.x, or_r.position.y + 27), "太陽系全体マップを開く" if not State.orbit_view else "機体視点へ戻る", HORIZONTAL_ALIGNMENT_CENTER, or_r.size.x, 15, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(or_r.position.x, or_r.position.y + 25), "太陽系全体マップを開く" if not State.orbit_view else "機体視点へ戻る", HORIZONTAL_ALIGNMENT_CENTER, or_r.size.x, 15, Color.WHITE)
 	_add_hit(or_r, "toggle_orbit")
-	y += 52.0
+	y += 46.0
 
 	var doc_hdr := "自軍スウォーム %d/10,000  vs  敵スウォーム %d/5,000 (敵工場%d/4・敵射出機%d/4)" % [
 		State.swarm_fleet, State.enemy_swarm_fleet, State.enemy_printers_left, State.enemy_drivers_left
 	]
 	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 14), doc_hdr, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 12 if portrait else 13, Color(1.0, 0.86, 0.42))
-	y += 22.0
+	y += 20.0
 	var doc_n := State.DOCTRINE_NAMES.size()
 	var dw := (mw - 28.0 - float(doc_n - 1) * 6.0) / float(maxi(1, doc_n))
 	for i in range(doc_n):
-		var dr := Rect2(r.position.x + 14 + float(i) * (dw + 6.0), y, dw, 36)
+		var dr := Rect2(r.position.x + 14 + float(i) * (dw + 6.0), y, dw, 34)
 		var on := (State.doctrine == i)
 		_panel(dr, Color(0.14, 0.28, 0.42, 0.96) if on else Color(0.06, 0.09, 0.16, 0.90), Color(1.0, 0.84, 0.34) if on else Color(0.28, 0.38, 0.52), 1.6)
-		root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 24), State.DOCTRINE_NAMES[i], HORIZONTAL_ALIGNMENT_CENTER, dw, 14, Color.WHITE if on else Color(0.72, 0.80, 0.90))
+		root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 23), State.DOCTRINE_NAMES[i], HORIZONTAL_ALIGNMENT_CENTER, dw, 14, Color.WHITE if on else Color(0.72, 0.80, 0.90))
 		_add_hit(dr, "doc", i)
-	y += 46.0
+	y += 42.0
 
 	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 14), "軌道メガストラクチャー", HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 14, Color(0.76, 0.68, 1.0))
-	y += 22.0
+	y += 20.0
 	for mid in ["elevator", "dyson", "citadel", "warpgate"]:
 		var built := bool(State.megastructures[mid])
-		var mr := Rect2(r.position.x + 14, y, mw - 28, 48)
+		var mr := Rect2(r.position.x + 14, y, mw - 28, 44)
 		_panel(mr, Color(0.08, 0.26, 0.18, 0.94) if built else Color(0.07, 0.10, 0.17, 0.92), Color(0.36, 1.0, 0.72) if built else Color(0.38, 0.48, 0.64), 1.4)
-		root_ctrl.draw_string(font, Vector2(mr.position.x + 12, mr.position.y + 20), String(State.MEGAS[mid]["name"]) + (" ✓" if built else ""), HORIZONTAL_ALIGNMENT_LEFT, int(mr.size.x - 24), 14, Color.WHITE)
-		_draw_cost_icons(Vector2(mr.position.x + 12, mr.position.y + 26), State.MEGAS[mid]["cost"], font, 16.0, 12)
+		root_ctrl.draw_string(font, Vector2(mr.position.x + 12, mr.position.y + 18), String(State.MEGAS[mid]["name"]) + (" ✓" if built else ""), HORIZONTAL_ALIGNMENT_LEFT, int(mr.size.x - 24), 13, Color.WHITE)
+		_draw_cost_icons(Vector2(mr.position.x + 12, mr.position.y + 23), State.MEGAS[mid]["cost"], font, 15.0, 12)
 		if not built: _add_hit(mr, "mega_buy", mid)
-		y += 54.0
+		y += 48.0
 
-	var sy := r.end.y - 48.0
+	var sy := r.end.y - 88.0
 	var hw := (mw - 34.0) * 0.5
-	var sr := Rect2(r.position.x + 14, sy, hw, 36)
+	var sv_lbl := "ブラウザへセーブ（%s）" % (String(game_root.last_save_label) if game_root else "自動保存ON")
+	var svr := Rect2(r.position.x + 14, sy, hw, 34)
+	_panel(svr, Color(0.08, 0.24, 0.22, 0.95), Color(0.38, 1.0, 0.76), 1.5)
+	root_ctrl.draw_string(font, Vector2(svr.position.x, svr.position.y + 22), sv_lbl, HORIZONTAL_ALIGNMENT_CENTER, hw, 12 if portrait else 13, Color(0.90, 1.0, 0.94))
+	_add_hit(svr, "save_now")
+
+	var rst_r := Rect2(svr.end.x + 6, sy, hw, 34)
+	_panel(rst_r, Color(0.38, 0.08, 0.12, 0.96) if reset_save_armed else Color(0.14, 0.08, 0.12, 0.92), Color(1.0, 0.36, 0.40), 1.4)
+	root_ctrl.draw_string(font, Vector2(rst_r.position.x, rst_r.position.y + 22), "もう一度タップで完全初期化" if reset_save_armed else "セーブ初期化", HORIZONTAL_ALIGNMENT_CENTER, hw, 12 if portrait else 13, Color(1.0, 0.84, 0.84))
+	_add_hit(rst_r, "reset_save")
+
+	var sy2 := r.end.y - 46.0
+	var sr := Rect2(r.position.x + 14, sy2, hw, 34)
 	_panel(sr, Color(0.06, 0.10, 0.18, 0.92), Color(0.38, 0.56, 0.74), 1.4)
-	root_ctrl.draw_string(font, Vector2(sr.position.x, sr.position.y + 24), "効果音: " + ("OFF" if Sfx.muted else "ON"), HORIZONTAL_ALIGNMENT_CENTER, hw, 14, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(sr.position.x, sr.position.y + 22), "効果音: " + ("OFF" if Sfx.muted else "ON"), HORIZONTAL_ALIGNMENT_CENTER, hw, 13, Color.WHITE)
 	_add_hit(sr, "mute")
 
-	var rr := Rect2(sr.end.x + 6, sy, hw, 36)
+	var rr := Rect2(sr.end.x + 6, sy2, hw, 34)
 	_panel(rr, Color(0.36, 0.08, 0.10, 0.95) if redrop_armed else Color(0.18, 0.07, 0.09, 0.92), Color(1.0, 0.42, 0.40), 1.4)
-	root_ctrl.draw_string(font, Vector2(rr.position.x, rr.position.y + 24), "本当に帰還？" if redrop_armed else "北極へ緊急帰還", HORIZONTAL_ALIGNMENT_CENTER, hw, 14, Color(1.0, 0.86, 0.86))
+	root_ctrl.draw_string(font, Vector2(rr.position.x, rr.position.y + 22), "本当に帰還？" if redrop_armed else "北極へ緊急帰還", HORIZONTAL_ALIGNMENT_CENTER, hw, 13, Color(1.0, 0.86, 0.86))
 	_add_hit(rr, "redrop")
 
 # 10. 図解ガイド画面（ドット絵フロー図解メイン！）
@@ -1705,12 +1766,15 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	var chain_s := ("入力元(青線): " + ("・".join(in_names) if not in_names.is_empty() else "原石採掘")) + "  →  出力・用途先(黄線): " + ("・".join(out_names) if not out_names.is_empty() else "最終目標")
 	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.end.y - 10), chain_s, HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 11 if portrait else 12, Color(0.46, 0.98, 0.84))
 
-# 11. カーゴデポ（倉庫）モーダル
+# 11. カーゴデポ（倉庫）モーダル（全15資源対応・均等預入＆全取出＆個別+10/-10！）
 func _draw_depot_modal(vp: Vector2, font: Font) -> void:
 	if not grid: return
 	var snap: Dictionary = grid.get_depot_snap(depot_uid)
 	if snap.is_empty(): modal = Modal.NONE; return
-	var mw := minf(vp.x - 16.0, 540.0); var mh := 430.0
+	var portrait := vp.y > vp.x * 1.1
+	var mw := minf(vp.x - 16.0, 620.0)
+	var out_links: Array = snap.get("out_links", [])
+	var mh := minf(vp.y - 24.0, 492.0 if not out_links.is_empty() else 442.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
 	_panel(r, Color(0.04, 0.06, 0.12, 0.98), Color(0.38, 0.88, 1.0), 2.2)
 	root_ctrl.draw_string(font, Vector2(r.position.x + 16, r.position.y + 28), "倉庫（%d / %d）" % [int(snap["total"]), int(snap["cap"])], HORIZONTAL_ALIGNMENT_LEFT, int(mw - 104), 17, Color(0.48, 0.96, 1.0))
@@ -1719,43 +1783,66 @@ func _draw_depot_modal(vp: Vector2, font: Font) -> void:
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 20), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 13, Color.WHITE)
 	_add_hit(cr, "close")
 
-	var dr := Rect2(r.position.x + 14, r.position.y + 46, (mw - 34) * 0.54, 36)
-	_panel(dr, Color(0.08, 0.22, 0.32, 0.95), Color(0.42, 0.94, 1.0), 1.5)
-	root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 24), "鉱石を全て預ける", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 13, Color.WHITE)
+	var bw_top := (mw - 40.0) / 3.0
+	var dr := Rect2(r.position.x + 14, r.position.y + 44, bw_top, 34)
+	_panel(dr, Color(0.08, 0.24, 0.34, 0.96), Color(0.42, 0.94, 1.0), 1.5)
+	root_ctrl.draw_string(font, Vector2(dr.position.x, dr.position.y + 22), "全種バランス預入", HORIZONTAL_ALIGNMENT_CENTER, dr.size.x, 12 if portrait else 13, Color.WHITE)
 	_add_hit(dr, "depot_all")
 
-	var cvr := Rect2(dr.end.x + 6, r.position.y + 46, (mw - 34) * 0.46, 36)
+	var wr := Rect2(dr.end.x + 6, r.position.y + 44, bw_top, 34)
+	_panel(wr, Color(0.08, 0.24, 0.20, 0.95), Color(0.38, 0.96, 0.74), 1.5)
+	root_ctrl.draw_string(font, Vector2(wr.position.x, wr.position.y + 22), "倉庫から全取出", HORIZONTAL_ALIGNMENT_CENTER, wr.size.x, 12 if portrait else 13, Color.WHITE)
+	_add_hit(wr, "depot_take_all")
+
+	var cvr := Rect2(wr.end.x + 6, r.position.y + 44, bw_top, 34)
 	_panel(cvr, Color(0.22, 0.16, 0.06, 0.95), Color(1.0, 0.80, 0.30), 1.5)
-	root_ctrl.draw_string(font, Vector2(cvr.position.x, cvr.position.y + 24), "搬送接続 →", HORIZONTAL_ALIGNMENT_CENTER, cvr.size.x, 13, Color.WHITE)
+	root_ctrl.draw_string(font, Vector2(cvr.position.x, cvr.position.y + 22), "搬送接続 →", HORIZONTAL_ALIGNMENT_CENTER, cvr.size.x, 12 if portrait else 13, Color.WHITE)
 	_add_hit(cvr, "depot_conv")
 
-	var y := r.position.y + 94.0
-	var out_links: Array = snap.get("out_links", [])
+	var y := r.position.y + 88.0
 	if not out_links.is_empty():
 		var show_n := mini(out_links.size(), 4)
 		var fw := (mw - 28.0) / float(show_n)
 		for i in range(show_n):
 			var lk: Dictionary = out_links[i]
-			var fr := Rect2(r.position.x + 14 + float(i) * fw, y, fw - 6, 44)
+			var fr := Rect2(r.position.x + 14 + float(i) * fw, y, fw - 6, 42)
 			var raw_f := String(lk.get("filter", "auto"))
 			var fv := "停止" if raw_f == "none" else ("自動" if raw_f == "auto" else State.res_name(raw_f))
 			_panel(fr, Color(0.10, 0.22, 0.32, 0.95) if raw_f != "none" else Color(0.06, 0.09, 0.15, 0.9), Color(1.0, 0.80, 0.30) if raw_f != "none" else Color(0.28, 0.38, 0.50), 1.4)
-			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 17), "→ " + String(lk["to_name"]), HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 11, Color(0.76, 0.88, 1.0))
-			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 36), fv, HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 13, Color.WHITE)
+			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 16), "→ " + String(lk["to_name"]), HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 11, Color(0.76, 0.88, 1.0))
+			root_ctrl.draw_string(font, Vector2(fr.position.x, fr.position.y + 34), fv, HORIZONTAL_ALIGNMENT_CENTER, fr.size.x, 12, Color.WHITE)
 			_add_hit(fr, "depot_link_flt", int(lk["idx"]))
-		y += 54.0
+		y += 50.0
 
+	# 全15種の物流資源を2列グリッドで一望表示（個別 +10預入 / -10取出 対応）
 	var inv: Dictionary = snap["inv"]
-	for it in ["fe", "cu", "si", "ti", "plate_fe", "wire_cu", "wafer_si", "circuit"]:
+	var cols_d := 2
+	var col_w := (mw - 34.0) * 0.5
+	var row_h := clampf((r.end.y - y - 10.0) / 8.0, 32.0, 40.0)
+	for idx_d in range(grid.DEPOT_ITEMS.size()):
+		var it: String = grid.DEPOT_ITEMS[idx_d]
+		var c_i := idx_d % cols_d
+		var r_i := idx_d / cols_d
+		var rx := r.position.x + 14.0 + float(c_i) * (col_w + 6.0)
+		var ry := y + float(r_i) * row_h
 		var cnt := int(inv.get(it, 0))
-		var ic := ArtReg.get_icon(String(it))
-		if ic: root_ctrl.draw_texture_rect(ic, Rect2(r.position.x + 16, y + 3, 20, 20), false)
-		root_ctrl.draw_string(font, Vector2(r.position.x + 42, y + 19), "%s  ×%d" % [State.res_name(String(it)), cnt], HORIZONTAL_ALIGNMENT_LEFT, 220, 14, Color.WHITE if cnt > 0 else Color(0.45, 0.52, 0.62))
-		var tr := Rect2(r.end.x - 108, y, 92, 26)
-		_panel(tr, Color(0.08, 0.24, 0.20, 0.92) if cnt > 0 else Color(0.06, 0.08, 0.12, 0.7), Color(0.36, 0.92, 0.72) if cnt > 0 else Color(0.24, 0.30, 0.38), 1.2)
-		root_ctrl.draw_string(font, Vector2(tr.position.x, tr.position.y + 18), "5個取出", HORIZONTAL_ALIGNMENT_CENTER, tr.size.x, 12, Color.WHITE if cnt > 0 else Color(0.45, 0.50, 0.58))
-		if cnt > 0: _add_hit(tr, "depot_take", it)
-		y += 30.0
+		var have_p := State.get_r(it)
+		var row_r := Rect2(rx, ry, col_w, row_h - 4.0)
+		_panel(row_r, Color(0.06, 0.10, 0.17, 0.92) if (cnt > 0 or have_p > 0) else Color(0.04, 0.06, 0.10, 0.72), Color(0.24, 0.38, 0.54, 0.72), 1.0)
+		var ic := ArtReg.get_icon(it)
+		if ic: root_ctrl.draw_texture_rect(ic, Rect2(rx + 5, ry + (row_h - 24.0) * 0.5, 20, 20), false)
+		var lbl_w := int(col_w - 118.0)
+		root_ctrl.draw_string(font, Vector2(rx + 29, ry + row_h * 0.58), "%s ×%d" % [State.res_name(it), cnt], HORIZONTAL_ALIGNMENT_LEFT, maxi(40, lbl_w), 11 if portrait else 12, Color.WHITE if cnt > 0 else Color(0.50, 0.58, 0.68))
+
+		var b_put := Rect2(row_r.end.x - 84, ry + 3, 38, row_h - 10.0)
+		_panel(b_put, Color(0.08, 0.22, 0.34, 0.94) if have_p > 0 else Color(0.06, 0.08, 0.12, 0.6), Color(0.42, 0.92, 1.0) if have_p > 0 else Color(0.22, 0.28, 0.36), 1.1)
+		root_ctrl.draw_string(font, Vector2(b_put.position.x, b_put.position.y + b_put.size.y * 0.72), "+10", HORIZONTAL_ALIGNMENT_CENTER, b_put.size.x, 11, Color.WHITE if have_p > 0 else Color(0.42, 0.48, 0.56))
+		if have_p > 0: _add_hit(b_put, "depot_put", it)
+
+		var b_tak := Rect2(row_r.end.x - 42, ry + 3, 38, row_h - 10.0)
+		_panel(b_tak, Color(0.08, 0.24, 0.20, 0.94) if cnt > 0 else Color(0.06, 0.08, 0.12, 0.6), Color(0.36, 0.94, 0.74) if cnt > 0 else Color(0.22, 0.28, 0.36), 1.1)
+		root_ctrl.draw_string(font, Vector2(b_tak.position.x, b_tak.position.y + b_tak.size.y * 0.72), "取出", HORIZONTAL_ALIGNMENT_CENTER, b_tak.size.x, 11, Color.WHITE if cnt > 0 else Color(0.42, 0.48, 0.56))
+		if cnt > 0: _add_hit(b_tak, "depot_take", it)
 
 # 11b. 地上施設詳細インスペクタ（アイコン＋進捗バー重視！）
 func _draw_building_modal(vp: Vector2, font: Font) -> void:

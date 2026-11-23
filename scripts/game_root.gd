@@ -20,8 +20,14 @@ extends Node2D
 var user_zoom: float = 0.88
 const ZOOM_MIN: float = 0.014 # 太陽系全体を一望できる超広域ズーム
 const ZOOM_MAX: float = 2.60  # 機体や施設が大きく映る超近接ズーム
+const SAVE_KEY: String = "star_replica_automa_save_v1"
+const SAVE_PATH: String = "user://star_replica_save_v1.json"
+
 var _tel_t: float = 0.0
+var _autosave_t: float = 0.0
+var _is_test_mode: bool = false
 var _test_failed: bool = false
+var last_save_label: String = "未保存"
 
 func _ready() -> void:
 	sky.planet = planet
@@ -61,8 +67,121 @@ func _ready() -> void:
 	cam.position = player.global_position
 	cam.zoom = Vector2(user_zoom, user_zoom)
 
-	if "--run-tests" in OS.get_cmdline_args() or "--run-tests" in OS.get_cmdline_user_args():
+	_is_test_mode = ("--run-tests" in OS.get_cmdline_args() or "--run-tests" in OS.get_cmdline_user_args())
+	if _is_test_mode:
 		call_deferred("_run_tests")
+	else:
+		# ブラウザの localStorage（またはネイティブ user://）から前回セーブデータを自動復元！
+		if load_game():
+			cam.position = player.global_position
+			State.add_log("前回のセーブデータを自動ロードしました！", "good")
+		State.tech_unlocked.connect(func(_id: String) -> void: save_game(true))
+		State.craft_completed.connect(func(_k: String, _id: String) -> void: save_game(true))
+
+func _notification(what: int) -> void:
+	if _is_test_mode: return
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		save_game(true)
+
+func build_save_payload() -> Dictionary:
+	return {
+		"v": 1,
+		"zoom": user_zoom,
+		"state": State.export_save_data(),
+		"planet": planet.export_save_data() if planet else {},
+		"grid": grid.export_save_data() if grid else {},
+		"orbital": orbital.export_save_data() if orbital else {},
+		"player": player.export_save_data() if player else {},
+	}
+
+func apply_save_payload(payload: Dictionary) -> bool:
+	if payload.is_empty() or int(payload.get("v", 0)) < 1:
+		return false
+	if payload.has("planet") and planet:
+		planet.import_save_data(payload["planet"])
+	if payload.has("state"):
+		State.import_save_data(payload["state"])
+	if payload.has("grid") and grid:
+		grid.import_save_data(payload["grid"])
+	if payload.has("orbital") and orbital:
+		orbital.import_save_data(payload["orbital"])
+	if payload.has("player") and player:
+		player.import_save_data(payload["player"])
+	if payload.has("zoom"):
+		user_zoom = clampf(float(payload["zoom"]), ZOOM_MIN, ZOOM_MAX)
+	if cam and player:
+		cam.position = player.global_position
+		cam.zoom = Vector2(user_zoom, user_zoom)
+	return true
+
+func save_game(silent: bool = false) -> bool:
+	if _is_test_mode: return false
+	var json_s := JSON.stringify(build_save_payload())
+	var ok := false
+	if OS.has_feature("web"):
+		var b64 := Marshalls.utf8_to_base64(json_s)
+		var res_js = JavaScriptBridge.eval("try{window.localStorage.setItem('%s','%s');true;}catch(e){false;}" % [SAVE_KEY, b64])
+		ok = bool(res_js)
+	else:
+		var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+		if f:
+			f.store_string(json_s)
+			f.close()
+			ok = true
+	if ok:
+		var dt := Time.get_time_dict_from_system()
+		last_save_label = "%02d:%02d 保存済" % [int(dt["hour"]), int(dt["minute"])]
+		if not silent:
+			Sfx.play("select")
+			State.add_log("ブラウザへセーブしました！（%s）" % last_save_label, "good")
+	elif not silent:
+		Sfx.play("error")
+		State.add_log("セーブに失敗しました（プライベートブラウズ等の制限を確認してください）", "warn")
+	return ok
+
+func load_game() -> bool:
+	var json_s := ""
+	if OS.has_feature("web"):
+		var raw = JavaScriptBridge.eval("try{window.localStorage.getItem('%s')||''}catch(e){''}" % SAVE_KEY)
+		if raw is String and raw.length() > 16:
+			json_s = Marshalls.base64_to_utf8(raw)
+	else:
+		if FileAccess.file_exists(SAVE_PATH):
+			var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+			if f:
+				json_s = f.get_as_text()
+				f.close()
+	if json_s.is_empty():
+		return false
+	var parsed = JSON.parse_string(json_s)
+	if not (parsed is Dictionary):
+		return false
+	var ok := apply_save_payload(parsed)
+	if ok:
+		last_save_label = "読込済"
+	return ok
+
+func clear_save_and_reset() -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("try{window.localStorage.removeItem('%s');}catch(e){}" % SAVE_KEY)
+	else:
+		if FileAccess.file_exists(SAVE_PATH):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE_PATH))
+	State.reset_all()
+	if grid: grid.clear_all()
+	if orbital: orbital.clear_all()
+	if planet:
+		planet._init_solar_system()
+		planet.generate_planet()
+		planet._init_extra_planets()
+	if player: player.spawn_north_pole()
+	user_zoom = 0.88
+	if cam and player:
+		cam.position = player.global_position
+		cam.zoom = Vector2(user_zoom, user_zoom)
+	last_save_label = "初期化済"
+	Sfx.play("boom")
+	State.add_log("セーブデータを初期化し、最初から開始しました。", "warn")
 
 func adjust_zoom(factor: float) -> void:
 	if factor <= 0.0: return
@@ -94,6 +213,12 @@ func _process(delta: float) -> void:
 		var target_z := clampf(user_zoom, ZOOM_MIN, ZOOM_MAX)
 		cam.zoom = cam.zoom.lerp(Vector2(target_z, target_z), minf(1.0, delta * 10.0))
 		cam.position = player.global_position
+
+	if not _is_test_mode:
+		_autosave_t += delta
+		if _autosave_t >= 15.0:
+			_autosave_t = 0.0
+			save_game(true)
 
 	if OS.has_feature("web"):
 		_tel_t += delta
@@ -500,6 +625,38 @@ func _run_tests() -> void:
 	_chk(State.game_won, "Reaching 1,000 Research Points (研究ポイント) must trigger game clear!")
 	swarm.spawn_raider_wave("luna", true)
 	_chk(not swarm.raiders.is_empty(), "Continuous off-map enemy raids must continue even after ASTRA-V liberation!")
+
+	# 7. Fair Balanced Depot Deposit-All (NEVER only Iron!) + Full JSON Save/Load Round-Trip!
+	var test_depot_uid := -1
+	for bb in grid.buildings:
+		if String(bb["id"]) == "depot":
+			test_depot_uid = int(bb["uid"])
+			bb["inv"].clear()
+			break
+	_chk(test_depot_uid != -1, "Depot missing for balanced deposit test!")
+	if test_depot_uid != -1:
+		State.res["fe"] = 800
+		State.res["cu"] = 400
+		State.res["si"] = 200
+		State.res["ti"] = 1400
+		var moved_all: int = int(grid.depot_deposit_all(test_depot_uid))
+		var d_snap: Dictionary = grid.get_depot_snap(test_depot_uid)
+		var d_inv: Dictionary = d_snap["inv"]
+		_chk(moved_all == int(grid.DEPOT_CAP) and int(d_inv.get("fe", 0)) >= 100 and int(d_inv.get("cu", 0)) >= 100 and int(d_inv.get("si", 0)) >= 100 and int(d_inv.get("ti", 0)) >= 100,
+			"depot_deposit_all must deposit ALL held ore types fairly instead of filling only iron! inv=%s" % str(d_inv))
+
+	var saved_b_cnt: int = grid.buildings.size()
+	var saved_o_cnt: int = orbital.modules.size()
+	var saved_fe: int = State.get_r("fe")
+	var saved_json := JSON.stringify(build_save_payload())
+	var parsed_back = JSON.parse_string(saved_json)
+	_chk(parsed_back is Dictionary, "Save JSON serialization failed!")
+	State.reset_all()
+	grid.clear_all()
+	orbital.clear_all()
+	_chk(apply_save_payload(parsed_back), "apply_save_payload failed!")
+	_chk(grid.buildings.size() == saved_b_cnt and orbital.modules.size() == saved_o_cnt and State.get_r("fe") == saved_fe,
+		"Save/Load round-trip mismatch! b=%d/%d orb=%d/%d fe=%d/%d" % [grid.buildings.size(), saved_b_cnt, orbital.modules.size(), saved_o_cnt, State.get_r("fe"), saved_fe])
 
 	if _test_failed:
 		print("TESTS FAILED!")
