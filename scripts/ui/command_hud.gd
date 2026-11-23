@@ -1251,10 +1251,14 @@ func _draw_command_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	_add_hit(or_r, "toggle_orbit")
 	y += 52.0
 
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 14), "艦隊ドクトリン（%d / 10,000）" % State.swarm_fleet, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 14, Color(1.0, 0.86, 0.42))
+	var doc_hdr := "自軍スウォーム %d/10,000  vs  敵スウォーム %d/5,000 (敵工場%d/4・敵射出機%d/4)" % [
+		State.swarm_fleet, State.enemy_swarm_fleet, State.enemy_printers_left, State.enemy_drivers_left
+	]
+	root_ctrl.draw_string(font, Vector2(r.position.x + 14, y + 14), doc_hdr, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 28), 12 if portrait else 13, Color(1.0, 0.86, 0.42))
 	y += 22.0
-	var dw := (mw - 28.0 - 18.0) / 4.0
-	for i in range(4):
+	var doc_n := State.DOCTRINE_NAMES.size()
+	var dw := (mw - 28.0 - float(doc_n - 1) * 6.0) / float(maxi(1, doc_n))
+	for i in range(doc_n):
 		var dr := Rect2(r.position.x + 14 + float(i) * (dw + 6.0), y, dw, 36)
 		var on := (State.doctrine == i)
 		_panel(dr, Color(0.14, 0.28, 0.42, 0.96) if on else Color(0.06, 0.09, 0.16, 0.90), Color(1.0, 0.84, 0.34) if on else Color(0.28, 0.38, 0.52), 1.6)
@@ -1459,7 +1463,7 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		nx += bw_n + 4.0 * nav_scale
 
 	# スクロール＆ピンチズーム可能なツリー表示ビューポート領域
-	var detail_h := 124.0
+	var detail_h := 136.0 if portrait else 124.0
 	var vx := r.position.x + 12.0
 	var vy := r.position.y + 74.0
 	var vw := mw - 24.0
@@ -1467,11 +1471,11 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	_tree_view_rect = Rect2(vx, vy, vw, vh)
 	root_ctrl.draw_rect(_tree_view_rect, Color(0.02, 0.04, 0.08, 0.96))
 
-	# 広いカード領域（246×88 px 基準 × ピンチズーム倍率 z）でフルネーム＆ドット絵素材アイコンを表示！
+	# 広いカード領域（246×94 px 基準 × ピンチズーム倍率 z）でフルネーム2行＆ドット絵素材アイコンを表示！
 	var card_w := 246.0 * z
-	var card_h := 88.0 * z
+	var card_h := 94.0 * z
 	var col_gap := 132.0 * z
-	var row_gap := 54.0 * z
+	var row_gap := 50.0 * z
 	var col_step := card_w + col_gap
 	_tree_col_step = col_step
 	var row_step := card_h + row_gap
@@ -1594,10 +1598,19 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 							root_ctrl.draw_texture_rect(cit, c_rect, false)
 							root_ctrl.draw_string(font, Vector2(cx_i + c_isz + 2.0 * z, c_y + 13.0 * z), "×%d" % cq, HORIZONTAL_ALIGNMENT_LEFT, int(num_w + 6.0), cost_fs, Color(1.0, 0.92, 0.52))
 						cx_i += c_isz + num_w + 6.0 * z
-					# 下段：省略なしのフルネーム素材表記（鉄板×16 銅線×10 回路×6 チタン×6 など）
+					# 下段：省略なしのフルネーム素材表記（3素材以上は2行に分けて文字切れゼロ！）
 					var s_txt := String(nd["sub"])
-					var line_sub_fs := clampi(int(round((9.6 if s_txt.length() >= 18 else 10.8) * z)), 7, 16)
-					root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 74.0 * z), s_txt, HORIZONTAL_ALIGNMENT_LEFT, max_tw, line_sub_fs, Color(0.72, 0.92, 1.0) if is_fac else Color(0.55, 0.98, 0.80))
+					var s_parts := s_txt.split(" ")
+					var s_col := Color(0.72, 0.92, 1.0) if is_fac else Color(0.55, 0.98, 0.80)
+					if s_parts.size() >= 3:
+						var line1 := " ".join(s_parts.slice(0, 2))
+						var line2 := " ".join(s_parts.slice(2))
+						var fs2 := clampi(int(round(9.8 * z)), 7, 15)
+						root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 66.0 * z), line1, HORIZONTAL_ALIGNMENT_LEFT, max_tw, fs2, s_col)
+						root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 82.0 * z), line2, HORIZONTAL_ALIGNMENT_LEFT, max_tw, fs2, s_col)
+					else:
+						var line_sub_fs := clampi(int(round(10.6 * z)), 7, 16)
+						root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 74.0 * z), s_txt, HORIZONTAL_ALIGNMENT_LEFT, max_tw, line_sub_fs, s_col)
 		_add_hit(vis_r, "item_tree_pick", nid)
 
 	# 2b) アクティブな上流チェーン（シアン太線）＆下流エッジ（ゴールド太線）を最前面に描画！
@@ -1652,35 +1665,45 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	var kind_tag := "【施設・装備】" if String(sel_nd["kind"]) == "fac" else ("【資源・加工品】（所持: %d）" % State.get_r(item_tree_sel))
 	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 23), "%s  %s" % [String(sel_nd["name"]), kind_tag], HORIZONTAL_ALIGNMENT_LEFT, dtw, 14 if portrait else 16, Color(1.0, 0.90, 0.42))
 
-	# 制作・製造に必要なアイテムのドット絵バッジ行（[ドット絵] 鉄板 ×16  [ドット絵] 銅線 ×10 ...）
+	# 制作・製造に必要なアイテムのドット絵バッジ（モバイルで3素材以上は2列×2段に並べてフルネーム＋×数を完全表示！）
 	var sel_cost: Dictionary = sel_nd.get("cost", {})
-	var badge_y := dr.position.y + 32.0
+	var badge_y := dr.position.y + 29.0
 	var badge_x := dtx
 	if sel_cost.is_empty():
-		var raw_pill := Rect2(badge_x, badge_y, minf(float(dtw), 280.0), 34.0)
+		var raw_pill := Rect2(badge_x, badge_y + 3.0, minf(float(dtw), 280.0), 34.0)
 		_panel(raw_pill, Color(0.08, 0.22, 0.28, 0.95), Color(0.38, 0.92, 0.78), 1.3)
 		if sit:
 			root_ctrl.draw_texture_rect(sit, Rect2(raw_pill.position.x + 6, raw_pill.position.y + 5, 24, 24), false)
 		root_ctrl.draw_string(font, Vector2(raw_pill.position.x + 36, raw_pill.position.y + 22), "必要素材なし（%s）" % String(sel_nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, int(raw_pill.size.x - 42), 12, Color(0.76, 1.0, 0.90))
 	else:
 		var n_ing := sel_cost.size()
-		var max_pill_w := (float(dtw) - float(n_ing - 1) * 6.0) / float(maxi(1, n_ing))
+		var two_rows := (portrait and n_ing >= 3)
+		var cols_p := 2 if two_rows else n_ing
+		var pill_h := 26.0 if two_rows else 34.0
+		var icon_sz_p := 20.0 if two_rows else 24.0
+		var col_w_p := (float(dtw) - float(cols_p - 1) * 6.0) / float(maxi(1, cols_p))
+		var idx_p := 0
 		for ck in sel_cost.keys():
 			var cq := int(sel_cost[ck])
 			var cname := State.res_name(String(ck))
 			var lbl_s := "%s ×%d" % [cname, cq]
-			var pill_w := clampf(float(lbl_s.length()) * 11.5 + 38.0, 84.0, minf(168.0, max_pill_w))
-			var pill_r := Rect2(badge_x, badge_y, pill_w, 34.0)
+			var c_p := idx_p % cols_p
+			var r_p := idx_p / cols_p
+			var pill_w := col_w_p if two_rows else clampf(float(lbl_s.length()) * 12.0 + 40.0, 96.0, minf(184.0, col_w_p))
+			var px_p := (dtx + float(c_p) * (col_w_p + 6.0)) if two_rows else badge_x
+			var py_p := badge_y + float(r_p) * (pill_h + 4.0)
+			var pill_r := Rect2(px_p, py_p, pill_w, pill_h)
 			_panel(pill_r, Color(0.09, 0.22, 0.34, 0.96), Color(0.46, 0.94, 1.0), 1.4)
 			var cit := _get_visual_tex(String(ck))
 			if cit:
-				root_ctrl.draw_texture_rect(cit, Rect2(pill_r.position.x + 5, pill_r.position.y + 5, 24, 24), false)
-			root_ctrl.draw_string(font, Vector2(pill_r.position.x + 32, pill_r.position.y + 23), lbl_s, HORIZONTAL_ALIGNMENT_LEFT, int(pill_w - 35), 11 if (portrait and n_ing >= 4) else 13, Color(1.0, 0.95, 0.68))
+				root_ctrl.draw_texture_rect(cit, Rect2(pill_r.position.x + 5, pill_r.position.y + (pill_h - icon_sz_p) * 0.5, icon_sz_p, icon_sz_p), false)
+			root_ctrl.draw_string(font, Vector2(pill_r.position.x + icon_sz_p + 9.0, pill_r.position.y + pill_h * 0.70), lbl_s, HORIZONTAL_ALIGNMENT_LEFT, int(pill_w - icon_sz_p - 12.0), 12 if two_rows else 13, Color(1.0, 0.95, 0.68))
 			badge_x += pill_w + 6.0
+			idx_p += 1
 
-	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.position.y + 91), "工程: " + String(sel_nd["recipe"]), HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 12 if portrait else 13, Color(0.92, 0.98, 1.0))
+	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.end.y - 29), "工程: " + String(sel_nd["recipe"]), HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 11 if portrait else 13, Color(0.92, 0.98, 1.0))
 	var chain_s := ("入力元(青線): " + ("・".join(in_names) if not in_names.is_empty() else "原石採掘")) + "  →  出力・用途先(黄線): " + ("・".join(out_names) if not out_names.is_empty() else "最終目標")
-	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.position.y + 112), chain_s, HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 11 if portrait else 12, Color(0.46, 0.98, 0.84))
+	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.end.y - 10), chain_s, HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 11 if portrait else 12, Color(0.46, 0.98, 0.84))
 
 # 11. カーゴデポ（倉庫）モーダル
 func _draw_depot_modal(vp: Vector2, font: Font) -> void:
@@ -1763,6 +1786,9 @@ func _draw_building_modal(vp: Vector2, font: Font) -> void:
 	if bool(snap["is_power"]):
 		if bid == "battery":
 			p_txt = "蓄電 %d / %d kJ%s" % [int(snap["battery_kj"]), int(snap["battery_cap"]), hp_s]
+		elif bid == "geothermal" and float(snap.get("pipe_prog", 1.0)) < 1.0:
+			p_txt = "地殻掘削中 %d%%（到達後に135W発電）%s" % [int(round(float(snap.get("pipe_prog", 0.0)) * 100.0)), hp_s]
+			p_col = Color(1.0, 0.78, 0.34)
 		elif float(snap["gen"]) > 0.1:
 			p_txt = "発電 %.0fW（%s）%s" % [float(snap["gen"]), "通電" if bool(snap["wired"]) else "未配線", hp_s]
 		else:
@@ -1807,7 +1833,7 @@ func _draw_building_modal(vp: Vector2, font: Font) -> void:
 	y += 108.0
 	var acts: Array[Dictionary] = []
 	if not out_d.is_empty(): acts.append({"lbl": "回収", "a": "bld_collect", "c": Color(0.38, 0.98, 0.74)})
-	if bid in ["smelter", "assembler", "gantry_printer"]: acts.append({"lbl": "材料投入", "a": "bld_feed", "c": Color(0.42, 0.90, 1.0)})
+	if bid in ["smelter", "assembler", "gantry_printer", "mass_driver"]: acts.append({"lbl": "材料投入", "a": "bld_feed", "c": Color(0.42, 0.90, 1.0)})
 	if bid == "assembler": acts.append({"lbl": "レシピ: %s" % State.res_name(String(snap["recipe"])), "a": "bld_recipe", "c": Color(1.0, 0.84, 0.36)})
 	if bool(snap.get("is_logi", false)): acts.append({"lbl": "搬送接続", "a": "bld_conv", "c": Color(1.0, 0.80, 0.30)})
 	if bool(snap["is_power"]): acts.append({"lbl": "配線", "a": "bld_wire", "c": Color(0.42, 0.96, 1.0)})

@@ -300,13 +300,8 @@ func _physics_process(delta: float) -> void:
 						if int(ib[kn]) <= 0: ib.erase(kn)
 					var out_id := String(rinfo["out"])
 					var out_q := int(rinfo["qty"])
-					if out_id == "probe_stock":
-						State.swarm_fleet = mini(State.SWARM_MAX, State.swarm_fleet + out_q)
-						State.total_launches += 1
-						planet.spawn_popup_world(mp, "+%d 軌道艦隊" % out_q, Color(1.0, 0.86, 0.42))
-					else:
-						State.add_r(out_id, out_q)
-						planet.spawn_popup_world(mp, "+%d %s" % [out_q, State.res_name(out_id)], SphericalPlanet.ore_col(out_id))
+					State.add_r(out_id, out_q)
+					planet.spawn_popup_world(mp, "+%d %s" % [out_q, State.res_name(out_id)], SphericalPlanet.ore_col(out_id))
 			else:
 				m["timer"] = 0.0
 

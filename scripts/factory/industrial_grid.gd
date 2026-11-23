@@ -510,6 +510,7 @@ func try_place_at(bid: String, terra_local_pos: Vector2) -> bool:
 		"inv": {},
 		"out_filters": {"left": "none", "right": "none", "up": "none", "down": "none"},
 		"battery_kj": (BATTERY_CAP_KJ * 0.25) if bid == "battery" else 0.0,
+		"pipe_prog": 0.0 if bid == "geothermal" else 1.0,
 	}
 	next_uid += 1
 	buildings.append(b)
@@ -854,24 +855,26 @@ func get_building_snap(uid: int) -> Dictionary:
 			var ob := _by_uid(int(w[0]))
 			if not ob.is_empty(): links.append(String(State.BLD[ob["id"]]["name"]))
 	var live_gen := 0.0
+	var pipe_p := float(b.get("pipe_prog", 1.0))
 	if bid == "solar":
 		var wpos := planet.to_world_pos(Vector2(b["pos"])) if planet else Vector2(b["pos"])
 		live_gen = float(info["gen"]) * (planet.get_sunlight_world(wpos) if planet else 1.0)
 	elif bid == "geothermal":
-		live_gen = float(info["gen"])
+		live_gen = float(info["gen"]) if pipe_p >= 1.0 else 0.0
 	var conv_out: Array[String] = []
 	for cv in conveyors:
 		if int(cv["from"]) == uid:
 			var ob := _by_uid(int(cv["to"]))
 			if not ob.is_empty(): conv_out.append("→" + String(State.BLD[ob["id"]]["name"]))
-	var cyc_t := 1.2 if bid == "drill" else (1.8 if bid == "smelter" else (2.1 if bid == "assembler" else (2.4 if bid == "gantry_printer" else 0.0)))
-	var prog := clampf(float(b["timer"]) / cyc_t, 0.0, 1.0) if cyc_t > 0.0 else 0.0
+	var cyc_t := 1.2 if bid == "drill" else (1.8 if bid == "smelter" else (2.1 if bid == "assembler" else (2.4 if bid == "gantry_printer" else (2.2 if bid == "mass_driver" else 0.0))))
+	var prog := pipe_p if (bid == "geothermal" and pipe_p < 1.0) else (clampf(float(b["timer"]) / cyc_t, 0.0, 1.0) if cyc_t > 0.0 else 0.0)
 	return {
 		"uid": uid, "id": bid, "name": String(info["name"]), "tex": String(info["tex"]),
 		"body_id": String(b.get("body_id", "terra")),
 		"hp": float(b.get("hp", 150.0)), "max_hp": float(b.get("max_hp", 150.0)),
 		"desc": String(info["desc"]), "is_power": (bid in POWER_NODES), "is_logi": (bid in LOGI_NODES),
-		"gen": live_gen, "use": float(info["use"]), "prog": prog, "has_prog": (cyc_t > 0.0),
+		"gen": live_gen, "use": float(info["use"]), "prog": prog, "has_prog": (cyc_t > 0.0 or (bid == "geothermal" and pipe_p < 1.0)),
+		"pipe_prog": pipe_p,
 		"pwr_ratio": float(b["pwr_ratio"]), "wired": bool(b["wired"]), "links": links, "conv_out": conv_out,
 		"battery_kj": float(b["battery_kj"]), "battery_cap": BATTERY_CAP_KJ,
 		"ore_target": String(b["ore_target"]), "dir": int(b["dir"]),
@@ -1055,7 +1058,8 @@ func _solve_power(delta: float) -> void:
 				var wpos := planet.to_world_pos(Vector2(nb["pos"])) if planet else Vector2(nb["pos"])
 				gen += float(State.BLD["solar"]["gen"]) * (planet.get_sunlight_world(wpos) if planet else 1.0)
 			elif bid == "geothermal":
-				gen += float(State.BLD["geothermal"]["gen"])
+				if float(nb.get("pipe_prog", 1.0)) >= 1.0:
+					gen += float(State.BLD["geothermal"]["gen"])
 			elif bid == "tesla": teslas.append(nb)
 			elif bid == "battery": bats.append(nb)
 		if not teslas.is_empty(): gen += dyson_w
@@ -1220,7 +1224,7 @@ func _process(delta: float) -> void:
 
 		if float(b["push_t"]) >= 0.42:
 			b["push_t"] = 0.0
-			# 1) Smart Demand-Driven Autorouted Conveyors!
+			# 1) Smart Demand-Driven Autorouted Conveyors ONLY (no wireless teleportation!)
 			var buid := int(b["uid"])
 			var src_buf: Dictionary = b["inv"] if bid == "depot" else b["out_buf"]
 			if not src_buf.is_empty():
@@ -1239,17 +1243,21 @@ func _process(delta: float) -> void:
 						"from_uid": buid, "target_uid": int(tb["uid"]),
 						"item": it_c, "t": 0.02, "dist": maxf(40.0, float(cv.get("total_len", 100.0))), "free": true,
 					})
-			# 2) Direct adjacent transfer
-			if bid == "depot":
-				var flts: Dictionary = b["out_filters"]
-				for pair in [["right", tang], ["left", -tang], ["up", n], ["down", -n]]:
-					var fk := String(flts.get(pair[0], "none"))
-					if fk != "none": _try_send(b, b["inv"], fk, pair[1])
-			elif bid in ["drill", "smelter", "assembler", "gantry_printer"] and not b["out_buf"].is_empty():
-				for dv in [tang, -tang, n, -n]:
-					if _try_send(b, b["out_buf"], "auto", dv): break
 
 		match bid:
+			"geothermal":
+				var pp := float(b.get("pipe_prog", 1.0))
+				if pp < 1.0:
+					var nxt_p := minf(1.0, pp + delta * 0.095 * spd)
+					b["pipe_prog"] = nxt_p
+					b["smoke_t"] = float(b["smoke_t"]) + delta
+					if planet and float(b["smoke_t"]) >= 0.35:
+						b["smoke_t"] = 0.0
+						var tip_p := Vector2(b["pos"]) - n * (nxt_p * 220.0)
+						planet.spawn_sparks(tip_p, Color(1.0, 0.56, 0.18), 4)
+					if nxt_p >= 1.0:
+						Sfx.play("dock")
+						State.add_log("地熱発電所のパイプが地殻マントルへ到達！135W発電を開始しました！", "good")
 			"drill":
 				if pwr <= 0.05: continue
 				if _buf_sum(b["out_buf"]) >= DRILL_BUF: b["blocked"] = true; continue
@@ -1313,29 +1321,28 @@ func _process(delta: float) -> void:
 			"gantry_printer":
 				tot_p += 1
 				if pwr <= 0.05: continue
-				act_p += 1
 				if _buf_sum(b["out_buf"]) >= OUT_CAP: b["blocked"] = true; continue
+				var ib: Dictionary = b["in_buf"]
+				if int(ib.get("plate_fe", 0)) < 2 or int(ib.get("circuit", 0)) < 1:
+					b["timer"] = 0.0
+					continue
+				act_p += 1
 				if float(b["timer"]) >= 2.4:
 					b["timer"] = 0.0
-					var ib: Dictionary = b["in_buf"]
-					if int(ib.get("plate_fe", 0)) >= 2 and int(ib.get("circuit", 0)) >= 1:
-						ib["plate_fe"] = int(ib["plate_fe"]) - 2
-						ib["circuit"] = int(ib["circuit"]) - 1
-						if int(ib["plate_fe"]) <= 0: ib.erase("plate_fe")
-						if int(ib["circuit"]) <= 0: ib.erase("circuit")
-						_buf_add(b["out_buf"], "probe_stock", 1)
-					elif State.get_r("plate_fe") >= 2 and State.get_r("circuit") >= 1:
-						State.add_r("plate_fe", -2); State.add_r("circuit", -1); _buf_add(b["out_buf"], "probe_stock", 1)
+					ib["plate_fe"] = int(ib["plate_fe"]) - 2
+					ib["circuit"] = int(ib["circuit"]) - 1
+					if int(ib["plate_fe"]) <= 0: ib.erase("plate_fe")
+					if int(ib["circuit"]) <= 0: ib.erase("circuit")
+					_buf_add(b["out_buf"], "probe_stock", 1)
 			"mass_driver":
 				if pwr <= 0.05: continue
+				if int(b["in_buf"].get("probe_stock", 0)) <= 0:
+					b["timer"] = 0.0
+					continue
 				if float(b["timer"]) >= 2.2:
-					var has_p := int(b["in_buf"].get("probe_stock", 0)) > 0
-					var from_g := (not has_p) and State.get_r("probe_stock") > 0
-					if has_p or from_g:
-						b["timer"] = 0.0
-						if has_p: _buf_take(b["in_buf"], "probe_stock")
-						else: State.add_r("probe_stock", -1)
-						_fire_railgun(b)
+					b["timer"] = 0.0
+					_buf_take(b["in_buf"], "probe_stock")
+					_fire_railgun(b)
 			"turret":
 				if pwr <= 0.05 or not swarm: continue
 				if float(b["timer"]) >= 0.55 and swarm.has_method("find_nearest_raider"):
@@ -1388,7 +1395,7 @@ func _fire_railgun(b: Dictionary) -> void:
 		planet.spawn_sparks(muzzle, Color(1.0, 0.86, 0.40), 16)
 		planet.spawn_smoke(muzzle, dir, Color(1.0, 0.88, 0.68, 0.46))
 	State.total_launches += 1
-	var batch := 14 if State.swarm_fleet >= 30 else 8
+	var batch := 1
 	State.swarm_fleet = mini(State.SWARM_MAX, State.swarm_fleet + batch)
 	if swarm and swarm.has_method("spawn_launched"):
 		swarm.spawn_launched(muzzle, dir, batch)
@@ -1444,6 +1451,30 @@ func _draw() -> void:
 				draw_texture_rect(glow, Rect2(bp.x + n.x * 36 - 64, bp.y + n.y * 36 - 64, 128, 128), false, Color(1.0, 0.44, 0.12, 0.38))
 
 		draw_set_transform(bp, float(b["rot"]), Vector2.ONE)
+		# 地熱発電所の地殻掘削パイプ（設置後に地殻マントルへ伸び、到達後に熱エネルギーが上昇！）
+		if bid == "geothermal":
+			var pp := clampf(float(b.get("pipe_prog", 1.0)), 0.0, 1.0)
+			var pipe_len := 220.0 * pp
+			if pipe_len > 2.0:
+				draw_rect(Rect2(-8, 2, 16, pipe_len), Color(0.14, 0.18, 0.24, 0.96))
+				draw_rect(Rect2(-6, 2, 12, pipe_len), Color(0.24, 0.30, 0.38, 0.96))
+				var core_c := Color(1.0, 0.48, 0.12, 0.94) if pp >= 1.0 else Color(0.36, 0.90, 1.0, 0.78)
+				draw_rect(Rect2(-3, 2, 6, pipe_len), core_c)
+				var j_y := 26.0
+				while j_y < pipe_len - 8.0:
+					draw_rect(Rect2(-10, j_y, 20, 5), Color(0.38, 0.46, 0.56))
+					j_y += 28.0
+				if pp < 1.0:
+					# ドリル先端ビット
+					draw_polygon(
+						PackedVector2Array([Vector2(-10, pipe_len), Vector2(10, pipe_len), Vector2(0, pipe_len + 16.0)]),
+						PackedColorArray([Color(1.0, 0.78, 0.28), Color(1.0, 0.78, 0.28), Color(1.0, 0.44, 0.16)])
+					)
+				else:
+					# 到達後の上昇マグマ熱パルス
+					for pi in range(3):
+						var py := pipe_len * (1.0 - fposmod(anim_t * 0.75 + float(pi) * 0.33, 1.0))
+						draw_circle(Vector2(0, py), 5.0, Color(1.0, 0.88, 0.36, 0.92))
 		if bid != "belt" and bid != "lift":
 			draw_rect(Rect2(-bw * 0.48, -2, bw * 0.96, 10), Color(0.16, 0.20, 0.26, 0.95))
 			draw_rect(Rect2(-bw * 0.48, -2, bw * 0.96, 2), Color(0.45, 0.52, 0.62))
@@ -1451,6 +1482,12 @@ func _draw() -> void:
 		var t := ArtReg.get_t(String(info["tex"]))
 		var y_off := 16.0 if bid == "drill" else 0.0
 		if t: draw_texture_rect(t, Rect2(-bw * 0.5, -bh + y_off, bw, bh), false)
+
+		if bid == "geothermal" and float(b.get("pipe_prog", 1.0)) < 1.0:
+			var pp_pct := int(round(float(b.get("pipe_prog", 0.0)) * 100.0))
+			draw_rect(Rect2(-34, -bh - 14, 68, 7), Color(0.08, 0.12, 0.18, 0.92))
+			draw_rect(Rect2(-33, -bh - 13, 66.0 * float(b.get("pipe_prog", 0.0)), 5), Color(1.0, 0.64, 0.20))
+			draw_string(font, Vector2(-56, -bh - 18), "地殻掘削 %d%%" % pp_pct, HORIZONTAL_ALIGNMENT_CENTER, 112, 11, Color(1.0, 0.84, 0.38))
 
 		# Durability HP Bar (shown when damaged < 99%!)
 		var cur_hp := float(b.get("hp", 150.0))

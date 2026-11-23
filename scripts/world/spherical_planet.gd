@@ -543,18 +543,25 @@ func _init_extra_planets() -> void:
 			else:
 				dirty_extra.append([bid, ci])
 
-	# Initialize 6 Enemy Stronghold Bastions on ASTRA-V!
+	# Initialize 8 Enemy Von Neumann Surface Facilities on ASTRA-V (4 Enemy 3D Printer Factories + 4 Enemy Mass Drivers)!
 	astra_bastions.clear()
 	var astra_r := float(bodies["astra"]["rad"])
-	for bi in range(6):
-		var ba := float(bi) * (TAU / 6.0) - PI * 0.5
+	for bi in range(8):
+		var ba := float(bi) * (TAU / 8.0) - PI * 0.5
 		var bn := Vector2(cos(ba), sin(ba))
+		var is_drv := (bi % 2 == 1)
 		astra_bastions.append({
 			"idx": bi, "ang": ba, "normal": bn,
-			"local_pos": bn * (astra_r + 36.0),
-			"hp": 450.0, "max_hp": 450.0, "alive": true, "fire_t": float(bi) * 0.3,
+			"kind": "enemy_driver" if is_drv else "enemy_printer",
+			"name": "敵マスドライバー" if is_drv else "敵3Dプリンタ工場",
+			"tex": "mass_driver" if is_drv else "gantry_printer",
+			"local_pos": bn * (astra_r + 6.0),
+			"hp": 1400.0, "max_hp": 1400.0, "alive": true, "fire_t": float(bi) * 0.45,
 		})
-	State.astra_bastions_left = 6
+	State.astra_bastions_left = 8
+	State.enemy_printers_left = 4
+	State.enemy_drivers_left = 4
+	State.enemy_launch_slow_t = 0.0
 	State.astra_liberated = false
 
 func _bake_extra_chunk(bid: String, ci: int) -> void:
@@ -888,24 +895,52 @@ func check_celestial_hit(world_pos: Vector2, rad: float = 18.0) -> Dictionary:
 		return {"hit": true, "body_id": "sun", "normal": diff / d, "push": bp + (diff / d) * lim, "body": b}
 	return {"hit": false}
 
-func damage_astra_bastions(dmg: float) -> void:
-	if State.astra_liberated: return
-	var alive_cnt := 0
+func sync_astra_facility_counts() -> void:
+	var p_cnt := 0
+	var d_cnt := 0
 	for bst in astra_bastions:
 		if not bool(bst["alive"]): continue
-		bst["hp"] = maxf(0.0, float(bst["hp"]) - dmg)
-		if float(bst["hp"]) <= 0.0:
-			bst["alive"] = false
-			var wp := Vector2(bodies["astra"]["pos"]) + Vector2(bst["local_pos"])
-			spawn_sparks_world(wp, Color(1.0, 0.45, 0.25), 24)
-			Sfx.play("boom")
+		if String(bst.get("kind", "enemy_printer")) == "enemy_driver":
+			d_cnt += 1
 		else:
-			alive_cnt += 1
-	State.astra_bastions_left = alive_cnt
-	if alive_cnt == 0 and not State.astra_liberated:
+			p_cnt += 1
+	State.enemy_printers_left = p_cnt
+	State.enemy_drivers_left = d_cnt
+	State.astra_bastions_left = p_cnt + d_cnt
+	if p_cnt + d_cnt == 0 and not State.astra_liberated:
 		State.astra_liberated = true
 		Sfx.play("research")
-		State.add_log("敵中枢惑星アストラ-Vの防衛拠点を全滅させ制圧しました！上陸・採掘が可能に！", "good")
+		State.add_log("敵中枢惑星アストラ-Vの敵工場・敵マスドライバーを全滅させ制圧しました！上陸・採掘が可能に！", "good")
+
+func damage_astra_facility(idx: int, dmg: float) -> bool:
+	if idx < 0 or idx >= astra_bastions.size():
+		return false
+	var bst: Dictionary = astra_bastions[idx]
+	if not bool(bst["alive"]):
+		return false
+	bst["hp"] = maxf(0.0, float(bst["hp"]) - dmg)
+	if float(bst["hp"]) <= 0.0:
+		bst["alive"] = false
+		var wp := Vector2(bodies["astra"]["pos"]) + Vector2(bst["local_pos"])
+		spawn_sparks_world(wp, Color(1.0, 0.38, 0.22), 28)
+		Sfx.play("boom")
+		# 施設破壊で60秒間（1分間）敵マスドライバーの射出速度を大幅遅延！
+		State.enemy_launch_slow_t = 60.0
+		sync_astra_facility_counts()
+		var fname := String(bst.get("name", "敵施設"))
+		if State.enemy_printers_left == 0 or State.enemy_drivers_left == 0:
+			State.add_log("アストラ-Vの「%s」を破壊！敵工場または射出機が全滅し、敵スウォームの増産が完全停止しました！" % fname, "good")
+		else:
+			State.add_log("アストラ-Vの「%s」を破壊！1分間、敵の射出が大幅減速！（残存: 敵工場%d / 敵射出機%d）" % [fname, State.enemy_printers_left, State.enemy_drivers_left], "good")
+		return true
+	return false
+
+func damage_astra_bastions(dmg: float) -> void:
+	if State.astra_liberated: return
+	for i in range(astra_bastions.size()):
+		if bool(astra_bastions[i]["alive"]):
+			damage_astra_facility(i, dmg)
+	sync_astra_facility_counts()
 
 static func wrap_col(c: int) -> int:
 	return ((c % COLS) + COLS) % COLS
@@ -1294,21 +1329,38 @@ func _draw() -> void:
 		if pol > 2.0:
 			var pa := clampf(pol / 100.0, 0.08, 0.52)
 			draw_arc(b_off, r_surf + 95.0, 0.0, TAU, 64, Color(0.86, 0.22, 0.48, pa), 38.0)
-		# Enemy Stronghold Shield & 6 Bastions on ASTRA-V!
+		# Enemy Stronghold Shield & Operating Enemy Factories / Mass Drivers on ASTRA-V!
 		if bid == "astra" and not State.astra_liberated:
-			var sh_p := 0.55 + 0.25 * sin(anim_t * 4.5)
-			draw_arc(b_off, r_surf + 65.0, 0.0, TAU, 72, Color(1.0, 0.22, 0.36, sh_p), 12.0)
-			var et := ArtReg.get_t("enemy_station")
+			var sh_p := 0.45 + 0.22 * sin(anim_t * 4.5)
+			draw_arc(b_off, r_surf + 125.0, 0.0, TAU, 72, Color(1.0, 0.18, 0.32, sh_p), 8.0)
+			# Draw crimson conveyor conduits between paired enemy 3D printers (even) and enemy mass drivers (odd)
+			for pair_i in range(0, astra_bastions.size() - 1, 2):
+				var b_pr: Dictionary = astra_bastions[pair_i]
+				var b_dr: Dictionary = astra_bastions[pair_i + 1]
+				if bool(b_pr["alive"]) and bool(b_dr["alive"]):
+					var a0 := float(b_pr["ang"]); var a1 := float(b_dr["ang"])
+					draw_arc(b_off, r_surf + 22.0, a0, a1, 14, Color(1.0, 0.26, 0.36, 0.78), 6.0)
+					var pkt_t := fposmod(anim_t * 0.8 + float(pair_i) * 0.25, 1.0)
+					var pa_m := lerpf(a0, a1, pkt_t)
+					draw_circle(b_off + Vector2(cos(pa_m), sin(pa_m)) * (r_surf + 22.0), 7.0, Color(1.0, 0.72, 0.30))
+			var fnt_e := ArtReg.get_font()
 			for bst in astra_bastions:
 				if not bool(bst["alive"]): continue
 				var bp_l := b_off + Vector2(bst["local_pos"])
 				var brot := float(bst["ang"]) + PI * 0.5
+				var is_drv := String(bst.get("kind", "")) == "enemy_driver"
+				var ft_e := ArtReg.get_t("mass_driver" if is_drv else "gantry_printer")
 				draw_set_transform(bp_l, brot, Vector2.ONE)
-				if et:
-					draw_texture_rect(et, Rect2(-56, -42, 112, 84), false)
-				var bf := clampf(float(bst["hp"]) / float(bst["max_hp"]), 0.0, 1.0)
-				draw_rect(Rect2(-36, -54, 72, 7), Color(0.08, 0.08, 0.12, 0.9))
-				draw_rect(Rect2(-35, -53, 70 * bf, 5), Color(1.0, 0.26, 0.34))
+				draw_rect(Rect2(-68, -4, 136, 12), Color(0.24, 0.06, 0.10, 0.96))
+				draw_rect(Rect2(-68, -4, 136, 3), Color(1.0, 0.32, 0.42))
+				if ft_e:
+					var fw := 142.0; var fh := 116.0 if is_drv else 102.0
+					draw_texture_rect(ft_e, Rect2(-fw * 0.5, -fh, fw, fh), false, Color(1.0, 0.42, 0.48))
+				var bf := clampf(float(bst["hp"]) / maxf(1.0, float(bst["max_hp"])), 0.0, 1.0)
+				draw_rect(Rect2(-48, -132, 96, 8), Color(0.08, 0.06, 0.10, 0.94))
+				draw_rect(Rect2(-47, -131, 94 * bf, 6), Color(1.0, 0.26, 0.34))
+				if fnt_e:
+					draw_string(fnt_e, Vector2(-70, -138), String(bst.get("name", "敵施設")), HORIZONTAL_ALIGNMENT_CENTER, 140, 12, Color(1.0, 0.66, 0.72))
 				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	# 3. Terra Crystal Spires

@@ -1,47 +1,64 @@
 extends Node2D
 
-# GPU-Instanced 10,000-Unit Swarm Fleet (MultiMeshInstance2D) +
-# Outer Planet ASTRA-V Enemy Stronghold Garrison +
-# Pollution-Triggered & Off-Map Continuous Enemy Raids attacking Planetary Facilities!
+# GPU-Instanced 10,000-Unit Player Swarm Fleet + 5,000-Unit Enemy Swarm Fleet (MultiMeshInstance2D) +
+# Outer Planet ASTRA-V Operating Enemy Factories & Enemy Mass Drivers +
+# Orbital-Trajectory Invasion & Symmetric Mutual Beam Combat +
+# Pollution-Triggered & Off-Map Continuous Enemy Raids attacking Non-Starter Planetary Facilities!
 
 const MAX_SHIPS: int = 10000
+const MAX_ENEMY_SHIPS: int = 5000
+const UNIT_HP: float = 45.0
+const UNIT_SPEED: float = 240.0
+const UNIT_BEAM_RANGE: float = 520.0
+const UNIT_BEAM_DPS: float = 18.0
 
 var planet: SphericalPlanet = null
 var grid: Node2D = null
 var mm_node: MultiMeshInstance2D = null
 var mm: MultiMesh = null
+var enemy_mm_node: MultiMeshInstance2D = null
+var enemy_mm: MultiMesh = null
 
 var pos_arr: PackedVector2Array
 var vel_arr: PackedVector2Array
+var hp_arr: PackedFloat32Array
 var orb_r: PackedFloat32Array
 var orb_a: PackedFloat32Array
 var orb_spd: PackedFloat32Array
+var transfer_p: PackedFloat32Array
 var active_n: int = 0
+
+var e_pos_arr: PackedVector2Array
+var e_vel_arr: PackedVector2Array
+var e_hp_arr: PackedFloat32Array
+var e_orb_r: PackedFloat32Array
+var e_orb_a: PackedFloat32Array
+var e_orb_spd: PackedFloat32Array
+var e_active_n: int = 0
+var enemy_launch_trails: Array[Dictionary] = []
 
 var boss_ang: float = -PI * 0.38
 var boss_r: float = 4200.0
 var boss_pos: Vector2 = Vector2.ZERO # In HomeSystem (Terra-relative) coordinates
 
-var raiders: Array[Dictionary] = [] # {"pos": terra_local_pos, "vel": Vec2, "hp": float, "max_hp": float, "target_body": String}
+var raiders: Array[Dictionary] = []
 var tracers: Array[Dictionary] = []
 var _doc_t: float = 0.0
+var _combat_t: float = 0.0
+var _enemy_launch_t: float = 0.0
 var _raid_t: float = 0.0
 var _offmap_raid_t: float = 0.0
 
 func _ready() -> void:
 	z_index = 15
 	_init_multimesh()
-	pos_arr.resize(MAX_SHIPS); vel_arr.resize(MAX_SHIPS)
-	orb_r.resize(MAX_SHIPS); orb_a.resize(MAX_SHIPS); orb_spd.resize(MAX_SHIPS)
+	pos_arr.resize(MAX_SHIPS); vel_arr.resize(MAX_SHIPS); hp_arr.resize(MAX_SHIPS)
+	orb_r.resize(MAX_SHIPS); orb_a.resize(MAX_SHIPS); orb_spd.resize(MAX_SHIPS); transfer_p.resize(MAX_SHIPS)
+	e_pos_arr.resize(MAX_ENEMY_SHIPS); e_vel_arr.resize(MAX_ENEMY_SHIPS); e_hp_arr.resize(MAX_ENEMY_SHIPS)
+	e_orb_r.resize(MAX_ENEMY_SHIPS); e_orb_a.resize(MAX_ENEMY_SHIPS); e_orb_spd.resize(MAX_ENEMY_SHIPS)
 	_update_boss_pos(0.0)
 
 func _init_multimesh() -> void:
-	mm_node = MultiMeshInstance2D.new()
-	mm = MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_2D
-	mm.use_colors = true
-	mm.instance_count = MAX_SHIPS
-	mm.visible_instance_count = 0
 	var mesh := ArrayMesh.new()
 	var v := PackedVector2Array([
 		Vector2(9, 0), Vector2(-6, -4.5), Vector2(-3.5, 0),
@@ -49,28 +66,94 @@ func _init_multimesh() -> void:
 	])
 	var arr := []; arr.resize(Mesh.ARRAY_MAX); arr[Mesh.ARRAY_VERTEX] = v
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+
+	mm_node = MultiMeshInstance2D.new()
+	mm = MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_2D
+	mm.use_colors = true
+	mm.instance_count = MAX_SHIPS
+	mm.visible_instance_count = 0
 	mm.mesh = mesh
 	mm_node.multimesh = mm
 	add_child(mm_node)
 
+	enemy_mm_node = MultiMeshInstance2D.new()
+	enemy_mm = MultiMesh.new()
+	enemy_mm.transform_format = MultiMesh.TRANSFORM_2D
+	enemy_mm.use_colors = true
+	enemy_mm.instance_count = MAX_ENEMY_SHIPS
+	enemy_mm.visible_instance_count = 0
+	enemy_mm.mesh = mesh
+	enemy_mm_node.multimesh = enemy_mm
+	add_child(enemy_mm_node)
+
+func _get_astra_off() -> Vector2:
+	if planet and planet.bodies.has("astra"):
+		return Vector2(planet.bodies["astra"]["pos"]) - Vector2(planet.bodies["terra"]["pos"])
+	return Vector2(5250.0, 0.0)
+
 func _update_boss_pos(delta: float) -> void:
 	boss_ang = wrapf(boss_ang + 0.005 * delta, -PI, PI)
-	if planet and planet.bodies.has("astra"):
-		var astra_off := Vector2(planet.bodies["astra"]["pos"]) - Vector2(planet.bodies["terra"]["pos"])
-		boss_pos = astra_off + Vector2(cos(boss_ang), sin(boss_ang)) * boss_r
-	else:
-		boss_pos = Vector2(cos(boss_ang), sin(boss_ang)) * 5250.0
+	var astra_off := _get_astra_off()
+	boss_pos = astra_off + Vector2(cos(boss_ang), sin(boss_ang)) * boss_r
 
 func spawn_launched(origin: Vector2, dir: Vector2, cnt: int) -> void:
 	for _i in range(cnt):
 		if active_n >= MAX_SHIPS: break
 		var i := active_n; active_n += 1
-		pos_arr[i] = origin + Vector2(randf_range(-20, 20), randf_range(-20, 20))
-		vel_arr[i] = dir * randf_range(380.0, 560.0)
+		pos_arr[i] = origin + Vector2(randf_range(-12, 12), randf_range(-12, 12))
+		vel_arr[i] = dir * randf_range(220.0, 280.0)
+		hp_arr[i] = UNIT_HP
 		orb_r[i] = randf_range(SphericalPlanet.R_SURFACE + 520.0, SphericalPlanet.R_ATMOS + 1100.0)
 		orb_a[i] = atan2(origin.y, origin.x) + randf_range(-0.15, 0.15)
-		orb_spd[i] = randf_range(0.042, 0.088) * (1.0 if i % 6 != 0 else -1.0)
+		orb_spd[i] = randf_range(0.032, 0.068) * (1.0 if i % 6 != 0 else -1.0)
+		transfer_p[i] = 0.0
 	_sync()
+
+func _spawn_enemy_launched(origin: Vector2, dir: Vector2) -> void:
+	if e_active_n >= MAX_ENEMY_SHIPS:
+		return
+	var astra_off := _get_astra_off()
+	var astra_r := float(planet.bodies["astra"]["rad"]) if (planet and planet.bodies.has("astra")) else 3100.0
+	var i := e_active_n; e_active_n += 1
+	e_pos_arr[i] = origin
+	e_vel_arr[i] = dir * UNIT_SPEED
+	e_hp_arr[i] = UNIT_HP
+	e_orb_r[i] = randf_range(astra_r + 360.0, astra_r + 1350.0)
+	var rel := origin - astra_off
+	e_orb_a[i] = atan2(rel.y, rel.x)
+	e_orb_spd[i] = randf_range(0.035, 0.075) * (1.0 if i % 5 != 0 else -1.0)
+	if enemy_mm:
+		enemy_mm.visible_instance_count = e_active_n
+
+func _remove_player_ship(idx: int) -> void:
+	if idx < 0 or idx >= active_n: return
+	var last := active_n - 1
+	if idx != last:
+		pos_arr[idx] = pos_arr[last]
+		vel_arr[idx] = vel_arr[last]
+		hp_arr[idx] = hp_arr[last]
+		orb_r[idx] = orb_r[last]
+		orb_a[idx] = orb_a[last]
+		orb_spd[idx] = orb_spd[last]
+		transfer_p[idx] = transfer_p[last]
+	active_n -= 1
+	State.swarm_fleet = maxi(0, active_n)
+	if mm: mm.visible_instance_count = active_n
+
+func _remove_enemy_ship(idx: int) -> void:
+	if idx < 0 or idx >= e_active_n: return
+	var last := e_active_n - 1
+	if idx != last:
+		e_pos_arr[idx] = e_pos_arr[last]
+		e_vel_arr[idx] = e_vel_arr[last]
+		e_hp_arr[idx] = e_hp_arr[last]
+		e_orb_r[idx] = e_orb_r[last]
+		e_orb_a[idx] = e_orb_a[last]
+		e_orb_spd[idx] = e_orb_spd[last]
+	e_active_n -= 1
+	State.enemy_swarm_fleet = maxi(0, e_active_n)
+	if enemy_mm: enemy_mm.visible_instance_count = e_active_n
 
 func _sync() -> void:
 	var tgt := mini(MAX_SHIPS, State.swarm_fleet)
@@ -78,12 +161,26 @@ func _sync() -> void:
 		var i := active_n; active_n += 1
 		var a := -PI * 0.5 + randf_range(-0.8, 0.8) if i < 600 else randf_range(0.0, TAU)
 		var r := randf_range(SphericalPlanet.R_SURFACE + 460.0, SphericalPlanet.R_ATMOS + 1100.0)
-		orb_a[i] = a; orb_r[i] = r
+		orb_a[i] = a; orb_r[i] = r; hp_arr[i] = UNIT_HP; transfer_p[i] = 0.0
 		pos_arr[i] = Vector2(cos(a), sin(a)) * r
-		vel_arr[i] = Vector2(-sin(a), cos(a)) * 280.0
-		orb_spd[i] = randf_range(0.040, 0.085)
+		vel_arr[i] = Vector2(-sin(a), cos(a)) * UNIT_SPEED
+		orb_spd[i] = randf_range(0.032, 0.068)
 	if active_n > tgt: active_n = tgt
 	if mm: mm.visible_instance_count = active_n
+
+	var e_tgt := mini(MAX_ENEMY_SHIPS, State.enemy_swarm_fleet)
+	var astra_off := _get_astra_off()
+	var astra_r := float(planet.bodies["astra"]["rad"]) if (planet and planet.bodies.has("astra")) else 3100.0
+	while e_active_n < e_tgt:
+		var j := e_active_n; e_active_n += 1
+		var ea := randf_range(0.0, TAU)
+		var er := randf_range(astra_r + 360.0, astra_r + 1350.0)
+		e_orb_a[j] = ea; e_orb_r[j] = er; e_hp_arr[j] = UNIT_HP
+		e_pos_arr[j] = astra_off + Vector2(cos(ea), sin(ea)) * er
+		e_vel_arr[j] = Vector2(-sin(ea), cos(ea)) * UNIT_SPEED
+		e_orb_spd[j] = randf_range(0.035, 0.075) * (1.0 if j % 5 != 0 else -1.0)
+	if e_active_n > e_tgt: e_active_n = e_tgt
+	if enemy_mm: enemy_mm.visible_instance_count = e_active_n
 
 func find_nearest_raider(p: Vector2, max_d: float) -> Vector2:
 	var bd := max_d; var best := Vector2.ZERO
@@ -256,7 +353,39 @@ func _process(delta: float) -> void:
 				raiders[i]["pos"] = pi + push
 				raiders[j]["pos"] = pj - push
 
-	# 4. Swarm Fleet Doctrines (HARVEST, REPLICATE, DEFEND, ASSAULT on ASTRA-V!)
+	# 4. Enemy Von Neumann Factories & Mass Drivers on ASTRA-V (Manufacture & Launch Enemy Swarm up to 5,000!)
+	if State.enemy_launch_slow_t > 0.0:
+		State.enemy_launch_slow_t = maxf(0.0, State.enemy_launch_slow_t - delta)
+	if planet:
+		planet.sync_astra_facility_counts()
+		var ep := State.enemy_printers_left
+		var ed := State.enemy_drivers_left
+		if ep > 0 and ed > 0 and State.enemy_swarm_fleet < State.ENEMY_SWARM_MAX:
+			var prod_rate := (float(ep) / 4.0) * (float(ed) / 4.0)
+			if State.enemy_launch_slow_t > 0.0:
+				# 敵施設が破壊されてから1分間（60秒間）は射出速度が大幅低下！
+				prod_rate *= 0.28
+			_enemy_launch_t += delta * prod_rate
+			if _enemy_launch_t >= 1.35:
+				_enemy_launch_t = 0.0
+				var alive_drvs: Array[Dictionary] = []
+				for bst in planet.astra_bastions:
+					if bool(bst["alive"]) and String(bst.get("kind", "")) == "enemy_driver":
+						alive_drvs.append(bst)
+				if not alive_drvs.is_empty():
+					var drv: Dictionary = alive_drvs[randi() % alive_drvs.size()]
+					var astra_off := _get_astra_off()
+					var dn := Vector2(drv["normal"])
+					var dtang := Vector2(-dn.y, dn.x)
+					var ldir := (dn * 0.72 + dtang * 0.69).normalized()
+					var muzzle := astra_off + Vector2(drv["local_pos"]) + dn * 78.0
+					enemy_launch_trails.append({"pos": muzzle, "vel": ldir * 720.0, "life": 1.6})
+					State.enemy_swarm_fleet = mini(State.ENEMY_SWARM_MAX, State.enemy_swarm_fleet + 1)
+					_spawn_enemy_launched(muzzle, ldir)
+		else:
+			_enemy_launch_t = 0.0
+
+	# 5. Swarm Fleet Doctrines (HARVEST, DEFEND, ASSAULT — NO free self-replication!)
 	_doc_t += delta
 	if _doc_t >= 1.0:
 		_doc_t = 0.0
@@ -265,39 +394,175 @@ func _process(delta: float) -> void:
 			match State.doctrine:
 				State.Doctrine.HARVEST:
 					State.add_r(["fe", "cu", "si"][randi() % 3], maxi(1, int(sqrt(float(n)) * 0.5)))
-				State.Doctrine.REPLICATE:
-					State.swarm_fleet = mini(State.SWARM_MAX, State.swarm_fleet + maxi(1, int(float(n) * 0.05)))
 				State.Doctrine.DEFEND:
 					if not raiders.is_empty():
 						var r0_p: Vector2 = raiders[0]["pos"]
 						tracers.append({"a": r0_p + Vector2(60, -80), "b": r0_p, "c": Color(0.38, 0.96, 1.0, 0.9), "life": 0.22})
 						damage_raider_near(r0_p, 28.0 + float(n) * 0.25)
 				State.Doctrine.ASSAULT:
-					if not State.boss_dead or not State.astra_liberated:
-						var dps := 22.0 + sqrt(float(n)) * 8.5 + (65.0 if bool(State.megastructures["citadel"]) else 0.0)
-						damage_boss(dps)
-						if active_n > 0:
-							for _k in range(mini(5, active_n)):
-								var si := randi() % active_n
-								tracers.append({"a": pos_arr[si], "b": boss_pos + Vector2(randf_range(-60, 60), randf_range(-60, 60)), "c": Color(1.0, 0.84, 0.34, 0.92), "life": 0.24})
+					pass
 
-	var asslt := (State.doctrine == State.Doctrine.ASSAULT and (not State.boss_dead or not State.astra_liberated))
+	# 6. Player Swarm Orbital Transfer Trajectory & Enemy Swarm Orbit Update (Same UNIT_SPEED = 240 px/s!)
+	var asslt := (State.doctrine == State.Doctrine.ASSAULT and (not State.boss_dead or not State.astra_liberated or e_active_n > 0))
+	var astra_off_now := _get_astra_off()
+	var astra_r_now := float(planet.bodies["astra"]["rad"]) if (planet and planet.bodies.has("astra")) else 3100.0
+	var sun_off := -Vector2(planet.bodies["terra"]["pos"]) if (planet and planet.bodies.has("terra")) else Vector2(0.0, -32000.0)
+
 	for i in range(active_n):
 		orb_a[i] += orb_spd[i] * delta
-		var goal := Vector2(cos(orb_a[i]), sin(orb_a[i])) * orb_r[i]
-		if asslt and (i % 3 != 0):
-			var sw := orb_a[i] * 5.0 + float(i) * 0.19
-			goal = boss_pos + Vector2(cos(sw), sin(sw)) * (260.0 + float(i % 7) * 58.0)
+		if asslt:
+			transfer_p[i] = minf(1.0, transfer_p[i] + delta * 0.032)
+		else:
+			transfer_p[i] = maxf(0.0, transfer_p[i] - delta * 0.045)
+		var tp := transfer_p[i]
+		var home_goal := Vector2(cos(orb_a[i]), sin(orb_a[i])) * orb_r[i]
+		var goal := home_goal
+		if tp > 0.001:
+			var sw := orb_a[i] * 2.2 + float(i) * 0.19
+			var astra_goal := astra_off_now + Vector2(cos(sw), sin(sw)) * (astra_r_now + 360.0 + float(i % 9) * 65.0)
+			if tp >= 0.995:
+				goal = astra_goal
+			else:
+				# Heliocentric Hohmann Orbital Transfer Arc around the Sun (curved orbital trajectory!)
+				var v_s := home_goal - sun_off
+				var v_e := astra_goal - sun_off
+				var r_s := maxf(100.0, v_s.length())
+				var r_e := maxf(100.0, v_e.length())
+				var a_s := v_s.angle()
+				var a_e := v_e.angle()
+				var da_h := wrapf(a_e - a_s, -PI, PI)
+				var bend := 0.55 * sin(tp * PI)
+				var r_cur := lerpf(r_s, r_e, tp * tp * (3.0 - 2.0 * tp))
+				var a_cur := a_s + da_h * tp + bend
+				goal = sun_off + Vector2(cos(a_cur), sin(a_cur)) * r_cur
 		var dg := goal - pos_arr[i]
-		vel_arr[i] = vel_arr[i].lerp(dg.normalized() * clampf(dg.length() * 1.15, 220.0, 820.0), clampf(delta * 2.5, 0.0, 1.0))
+		var d_len := dg.length()
+		var spd_lim := UNIT_SPEED if d_len > 30.0 else (d_len * 6.0)
+		var dir_v := (dg / d_len) if d_len > 0.01 else Vector2.RIGHT
+		vel_arr[i] = vel_arr[i].lerp(dir_v * spd_lim, clampf(delta * 2.4, 0.0, 1.0))
 		pos_arr[i] += vel_arr[i] * delta
 		mm.set_instance_transform_2d(i, Transform2D(vel_arr[i].angle(), pos_arr[i]))
 		mm.set_instance_color(i, Color(1.0, 0.86, 0.42) if (i % 4 != 0) else Color(0.55, 0.94, 1.0))
+
+	for j in range(e_active_n):
+		e_orb_a[j] += e_orb_spd[j] * delta
+		var e_goal := astra_off_now + Vector2(cos(e_orb_a[j]), sin(e_orb_a[j])) * e_orb_r[j]
+		var edg := e_goal - e_pos_arr[j]
+		var ed_len := edg.length()
+		var edir := (edg / ed_len) if ed_len > 0.01 else Vector2.LEFT
+		e_vel_arr[j] = e_vel_arr[j].lerp(edir * UNIT_SPEED, clampf(delta * 2.4, 0.0, 1.0))
+		e_pos_arr[j] += e_vel_arr[j] * delta
+		enemy_mm.set_instance_transform_2d(j, Transform2D(e_vel_arr[j].angle(), e_pos_arr[j]))
+		enemy_mm.set_instance_color(j, Color(1.0, 0.24, 0.34) if (j % 3 != 0) else Color(1.0, 0.56, 0.22))
+
+	# 7. Symmetric Nearby Beam Combat (Player Swarm vs Enemy Swarm & Enemy Surface Factories/Mass Drivers!)
+	_combat_t += delta
+	if _combat_t >= 0.25:
+		var dt_c := _combat_t
+		_combat_t = 0.0
+		_step_swarm_combat(dt_c, astra_off_now, astra_r_now)
+
+	for i in range(enemy_launch_trails.size() - 1, -1, -1):
+		enemy_launch_trails[i]["pos"] += enemy_launch_trails[i]["vel"] * delta
+		enemy_launch_trails[i]["life"] -= delta
+		if float(enemy_launch_trails[i]["life"]) <= 0.0:
+			enemy_launch_trails.remove_at(i)
 
 	for i in range(tracers.size() - 1, -1, -1):
 		tracers[i]["life"] -= delta
 		if float(tracers[i]["life"]) <= 0.0: tracers.remove_at(i)
 	queue_redraw()
+
+func _step_swarm_combat(dt_c: float, astra_off: Vector2, astra_r: float) -> void:
+	if active_n <= 0:
+		return
+	# Collect indices of Player Swarm units that are actually near ASTRA-V or Enemy Swarm
+	var near_p: Array[int] = []
+	var check_step := maxi(1, active_n / 120)
+	for i in range(0, active_n, check_step):
+		if pos_arr[i].distance_to(astra_off) <= astra_r + 2200.0:
+			near_p.append(i)
+	if near_p.is_empty():
+		return
+
+	var p_mult := float(check_step) * (1.5 if bool(State.megastructures.get("citadel", false)) else 1.0)
+	var base_shot_dmg := UNIT_BEAM_DPS * dt_c
+
+	# A) Symmetric Ship-vs-Ship Mutual Beam Combat (Identical base specs for Player & Enemy units!)
+	if e_active_n > 0:
+		var e_step := maxi(1, e_active_n / 120)
+		var e_mult := float(e_step)
+		var p_kill_list: Array[int] = []
+		var e_kill_list: Array[int] = []
+		var beam_budget := 10
+
+		for pi in near_p:
+			var p_pos := pos_arr[pi]
+			var best_ej := -1
+			var best_d := UNIT_BEAM_RANGE
+			for _probe_k in range(mini(12, e_active_n)):
+				var cand_j := (pi * 7 + _probe_k * e_step) % e_active_n
+				var d := p_pos.distance_to(e_pos_arr[cand_j])
+				if d < best_d:
+					best_d = d
+					best_ej = cand_j
+			if best_ej >= 0:
+				# Both units exchange laser beams!
+				e_hp_arr[best_ej] -= base_shot_dmg * p_mult
+				hp_arr[pi] -= base_shot_dmg * e_mult
+				if beam_budget > 0:
+					beam_budget -= 1
+					tracers.append({"a": p_pos, "b": e_pos_arr[best_ej], "c": Color(0.38, 0.96, 1.0, 0.92), "life": 0.20})
+					tracers.append({"a": e_pos_arr[best_ej], "b": p_pos, "c": Color(1.0, 0.24, 0.34, 0.92), "life": 0.20})
+				if e_hp_arr[best_ej] <= 0.0 and not (best_ej in e_kill_list):
+					e_kill_list.append(best_ej)
+				if hp_arr[pi] <= 0.0 and not (pi in p_kill_list):
+					p_kill_list.append(pi)
+
+		e_kill_list.sort()
+		for k in range(e_kill_list.size() - 1, -1, -1):
+			var ej := e_kill_list[k]
+			if ej < e_active_n:
+				if planet and randf() < 0.35:
+					planet.spawn_sparks(e_pos_arr[ej], Color(1.0, 0.32, 0.26), 5)
+				_remove_enemy_ship(ej)
+
+		p_kill_list.sort()
+		for k in range(p_kill_list.size() - 1, -1, -1):
+			var pi := p_kill_list[k]
+			if pi < active_n:
+				if planet and randf() < 0.35:
+					planet.spawn_sparks(pos_arr[pi], Color(0.42, 0.96, 1.0), 5)
+				_remove_player_ship(pi)
+
+	# B) Arrived Player Swarm Units Attack ASTRA-V Surface Enemy Factories, Mass Drivers, and Orbital Core!
+	if planet and (not State.astra_liberated or not State.boss_dead):
+		var fac_beam_budget := 6
+		for pi in near_p:
+			if pi >= active_n: continue
+			var p_pos := pos_arr[pi]
+			var best_bi := -1
+			var best_fd := UNIT_BEAM_RANGE * 1.45
+			for bi in range(planet.astra_bastions.size()):
+				var bst: Dictionary = planet.astra_bastions[bi]
+				if not bool(bst["alive"]): continue
+				var f_pos := astra_off + Vector2(bst["local_pos"])
+				var fd := p_pos.distance_to(f_pos)
+				if fd < best_fd:
+					best_fd = fd
+					best_bi = bi
+			if best_bi >= 0:
+				var bst_t: Dictionary = planet.astra_bastions[best_bi]
+				var f_pos_t := astra_off + Vector2(bst_t["local_pos"])
+				planet.damage_astra_facility(best_bi, base_shot_dmg * p_mult * 0.55)
+				if fac_beam_budget > 0:
+					fac_beam_budget -= 1
+					tracers.append({"a": p_pos, "b": f_pos_t, "c": Color(1.0, 0.86, 0.34, 0.94), "life": 0.22})
+			elif not State.boss_dead and p_pos.distance_to(boss_pos) <= UNIT_BEAM_RANGE * 1.6:
+				damage_boss(base_shot_dmg * p_mult * 0.50)
+				if fac_beam_budget > 0:
+					fac_beam_budget -= 1
+					tracers.append({"a": p_pos, "b": boss_pos + Vector2(randf_range(-45, 45), randf_range(-45, 45)), "c": Color(1.0, 0.86, 0.34, 0.94), "life": 0.22})
 
 func _draw() -> void:
 	var glow := ArtReg.get_t("glow")
@@ -332,6 +597,11 @@ func _draw() -> void:
 		var rf := clampf(float(rd["hp"]) / maxf(1.0, float(rd.get("max_hp", 65.0))), 0.0, 1.0)
 		draw_rect(Rect2(rp.x - 16, rp.y - 24, 32, 4), Color(0.08, 0.08, 0.12, 0.92))
 		draw_rect(Rect2(rp.x - 16, rp.y - 24, 32 * rf, 4), Color(1.0, 0.30, 0.36))
+	for etr in enemy_launch_trails:
+		var ep_t: Vector2 = etr["pos"]
+		var ev_t: Vector2 = etr["vel"].normalized()
+		draw_line(ep_t, ep_t - ev_t * 48.0, Color(1.0, 0.24, 0.34, 0.88), 3.4)
+		draw_circle(ep_t, 5.0, Color(1.0, 0.72, 0.28))
 	for tr in tracers:
 		draw_line(tr["a"], tr["b"], tr["c"], 2.8)
 		draw_line(tr["a"], tr["b"], Color(1.0, 0.98, 0.86, 0.9), 1.0)

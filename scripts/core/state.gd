@@ -10,9 +10,10 @@ signal craft_completed(kind: String, id: String)
 signal stock_changed(id: String, amt: int)
 signal log_added(msg: String, kind: String)
 
-enum Doctrine { HARVEST, REPLICATE, DEFEND, ASSAULT }
+enum Doctrine { HARVEST, DEFEND, ASSAULT }
 
 const SWARM_MAX: int = 10000
+const ENEMY_SWARM_MAX: int = 5000
 const RESEARCH_POINT_GOAL: int = 1000
 const MAX_DRONES: int = 8
 const DRONE_COST: Dictionary = {"fe": 10, "cu": 6}
@@ -70,19 +71,18 @@ const PRINTER_RECIPE: Dictionary = {
 }
 
 const ORB_STATION_RECIPES: Dictionary = {
-	"quantum_core": {"in": {"si": 2, "cu": 2},             "out": "quantum_core", "qty": 1,  "time": 2.8},
-	"dyson_panel":  {"in": {"fe": 2, "si": 2},             "out": "dyson_panel",  "qty": 1,  "time": 3.0},
-	"antimatter":   {"in": {"quantum_core": 1, "fe": 2},   "out": "antimatter",   "qty": 1,  "time": 3.2},
-	"probe_stock":  {"in": {"fe": 2, "quantum_core": 1},   "out": "probe_stock",  "qty": 6,  "time": 3.0},
-	"sci_pack":     {"in": {"quantum_core": 1, "ti": 1},   "out": "sci_pack",     "qty": 60, "time": 2.8},
+	"quantum_core": {"in": {"si": 2, "cu": 2},                           "out": "quantum_core", "qty": 1,  "time": 2.8},
+	"dyson_panel":  {"in": {"fe": 2, "si": 2},                           "out": "dyson_panel",  "qty": 1,  "time": 3.0},
+	"antimatter":   {"in": {"quantum_core": 1, "fe": 2},                 "out": "antimatter",   "qty": 1,  "time": 3.2},
+	"probe_stock":  {"in": {"alloy": 1, "plasma_cell": 1, "cryo_rod": 1},"out": "probe_stock",  "qty": 2,  "time": 3.0},
+	"sci_pack":     {"in": {"quantum_core": 1, "ti": 1},                 "out": "sci_pack",     "qty": 60, "time": 2.8},
 }
 
-const DOCTRINE_NAMES: Array[String] = ["収穫", "複製", "防衛", "強襲"]
+const DOCTRINE_NAMES: Array[String] = ["周回採掘", "惑星防衛", "敵星侵攻"]
 const DOCTRINE_DESCS: Array[String] = [
-	"軌道上の小惑星から自動で鉱石を回収します。",
-	"艦隊が自己複製し、時間経過で機体数を増やします。",
-	"各惑星の汚染やマップ外から襲来する敵機を自動迎撃します。",
-	"最外周の敵拠点惑星アストラ-Vおよび軌道要塞を制圧攻撃します。",
+	"軌道上を周回しながら小惑星から自動で鉱石を回収します。",
+	"各惑星の汚染やマップ外から襲来する敵探査機を自動迎撃します。",
+	"軌道遷移ルートで敵本拠地アストラ-Vへ侵攻し、敵スウォーム・敵工場・敵マスドライバーとビーム交戦します。",
 ]
 
 var res: Dictionary = {}
@@ -101,13 +101,17 @@ var ion_bat: float = 100.0
 var max_ion_bat: float = 100.0
 
 var swarm_fleet: int = 0
+var enemy_swarm_fleet: int = 120
+var enemy_printers_left: int = 4
+var enemy_drivers_left: int = 4
+var enemy_launch_slow_t: float = 0.0
 var total_launches: int = 0
 var doctrine: int = Doctrine.HARVEST
-var boss_hp: float = 3500.0
-var boss_max_hp: float = 3500.0
+var boss_hp: float = 8000.0
+var boss_max_hp: float = 8000.0
 var boss_dead: bool = false
 var astra_liberated: bool = false
-var astra_bastions_left: int = 6
+var astra_bastions_left: int = 8
 var game_won: bool = false
 
 # 惑星ごとの環境汚染度（初期惑星 terra は常に 0、他惑星で工場稼働すると上昇→敵襲撃を誘発！）
@@ -230,13 +234,13 @@ const TECHS: Dictionary = {
 	},
 	"macro_swarm": {
 		"name": "マクロ艦隊量産", "col": 4, "row": 1, "req": ["deep_space"],
-		"cost": {"plate_fe": 12, "circuit": 8, "ti": 8},
+		"cost": {"alloy": 6, "circuit": 8, "plasma_cell": 4, "cryo_rod": 4},
 		"icon": "mass_driver",
 		"unlocks": ["3Dプリンタ", "マスドライバー", "旗艦ドライブ"],
 		"unlock_keys": ["gantry_printer", "mass_driver", "probe_stock"],
 		"flow_keys": ["gantry_printer", "mass_driver", "probe_stock"],
-		"summary": "艦隊を連続射出し、最外周の敵拠点惑星アストラ-Vを強襲制圧！",
-		"flow": "3Dプリンタ → 射出機 → 艦隊強襲でアストラ-V解放",
+		"summary": "4惑星（テラ・ルナ・イグニス・クライオ）の素材を結集し艦隊量産＆アストラ-Vへ侵攻！",
+		"flow": "4惑星素材 → 3Dプリンタ → 搬送 → マスドライバー → 艦隊射出",
 	},
 	"megastructures": {
 		"name": "巨大構造物", "col": 5, "row": 1, "req": ["macro_swarm"],
@@ -278,7 +282,7 @@ const BLD: Dictionary = {
 	"geothermal": {
 		"name": "地熱発電所", "short": "地熱", "tex": "geothermal", "req": "circuits_geo",
 		"cost": {"plate_fe": 8, "wire_cu": 6, "si": 6}, "craft_time": 4.5, "gen": 135.0, "use": 0.0, "w": 78, "h": 74, "hp": 180.0,
-		"desc": "昼夜を問わず135Wを安定発電する大型発電機。",
+		"desc": "設置後に地殻マントルまでパイプを掘削し、到達後に常時135Wを安定発電。",
 	},
 	"turret": {
 		"name": "レーザー砲台", "short": "砲台", "tex": "turret", "req": "circuits_geo",
@@ -317,13 +321,13 @@ const BLD: Dictionary = {
 	},
 	"gantry_printer": {
 		"name": "マクロ3Dプリンタ", "short": "3D印刷", "tex": "gantry_printer", "req": "macro_swarm",
-		"cost": {"plate_fe": 14, "circuit": 6, "ti": 6}, "craft_time": 5.0, "gen": 0.0, "use": 34.0, "w": 134, "h": 96, "hp": 220.0,
-		"desc": "鉄板×2＋回路×1からプローブを連続造形(34W)。",
+		"cost": {"alloy": 8, "circuit": 6, "plasma_cell": 4, "cryo_rod": 4}, "craft_time": 5.0, "gen": 0.0, "use": 34.0, "w": 134, "h": 96, "hp": 220.0,
+		"desc": "【4惑星素材結集】搬入された鉄板×2＋回路×1からプローブを1機ずつ造形(34W)。",
 	},
 	"mass_driver": {
 		"name": "マスドライバー", "short": "射出機", "tex": "mass_driver", "req": "macro_swarm",
-		"cost": {"plate_fe": 16, "wire_cu": 10, "circuit": 6, "ti": 6}, "craft_time": 5.5, "gen": 0.0, "use": 30.0, "w": 134, "h": 112, "hp": 240.0,
-		"desc": "プローブを宇宙へ射出し10,000機艦隊を編成(30W)。",
+		"cost": {"alloy": 10, "wire_cu": 10, "plasma_cell": 4, "cryo_rod": 6}, "craft_time": 5.5, "gen": 0.0, "use": 30.0, "w": 134, "h": 112, "hp": 240.0,
+		"desc": "【4惑星素材結集】搬入されたプローブを1機ずつ宇宙軌道へ射出し艦隊を編成(30W)。",
 	},
 	"orb_power": {
 		"name": "軌道発電衛星", "short": "軌道送電", "tex": "orb_power", "req": "smelting_booster",
@@ -352,9 +356,9 @@ const BLD: Dictionary = {
 }
 
 const MEGAS: Dictionary = {
-	"elevator": {"name": "軌道エレベーター", "cost": {"plate_fe": 16, "wire_cu": 12, "alloy": 4}, "fleet": 400, "sci": 150, "desc": "艦隊+400機 ＆ 研究ポイント+150"},
+	"elevator": {"name": "軌道エレベーター", "cost": {"plate_fe": 16, "wire_cu": 12, "alloy": 4}, "fleet": 0, "sci": 150, "desc": "常時+120W送電 ＆ 研究ポイント+150"},
 	"dyson":    {"name": "ダイソンリング",   "cost": {"wafer_si": 12, "circuit": 8, "dyson_panel": 2}, "fleet": 0, "sci": 250, "desc": "常時+240W送電 ＆ 研究ポイント+250"},
-	"citadel":  {"name": "軌道要塞シタデル", "cost": {"alloy": 8, "circuit": 10, "plasma_cell": 2}, "fleet": 800, "sci": 250, "desc": "艦隊+800機 ＆ 研究ポイント+250"},
+	"citadel":  {"name": "軌道要塞シタデル", "cost": {"alloy": 8, "circuit": 10, "plasma_cell": 2}, "fleet": 0, "sci": 250, "desc": "艦隊ビーム火力+50% ＆ 研究ポイント+250"},
 	"warpgate": {"name": "スターワープゲート", "cost": {"alloy": 10, "quantum_core": 2, "antimatter": 1}, "fleet": 0, "sci": 400, "desc": "研究ポイント+400 ＆ 星系完全解放！"},
 }
 
@@ -403,13 +407,13 @@ const ITEM_TREE_NODES: Array[Dictionary] = [
 	{"id": "cryo_rod",    "kind": "res", "col": 4, "row": 6, "name": "超伝導ロッド",  "icon": "cryo_rod",    "cost": {"ice": 2, "wafer_si": 1},       "sub": "永久氷晶×2 基板×1",   "recipe": "自動組立機で製造（永久氷晶×2 + 基板×1 → 超伝導ロッド×1）"},
 
 	# Col 5: 高度製造施設（軌道回収・軌道クラフト局・3Dプリンタ・マスドライバー）(4種)
-	{"id": "gantry_printer", "kind": "fac", "col": 5, "row": 0, "name": "3Dプリンタ",      "icon": "gantry_printer", "cost": {"plate_fe": 14, "circuit": 6, "ti": 6},              "sub": "鉄板×14 回路×6 チタン×6",         "recipe": "鉄板×2 + 回路×1 からプローブを連続造形(34W)"},
-	{"id": "mass_driver",    "kind": "fac", "col": 5, "row": 2, "name": "マスドライバー",  "icon": "mass_driver",    "cost": {"plate_fe": 16, "wire_cu": 10, "circuit": 6, "ti": 6},"sub": "鉄板×16 銅線×10 回路×6 チタン×6","recipe": "プローブを宇宙へ射出し艦隊を編成(30W)"},
-	{"id": "orb_collector",  "kind": "fac", "col": 5, "row": 4, "name": "軌道回収モジュール","icon": "orb_collector","cost": {"plate_fe": 8, "circuit": 4, "ti": 6},               "sub": "鉄板×8 回路×4 チタン×6",          "recipe": "軌道採掘で浮上した資源パケットを磁気回収し軌道クラフト局へ転送"},
-	{"id": "orb_station",    "kind": "fac", "col": 5, "row": 6, "name": "軌道クラフト局",  "icon": "orb_station",    "cost": {"plate_fe": 12, "circuit": 6, "alloy": 4},           "sub": "鉄板×12 回路×6 チタン合金×4",     "recipe": "軌道上で量子コア・ダイソン板・反物質コア・研究ポイントを製造"},
+	{"id": "gantry_printer", "kind": "fac", "col": 5, "row": 0, "name": "3Dプリンタ",        "icon": "gantry_printer", "cost": {"alloy": 8, "circuit": 6, "plasma_cell": 4, "cryo_rod": 4},  "sub": "チタン合金×8 回路×6 プラズマセル×4 超伝導ロッド×4", "recipe": "【4惑星素材結集】搬入された鉄板×2 + 回路×1 からプローブを1機ずつ造形(34W)"},
+	{"id": "mass_driver",    "kind": "fac", "col": 5, "row": 2, "name": "マスドライバー",    "icon": "mass_driver",    "cost": {"alloy": 10, "wire_cu": 10, "plasma_cell": 4, "cryo_rod": 6},"sub": "チタン合金×10 銅線×10 プラズマセル×4 超伝導ロッド×6","recipe": "【4惑星素材結集】搬入されたプローブを1機ずつ宇宙軌道へ射出し艦隊を編成(30W)"},
+	{"id": "orb_collector",  "kind": "fac", "col": 5, "row": 4, "name": "軌道回収モジュール","icon": "orb_collector",  "cost": {"plate_fe": 8, "circuit": 4, "ti": 6},                       "sub": "鉄板×8 回路×4 チタン×6",                          "recipe": "軌道採掘で浮上した資源パケットを磁気回収し軌道クラフト局へ転送"},
+	{"id": "orb_station",    "kind": "fac", "col": 5, "row": 6, "name": "軌道クラフト局",    "icon": "orb_station",    "cost": {"plate_fe": 12, "circuit": 6, "alloy": 4},                   "sub": "鉄板×12 回路×6 チタン合金×4",                     "recipe": "軌道上で量子コア・ダイソン板・反物質コア・研究ポイントを製造"},
 
 	# Col 6: 最終完成アイテム＆クリア目標「研究ポイント」(5種)
-	{"id": "probe_stock",  "kind": "res", "col": 6, "row": 0, "name": "プローブ艦隊",  "icon": "probe_stock",  "cost": {"plate_fe": 2, "circuit": 1},         "sub": "鉄板×2 回路×1",           "recipe": "3Dプリンタまたは軌道クラフト局で製造 → マスドライバーで艦隊射出"},
+	{"id": "probe_stock",  "kind": "res", "col": 6, "row": 0, "name": "プローブ艦隊",  "icon": "probe_stock",  "cost": {"plate_fe": 2, "circuit": 1},         "sub": "鉄板×2 回路×1",           "recipe": "3Dプリンタで製造 → コンベアでマスドライバーへ搬送して1機ずつ軌道射出"},
 	{"id": "sci_pack",     "kind": "res", "col": 6, "row": 1, "name": "研究ポイント",  "icon": "sci_pack",     "cost": {"plate_fe": 1, "circuit": 1},         "sub": "1,000pt達成でクリア！",     "recipe": "自動組立機(鉄板×1+回路×1→+20pt) / 軌道クラフト局(量子コア×1+チタン×1→+60pt)"},
 	{"id": "quantum_core", "kind": "res", "col": 6, "row": 3, "name": "量子コア",      "icon": "quantum_core", "cost": {"si": 2, "cu": 2},                    "sub": "ケイ素×2 銅×2",           "recipe": "軌道クラフト局で製造（ケイ素×2 + 銅×2 → 量子コア×1）"},
 	{"id": "dyson_panel",  "kind": "res", "col": 6, "row": 5, "name": "ダイソン板",    "icon": "dyson_panel",  "cost": {"fe": 2, "si": 2},                    "sub": "鉄×2 ケイ素×2",           "recipe": "軌道クラフト局で製造（鉄×2 + ケイ素×2 → ダイソン板×1）"},
@@ -445,8 +449,8 @@ const ITEM_UPSTREAM_PARENTS: Dictionary = {
 	"orb_laser": ["plate_fe", "wire_cu", "wafer_si", "ti"],
 	"orb_collector": ["plate_fe", "circuit", "ti", "orb_laser"],
 	"orb_station": ["plate_fe", "circuit", "alloy", "orb_collector"],
-	"gantry_printer": ["plate_fe", "circuit", "ti"],
-	"mass_driver": ["plate_fe", "wire_cu", "circuit", "gantry_printer"],
+	"gantry_printer": ["alloy", "circuit", "plasma_cell", "cryo_rod"],
+	"mass_driver": ["alloy", "wire_cu", "plasma_cell", "cryo_rod", "gantry_printer"],
 }
 
 const ITEM_TREE_EDGES: Array[Array] = [
@@ -468,9 +472,10 @@ const ITEM_TREE_EDGES: Array[Array] = [
 	["assembler", "circuit"], ["assembler", "alloy"],
 	["assembler", "plasma_cell"], ["assembler", "cryo_rod"],
 	["assembler", "sci_pack"],
-	# 回路・合金 → 高度施設・軌道クラフト局
-	["circuit", "gantry_printer"], ["plate_fe", "gantry_printer"],
-	["circuit", "mass_driver"], ["circuit", "orb_collector"],
+	# 4惑星の加工素材（回路・チタン合金・プラズマセル・超伝導ロッド） → 3Dプリンタ・マスドライバー・軌道クラフト局
+	["circuit", "gantry_printer"], ["alloy", "gantry_printer"], ["plasma_cell", "gantry_printer"], ["cryo_rod", "gantry_printer"],
+	["alloy", "mass_driver"], ["plasma_cell", "mass_driver"], ["cryo_rod", "mass_driver"], ["wire_cu", "mass_driver"],
+	["circuit", "orb_collector"],
 	["alloy", "orb_station"], ["circuit", "orb_station"],
 	["alloy", "plasma_cell"], ["wafer_si", "cryo_rod"],
 	# 軌道採掘 → 軌道回収 → 軌道クラフト局
@@ -479,7 +484,7 @@ const ITEM_TREE_EDGES: Array[Array] = [
 	# 最終生産 → プローブ・研究ポイント・量子コア・ダイソン板・反物質コア
 	["gantry_printer", "probe_stock"], ["mass_driver", "probe_stock"],
 	["orb_station", "quantum_core"], ["orb_station", "dyson_panel"],
-	["orb_station", "antimatter"], ["orb_station", "sci_pack"], ["orb_station", "probe_stock"],
+	["orb_station", "antimatter"], ["orb_station", "sci_pack"],
 	["quantum_core", "antimatter"], ["quantum_core", "sci_pack"],
 ]
 
@@ -546,9 +551,10 @@ func reset_all() -> void:
 	max_hp = 100.0; hp = 100.0
 	max_fuel = float(PROPULSION_TIERS[0]["fuel"]); fuel = max_fuel
 	max_ion_bat = 100.0; ion_bat = 100.0
-	swarm_fleet = 0; total_launches = 0; doctrine = Doctrine.HARVEST
+	swarm_fleet = 0; enemy_swarm_fleet = 120; total_launches = 0; doctrine = Doctrine.HARVEST
+	enemy_printers_left = 4; enemy_drivers_left = 4; enemy_launch_slow_t = 0.0
 	boss_hp = boss_max_hp; boss_dead = false
-	astra_liberated = false; astra_bastions_left = 6
+	astra_liberated = false; astra_bastions_left = 8
 	game_won = false
 	planet_pollution = {"terra": 0.0, "luna": 0.0, "ignis": 0.0, "cryo": 0.0, "astra": 0.0}
 	pwr_prod = 0.0; pwr_use = 0.0; pwr_stored = 0.0; pwr_cap = 0.0; orb_power_bonus_w = 0.0

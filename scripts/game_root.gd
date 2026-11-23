@@ -337,9 +337,26 @@ func _run_tests() -> void:
 	State.add_pollution("luna", 22.0)
 	State.add_pollution("terra", 22.0)
 	_chk(State.get_pollution("luna") >= 20.0 and State.get_pollution("terra") == 0.0, "Starter planet terra must stay 0 pollution while luna accumulates pollution!")
-	_chk(not State.astra_liberated and State.astra_bastions_left == 6, "ASTRA-V must start fortified with 6 bastions!")
-	planet.damage_astra_bastions(1000.0)
-	_chk(State.astra_liberated and State.astra_bastions_left == 0, "Swarm fleet assault failed to liberate ASTRA-V!")
+	_chk(not State.astra_liberated and State.astra_bastions_left == 8 and State.enemy_printers_left == 4 and State.enemy_drivers_left == 4,
+		"ASTRA-V must start fortified with 4 enemy printers + 4 enemy mass drivers!")
+	_chk(planet.damage_astra_facility(1, 2000.0) and State.enemy_drivers_left == 3 and absf(State.enemy_launch_slow_t - 60.0) < 0.1,
+		"Destroying an ASTRA-V enemy mass driver must trigger a 60s (1-minute) launch slowdown!")
+	planet.damage_astra_bastions(2000.0)
+	_chk(State.astra_liberated and State.astra_bastions_left == 0 and State.enemy_printers_left == 0 and State.enemy_drivers_left == 0,
+		"Swarm fleet assault failed to liberate ASTRA-V!")
+
+	# 3h. Geothermal Crust Pipe Extension Animation (0W until pipe reaches crust, 135W after!)
+	_chk(_craft_and_finish("building", "geothermal"), "Craft Geothermal failed")
+	var geo_pos: Vector2 = planet.get_pose_at(SphericalPlanet.SPAWN_COL - 12, SphericalPlanet.ROWS - 2)["pos"]
+	_chk(grid.try_place_at("geothermal", geo_pos), "Place Geothermal failed")
+	var geo_b: Dictionary = grid.buildings[grid.buildings.size() - 1]
+	var geo_uid := int(geo_b["uid"])
+	_chk(float(geo_b.get("pipe_prog", 1.0)) < 0.05 and float(grid.get_building_snap(geo_uid)["gen"]) == 0.0,
+		"Geothermal must generate 0W while crust pipe is still extending!")
+	for _gp in range(60):
+		grid._process(0.2)
+	_chk(float(geo_b.get("pipe_prog", 0.0)) >= 1.0 and float(grid.get_building_snap(geo_uid)["gen"]) >= 134.0,
+		"Geothermal must generate 135W once crust pipe reaches mantle! prog=%.2f" % float(geo_b.get("pipe_prog", 0.0)))
 
 	# 3g. Red Self-Replicating Enemy Probe Sprite + Boids Non-Overlapping Separation Test!
 	_chk(ArtReg.get_t("enemy_probe") != null, "enemy_probe.png sprite texture missing!")
@@ -438,9 +455,39 @@ func _run_tests() -> void:
 	_chk(int(orbital.modules[2]["collected"]) >= 4 and State.get_r("quantum_core") >= 1,
 		"Orbital Collector -> Station pipeline failed! collected=%d qcore=%d" % [int(orbital.modules[2]["collected"]), State.get_r("quantum_core")])
 
-	# 6. Research Point (研究ポイント >= 1,000) Victory + Macro Swarm
+	# 6. 4-Planet Swarm Material Requirement + Strict Conveyor-Only Mass Driver (1 Launch = 1 Probe, No Replicate Doctrine, No Auto-Pull from Player Inv!)
+	_chk(State.DOCTRINE_NAMES.size() == 3 and not ("複製" in State.DOCTRINE_NAMES), "Replicate doctrine must be removed!")
+	for req_4p in ["alloy", "plasma_cell", "cryo_rod"]:
+		_chk(State.TECHS["macro_swarm"]["cost"].has(req_4p) and State.BLD["gantry_printer"]["cost"].has(req_4p) and State.BLD["mass_driver"]["cost"].has(req_4p),
+			"Swarm tech, 3D printer, and mass driver must require all non-stronghold planet materials (%s)!" % req_4p)
 	_chk(State.research("macro_swarm"), "Research macro_swarm failed")
 	_chk(State.research("megastructures"), "Research megastructures failed")
+	_chk(_craft_and_finish("building", "gantry_printer") and _craft_and_finish("building", "mass_driver"), "Craft 3D Printer & Mass Driver failed")
+	_chk(grid.try_place_at("gantry_printer", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 3, SphericalPlanet.ROWS - 2)["pos"]), "Place 3D Printer failed")
+	var prn_b: Dictionary = grid.buildings[grid.buildings.size() - 1]
+	_chk(grid.try_place_at("mass_driver", planet.get_pose_at(SphericalPlanet.SPAWN_COL - 9, SphericalPlanet.ROWS - 2)["pos"]), "Place Mass Driver failed")
+	var mdr_b: Dictionary = grid.buildings[grid.buildings.size() - 1]
+	State.add_r("probe_stock", 20)
+	var fleet_pre := State.swarm_fleet
+	var launches_pre := State.total_launches
+	for _np in range(30):
+		grid._process(0.1)
+	_chk(int(prn_b["out_buf"].get("probe_stock", 0)) == 0 and State.swarm_fleet == fleet_pre and State.total_launches == launches_pre,
+		"3D Printer and Mass Driver MUST NOT pull resources from player inventory without conveyor/manual input!")
+	# Now deliver 1 probe_stock into Mass Driver's in_buf -> must launch EXACTLY 1 ship!
+	mdr_b["in_buf"] = {"probe_stock": 1}
+	for _lp in range(25):
+		grid._process(0.1)
+	_chk(State.swarm_fleet == fleet_pre + 1 and State.total_launches == launches_pre + 1,
+		"Mass Driver must launch exactly 1 ship per 1 probe_stock in in_buf! fleet=%d (exp %d)" % [State.swarm_fleet, fleet_pre + 1])
+
+	# Verify slow orbital transfer invasion does NOT deal instant cross-system damage before ships arrive at ASTRA-V!
+	var boss_hp_before := State.boss_hp
+	State.doctrine = State.Doctrine.ASSAULT
+	swarm._process(0.5)
+	_chk(State.boss_hp == boss_hp_before and swarm.transfer_p[0] > 0.0 and swarm.transfer_p[0] < 0.2,
+		"ASSAULT must move ships slowly along orbital transfer curve without dealing instant cross-system hitscan damage!")
+
 	State.add_r("sci_pack", 1000)
 	_chk(State.game_won, "Reaching 1,000 Research Points (研究ポイント) must trigger game clear!")
 	swarm.spawn_raider_wave("luna", true)
