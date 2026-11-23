@@ -21,11 +21,12 @@ var tech_sel: int = 1
 var tech_detail_open: bool = false
 var item_tree_sel: String = "circuit"
 var item_tree_scroll: Vector2 = Vector2.ZERO
+var item_tree_zoom: float = 1.0
 var _tree_drag_pid: int = -999
 var _tree_drag_last: Vector2 = Vector2.ZERO
 var _tree_view_rect: Rect2 = Rect2()
 var _tree_max_scroll: Vector2 = Vector2(900.0, 260.0)
-var _tree_col_step: float = 270.0
+var _tree_col_step: float = 360.0
 var guide_tab: int = 0
 var depot_uid: int = -1
 var inspect_uid: int = -1
@@ -150,10 +151,27 @@ func _input(event: InputEvent) -> void:
 		touch_ui_active = true
 		_last_touch_ms = Time.get_ticks_msec()
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
-		if modal == Modal.ITEM_TREE and event.index == _tree_drag_pid:
-			_pan_item_tree(_tree_drag_last - p)
-			_tree_drag_last = p
-			get_viewport().set_input_as_handled()
+		if modal == Modal.ITEM_TREE:
+			if _pinch_pts.has(event.index):
+				_pinch_pts[event.index] = p
+				if _pinch_pts.size() >= 2:
+					var ks := _pinch_pts.keys()
+					var p0 := Vector2(_pinch_pts[ks[0]])
+					var p1 := Vector2(_pinch_pts[ks[1]])
+					var new_d: float = p0.distance_to(p1)
+					var mid_p: Vector2 = (p0 + p1) * 0.5
+					if _pinch_dist > 10.0 and new_d > 10.0:
+						_zoom_item_tree(new_d / _pinch_dist, mid_p)
+					_pinch_dist = new_d
+					_pinch_active = true
+					_tree_drag_pid = -999
+					get_viewport().set_input_as_handled()
+					return
+			if event.index == _tree_drag_pid and not _pinch_active:
+				_pan_item_tree(_tree_drag_last - p)
+				_tree_drag_last = p
+				get_viewport().set_input_as_handled()
+				return
 		elif event.index == joy_pid:
 			_upd_joy(p)
 			get_viewport().set_input_as_handled()
@@ -179,23 +197,23 @@ func _input(event: InputEvent) -> void:
 		var p: Vector2 = event.position / maxf(0.1, scale.x)
 		if modal == Modal.ITEM_TREE and event.pressed:
 			if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				if Input.is_key_pressed(KEY_SHIFT) or _tree_max_scroll.y <= 12.0:
-					_pan_item_tree(Vector2(130.0, 0.0))
+				if Input.is_key_pressed(KEY_SHIFT):
+					_pan_item_tree(Vector2(140.0, 0.0))
 				else:
-					_pan_item_tree(Vector2(75.0, 55.0))
+					_zoom_item_tree(1.0 / 1.14, p)
 				get_viewport().set_input_as_handled()
 				return
 			elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				if Input.is_key_pressed(KEY_SHIFT) or _tree_max_scroll.y <= 12.0:
-					_pan_item_tree(Vector2(-130.0, 0.0))
+				if Input.is_key_pressed(KEY_SHIFT):
+					_pan_item_tree(Vector2(-140.0, 0.0))
 				else:
-					_pan_item_tree(Vector2(-75.0, -55.0))
+					_zoom_item_tree(1.14, p)
 				get_viewport().set_input_as_handled()
 				return
 			elif event.button_index == MOUSE_BUTTON_WHEEL_RIGHT:
-				_pan_item_tree(Vector2(130.0, 0.0)); get_viewport().set_input_as_handled(); return
+				_pan_item_tree(Vector2(140.0, 0.0)); get_viewport().set_input_as_handled(); return
 			elif event.button_index == MOUSE_BUTTON_WHEEL_LEFT:
-				_pan_item_tree(Vector2(-130.0, 0.0)); get_viewport().set_input_as_handled(); return
+				_pan_item_tree(Vector2(-140.0, 0.0)); get_viewport().set_input_as_handled(); return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed: _on_down(-10, p, event.position)
 			else: _on_up(-10, event.position)
@@ -274,6 +292,15 @@ func _on_down(pid: int, pos: Vector2, raw_pos: Vector2) -> void:
 			brk_pid = pid; get_viewport().set_input_as_handled(); return
 
 	if modal == Modal.ITEM_TREE and _tree_view_rect.has_point(pos):
+		if pid >= 0:
+			_pinch_pts[pid] = pos
+			if _pinch_pts.size() >= 2:
+				var ks := _pinch_pts.keys()
+				_pinch_dist = Vector2(_pinch_pts[ks[0]]).distance_to(Vector2(_pinch_pts[ks[1]]))
+				_pinch_active = true
+				_tree_drag_pid = -999
+				get_viewport().set_input_as_handled()
+				return
 		_tree_drag_pid = pid
 		_tree_drag_last = pos
 
@@ -352,6 +379,20 @@ func _pan_item_tree(delta_s: Vector2) -> void:
 	item_tree_scroll.y = clampf(item_tree_scroll.y + delta_s.y, 0.0, maxf(0.0, _tree_max_scroll.y))
 	root_ctrl.queue_redraw()
 
+func _zoom_item_tree(factor: float, pivot: Vector2 = Vector2.ZERO) -> void:
+	var old_z := item_tree_zoom
+	var new_z := clampf(old_z * factor, 0.36, 1.65)
+	if absf(new_z - old_z) < 0.001:
+		return
+	var pv := pivot if _tree_view_rect.has_point(pivot) else _tree_view_rect.get_center()
+	var origin := Vector2(_tree_view_rect.position.x + 18.0, _tree_view_rect.position.y + 44.0)
+	var rel := pv - origin
+	item_tree_scroll = (item_tree_scroll + rel) * (new_z / old_z) - rel
+	item_tree_scroll.x = maxf(0.0, item_tree_scroll.x)
+	item_tree_scroll.y = maxf(0.0, item_tree_scroll.y)
+	item_tree_zoom = new_z
+	root_ctrl.queue_redraw()
+
 func _exec(h: Dictionary) -> void:
 	var act := String(h["a"])
 	match act:
@@ -395,6 +436,9 @@ func _exec(h: Dictionary) -> void:
 		"tree_jump_col":
 			var target_col := float(h["v"])
 			item_tree_scroll.x = clampf(target_col * _tree_col_step, 0.0, maxf(0.0, _tree_max_scroll.x))
+			Sfx.play("click")
+		"tree_zoom_step":
+			_zoom_item_tree(float(h["v"]), _tree_view_rect.get_center())
 			Sfx.play("click")
 		"close":
 			modal = Modal.NONE; tech_detail_open = false; redrop_armed = false; Sfx.play("click")
@@ -1306,43 +1350,43 @@ func _draw_clipped_vline(x: float, y1: float, y2: float, clip_r: Rect2, col: Col
 
 func _draw_routed_tree_edge(
 	ru: Rect2, rv: Rect2, c_u: int, r_u: int, c_v: int, r_v: int,
-	row0_y: float, row_step: float, card_h: float,
+	row0_y: float, row_step: float, card_h: float, z: float,
 	clip_r: Rect2, col: Color, width: float, draw_endpoints: bool
 ) -> void:
-	var y_off_u := clampf(float(r_v - r_u) * 4.0, -16.0, 16.0)
-	var y_off_v := clampf(float(r_u - r_v) * 4.0, -16.0, 16.0)
+	var y_off_u := clampf(float(r_v - r_u) * 4.0 * z, -16.0 * z, 16.0 * z)
+	var y_off_v := clampf(float(r_u - r_v) * 4.0 * z, -16.0 * z, 16.0 * z)
 	var lane := (r_u * 3 + r_v * 5 + c_u * 2) % 7
+	var ar_w := maxf(6.0, 10.0 * z)
+	var ar_h := maxf(3.5, 5.5 * z)
+	var pt_r := maxf(2.4, 4.0 * z)
 	if c_v == c_u:
-		# 同一列内の接続（例: Col 6 量子コア → 研究ポイント/反物質コア）は左側の広い160px空白レーンを通す
 		var p1_l := Vector2(ru.position.x, ru.get_center().y + y_off_u)
 		var p2_l := Vector2(rv.position.x, rv.get_center().y + y_off_v)
-		var x_left := ru.position.x - 28.0 - float(lane % 4) * 14.0
+		var x_left := ru.position.x - (24.0 + float(lane % 4) * 12.0) * z
 		_draw_clipped_hline(p1_l.x, x_left, p1_l.y, clip_r, col, width)
 		_draw_clipped_vline(x_left, p1_l.y, p2_l.y, clip_r, col, width)
 		_draw_clipped_hline(x_left, p2_l.x, p2_l.y, clip_r, col, width)
 		if draw_endpoints:
 			if clip_r.has_point(p1_l):
-				root_ctrl.draw_circle(p1_l, 4.0, col)
-			if clip_r.has_point(p2_l) and p2_l.x - 10.0 >= clip_r.position.x:
-				root_ctrl.draw_polygon(PackedVector2Array([p2_l, p2_l + Vector2(-10, -5.5), p2_l + Vector2(-10, 5.5)]), PackedColorArray([col]))
+				root_ctrl.draw_circle(p1_l, pt_r, col)
+			if clip_r.has_point(p2_l) and p2_l.x - ar_w >= clip_r.position.x:
+				root_ctrl.draw_polygon(PackedVector2Array([p2_l, p2_l + Vector2(-ar_w, -ar_h), p2_l + Vector2(-ar_w, ar_h)]), PackedColorArray([col]))
 		return
 
 	var p1 := Vector2(ru.end.x, ru.get_center().y + y_off_u)
 	var p2 := Vector2(rv.position.x, rv.get_center().y + y_off_v)
 
 	if c_v == c_u + 1:
-		# 隣接列への接続：列間スペース（116〜156px）の中央に分散して配線
-		var gap_w := maxf(60.0, p2.x - p1.x)
+		var gap_w := maxf(30.0 * z, p2.x - p1.x)
 		var mid_x := p1.x + gap_w * 0.24 + float(lane) * (gap_w * 0.085)
 		_draw_clipped_hline(p1.x, mid_x, p1.y, clip_r, col, width)
 		_draw_clipped_vline(mid_x, p1.y, p2.y, clip_r, col, width)
 		_draw_clipped_hline(mid_x, p2.x, p2.y, clip_r, col, width)
 	else:
-		# 2列以上離れた列への接続：途中のカードの上や裏を絶対に横切らないよう、行と行の間の56px空白通路（corridor_y）を通す！
-		var x1 := p1.x + 18.0 + float(lane % 4) * 10.0
-		var x2 := p2.x - 20.0 - float((lane + 2) % 4) * 10.0
+		var x1 := p1.x + (18.0 + float(lane % 4) * 10.0) * z
+		var x2 := p2.x - (20.0 + float((lane + 2) % 4) * 10.0) * z
 		var gap_row := clampi(mini(r_u, r_v) if r_u != r_v else r_u, 0, 5)
-		var corridor_y := row0_y + float(gap_row) * row_step + card_h + 14.0 + float(lane % 3) * 13.0
+		var corridor_y := row0_y + float(gap_row) * row_step + card_h + (14.0 + float(lane % 3) * 13.0) * z
 		_draw_clipped_hline(p1.x, x1, p1.y, clip_r, col, width)
 		_draw_clipped_vline(x1, p1.y, corridor_y, clip_r, col, width)
 		_draw_clipped_hline(x1, x2, corridor_y, clip_r, col, width)
@@ -1351,18 +1395,20 @@ func _draw_routed_tree_edge(
 
 	if draw_endpoints:
 		if clip_r.has_point(p1):
-			root_ctrl.draw_circle(p1, 4.0, col)
-		if clip_r.has_point(p2) and p2.x - 10.0 >= clip_r.position.x:
-			root_ctrl.draw_polygon(PackedVector2Array([p2, p2 + Vector2(-10, -5.5), p2 + Vector2(-10, 5.5)]), PackedColorArray([col]))
+			root_ctrl.draw_circle(p1, pt_r, col)
+		if clip_r.has_point(p2) and p2.x - ar_w >= clip_r.position.x:
+			root_ctrl.draw_polygon(PackedVector2Array([p2, p2 + Vector2(-ar_w, -ar_h), p2 + Vector2(-ar_w, ar_h)]), PackedColorArray([col]))
 
 func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	var mw := minf(vp.x - 12.0, 1140.0)
-	var mh := minf(vp.y - 36.0, 810.0) if portrait else minf(vp.y - 20.0, 690.0)
+	var mh := minf(vp.y - 28.0, 830.0) if portrait else minf(vp.y - 20.0, 700.0)
 	var r := Rect2((vp.x - mw) * 0.5, (vp.y - mh) * 0.5, mw, mh)
 	_panel(r, Color(0.03, 0.05, 0.10, 0.98), Color(0.40, 0.96, 0.84), 2.2)
 
-	var title_txt := "レシピ図（ドラッグでスクロール／タップで経路）" if portrait else "アイテム＆施設レシピ図（ドラッグ・ボタンでスクロール／カードタップで経路表示）"
-	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 27), title_txt, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 196), 13 if portrait else 15, Color(0.48, 1.0, 0.86))
+	var z := clampf(item_tree_zoom, 0.36, 1.65)
+	var z_pct := int(round(z * 100.0))
+	var title_txt := ("レシピ図 [%d%%]（ピンチ拡大縮小／ドラッグ移動）" % z_pct) if portrait else ("アイテム＆施設レシピ図 [%d%%]（ピンチ・ホイールで拡大縮小／ドラッグ移動／タップで詳細）" % z_pct)
+	root_ctrl.draw_string(font, Vector2(r.position.x + 14, r.position.y + 27), title_txt, HORIZONTAL_ALIGNMENT_LEFT, int(mw - 196), 12 if portrait else 15, Color(0.48, 1.0, 0.86))
 	var gb := Rect2(r.end.x - 182, r.position.y + 7, 98, 28)
 	_panel(gb, Color(0.08, 0.20, 0.30, 0.95), Color(0.42, 0.90, 1.0), 1.5)
 	root_ctrl.draw_string(font, Vector2(gb.position.x, gb.position.y + 19), "操作ガイド", HORIZONTAL_ALIGNMENT_CENTER, gb.size.x, 12, Color.WHITE)
@@ -1373,33 +1419,35 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	root_ctrl.draw_string(font, Vector2(cr.position.x, cr.position.y + 19), "閉じる", HORIZONTAL_ALIGNMENT_CENTER, cr.size.x, 12, Color.WHITE)
 	_add_hit(cr, "close")
 
-	# ステージジャンプ＆スクロール操作バー（モバイル縦画面でも大きく押しやすい5ボタン構成）
+	# ステージジャンプ＆スクロール＆ズーム操作バー
 	var nav_y := r.position.y + 40.0
 	var nav_items: Array[Dictionary] = []
 	if portrait:
 		nav_items = [
-			{"lbl": "◀ 左", "a": "tree_pan_x", "v": -1.0, "w": 64.0},
-			{"lbl": "1.原石・精錬", "a": "tree_jump_col", "v": 0.0, "w": 104.0},
-			{"lbl": "2.素材・組立", "a": "tree_jump_col", "v": 2.0, "w": 104.0},
-			{"lbl": "3.回路・研究pt", "a": "tree_jump_col", "v": 4.0, "w": 112.0},
-			{"lbl": "右 ▶", "a": "tree_pan_x", "v": 1.0, "w": 64.0},
+			{"lbl": "◀左", "a": "tree_pan_x", "v": -1.0, "w": 52.0},
+			{"lbl": "1.原石・精錬", "a": "tree_jump_col", "v": 0.0, "w": 92.0},
+			{"lbl": "2.素材・組立", "a": "tree_jump_col", "v": 2.0, "w": 92.0},
+			{"lbl": "3.回路・研究pt", "a": "tree_jump_col", "v": 4.0, "w": 100.0},
+			{"lbl": "右▶", "a": "tree_pan_x", "v": 1.0, "w": 52.0},
+			{"lbl": "－", "a": "tree_zoom_step", "v": 0.82, "w": 38.0},
+			{"lbl": "＋", "a": "tree_zoom_step", "v": 1.22, "w": 38.0},
 		]
 	else:
 		nav_items = [
-			{"lbl": "◀ 左へ", "a": "tree_pan_x", "v": -1.0, "w": 84.0},
-			{"lbl": "1. 原石 → 精錬・素材", "a": "tree_jump_col", "v": 0.0, "w": 168.0},
-			{"lbl": "2. 組立機 → 回路・合金", "a": "tree_jump_col", "v": 2.0, "w": 176.0},
-			{"lbl": "3. 軌道・艦隊 → 研究pt", "a": "tree_jump_col", "v": 4.0, "w": 180.0},
-			{"lbl": "右へ ▶", "a": "tree_pan_x", "v": 1.0, "w": 84.0},
-			{"lbl": "▲ 上", "a": "tree_pan_y", "v": -150.0, "w": 68.0},
-			{"lbl": "▼ 下", "a": "tree_pan_y", "v": 150.0, "w": 68.0},
+			{"lbl": "◀ 左へ", "a": "tree_pan_x", "v": -1.0, "w": 78.0},
+			{"lbl": "1. 原石 → 精錬・素材", "a": "tree_jump_col", "v": 0.0, "w": 156.0},
+			{"lbl": "2. 組立機 → 回路・合金", "a": "tree_jump_col", "v": 2.0, "w": 164.0},
+			{"lbl": "3. 軌道・艦隊 → 研究pt", "a": "tree_jump_col", "v": 4.0, "w": 168.0},
+			{"lbl": "右へ ▶", "a": "tree_pan_x", "v": 1.0, "w": 78.0},
+			{"lbl": "－縮小", "a": "tree_zoom_step", "v": 0.82, "w": 64.0},
+			{"lbl": "＋拡大", "a": "tree_zoom_step", "v": 1.22, "w": 64.0},
 		]
 	var nx := r.position.x + 12.0
 	var avail_nav_w := mw - 24.0
 	var base_nav_w := 0.0
 	for ni_b in nav_items:
 		base_nav_w += float(ni_b["w"])
-	base_nav_w += float(nav_items.size() - 1) * 5.0
+	base_nav_w += float(nav_items.size() - 1) * 4.0
 	var nav_scale := avail_nav_w / maxf(1.0, base_nav_w)
 	for ni in nav_items:
 		var bw_n := float(ni["w"]) * nav_scale
@@ -1408,10 +1456,10 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		_panel(nr_btn, Color(0.08, 0.22, 0.32, 0.95) if is_jmp else Color(0.10, 0.16, 0.26, 0.95), Color(0.42, 0.94, 1.0) if is_jmp else Color(0.56, 0.76, 0.96), 1.4)
 		root_ctrl.draw_string(font, Vector2(nr_btn.position.x, nr_btn.position.y + 19), String(ni["lbl"]), HORIZONTAL_ALIGNMENT_CENTER, bw_n, 11 if portrait else 12, Color.WHITE)
 		_add_hit(nr_btn, String(ni["a"]), ni["v"])
-		nx += bw_n + 5.0 * nav_scale
+		nx += bw_n + 4.0 * nav_scale
 
-	# スクロール可能なツリー表示ビューポート領域
-	var detail_h := 94.0
+	# スクロール＆ピンチズーム可能なツリー表示ビューポート領域
+	var detail_h := 124.0
 	var vx := r.position.x + 12.0
 	var vy := r.position.y + 74.0
 	var vw := mw - 24.0
@@ -1419,28 +1467,29 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 	_tree_view_rect = Rect2(vx, vy, vw, vh)
 	root_ctrl.draw_rect(_tree_view_rect, Color(0.02, 0.04, 0.08, 0.96))
 
-	# モバイル縦画面では2列＋広い中央配線レーン(118px)が一切見切れずにピッタリ収まり、PCでは3列＋広間隔(156px)でゆったり表示！
-	var card_w := 156.0 if portrait else 172.0
-	var card_h := 66.0 if portrait else 68.0
-	var col_gap := 118.0 if portrait else 156.0
-	var row_gap := 54.0 if portrait else 58.0
+	# 広いカード領域（246×88 px 基準 × ピンチズーム倍率 z）でフルネーム＆ドット絵素材アイコンを表示！
+	var card_w := 246.0 * z
+	var card_h := 88.0 * z
+	var col_gap := 132.0 * z
+	var row_gap := 54.0 * z
 	var col_step := card_w + col_gap
 	_tree_col_step = col_step
 	var row_step := card_h + row_gap
 	var header_h := 30.0
-	var pad_l := 16.0 if portrait else 22.0
-	var pad_t := 16.0 if portrait else 18.0
+	var pad_l := 18.0 * z
+	var pad_t := 16.0 * z
 
-	var content_w := pad_l * 2.0 + 7.0 * col_step - col_gap + 24.0
-	var content_h := header_h + pad_t * 2.0 + 7.0 * row_step - row_gap + 24.0
+	var content_w := pad_l * 2.0 + 7.0 * col_step - col_gap + 24.0 * z
+	var content_h := header_h + pad_t * 2.0 + 7.0 * row_step - row_gap + 24.0 * z
 	_tree_max_scroll = Vector2(maxf(0.0, content_w - vw), maxf(0.0, content_h - vh))
 	item_tree_scroll.x = clampf(item_tree_scroll.x, 0.0, _tree_max_scroll.x)
 	item_tree_scroll.y = clampf(item_tree_scroll.y, 0.0, _tree_max_scroll.y)
 
-	# 列ヘッダ (横スクロールに連動、縦はビューポート上部に固定)
+	# 列ヘッダ (横スクロール・ズームに連動、縦はビューポート上部に固定)
 	var col_titles := ["1. 惑星原石", "2. 採掘 / 溶鉱炉", "3. 基礎素材", "4. 組立機 / 電力", "5. 回路 / 合金", "6. 高度 / 軌道局", "7. 最終 / 研究pt"]
 	var hdr_rect := Rect2(vx, vy, vw, header_h)
 	root_ctrl.draw_rect(hdr_rect, Color(0.05, 0.10, 0.18, 0.96))
+	var hdr_fs := clampi(int(round(12.0 * z)), 9, 16)
 	for ci in range(7):
 		var col_x := vx + pad_l + float(ci) * col_step - item_tree_scroll.x
 		var h_box := Rect2(col_x, vy + 3.0, card_w, header_h - 6.0)
@@ -1448,13 +1497,12 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		if h_vis.size.x > 24.0:
 			root_ctrl.draw_rect(h_vis, Color(0.08, 0.18, 0.28, 0.92))
 			root_ctrl.draw_rect(h_vis, Color(0.32, 0.62, 0.84, 0.65), false, 1.0)
-			if h_box.position.x >= vx - 12.0 and h_box.end.x <= vx + vw + 12.0:
-				root_ctrl.draw_string(font, Vector2(h_box.position.x, vy + 20.0), col_titles[ci], HORIZONTAL_ALIGNMENT_CENTER, card_w, 12, Color(0.72, 0.92, 1.0))
+			if h_box.position.x >= vx - 24.0 and h_box.end.x <= vx + vw + 24.0:
+				root_ctrl.draw_string(font, Vector2(h_box.position.x, vy + 20.0), col_titles[ci], HORIZONTAL_ALIGNMENT_CENTER, card_w, hdr_fs, Color(0.72, 0.92, 1.0))
 
 	var cards_clip_r := Rect2(vx + 2.0, vy + header_h + 2.0, vw - 12.0, vh - header_h - 12.0)
 	var row0_y := vy + header_h + pad_t - item_tree_scroll.y
 
-	# 背景グリッド縦ライン（160px列間スペースの中央ガイド）
 	for ci in range(6):
 		var sep_x := vx + pad_l + float(ci) * col_step + card_w + col_gap * 0.5 - item_tree_scroll.x
 		_draw_clipped_vline(sep_x, cards_clip_r.position.y, cards_clip_r.end.y, cards_clip_r, Color(0.14, 0.22, 0.34, 0.30), 1.0)
@@ -1487,7 +1535,7 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		if String(ed[0]) == item_tree_sel:
 			down_nodes[String(ed[1])] = true
 
-	# 1) 背景の非アクティブ接続エッジ（カード裏を通らず、160px×58pxの空白通路を通る控えめな配線）
+	# 1) 背景の非アクティブ接続エッジ
 	for ed in State.ITEM_TREE_EDGES:
 		var u := String(ed[0]); var v := String(ed[1])
 		if not node_rects.has(u) or not node_rects.has(v): continue
@@ -1497,9 +1545,12 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		var ru: Rect2 = node_rects[u]; var rv: Rect2 = node_rects[v]
 		var c_u := int(node_map[u]["col"]); var r_u := int(node_map[u]["row"])
 		var c_v := int(node_map[v]["col"]); var r_v := int(node_map[v]["row"])
-		_draw_routed_tree_edge(ru, rv, c_u, r_u, c_v, r_v, row0_y, row_step, card_h, cards_clip_r, Color(0.28, 0.44, 0.60, 0.24), 1.3, false)
+		_draw_routed_tree_edge(ru, rv, c_u, r_u, c_v, r_v, row0_y, row_step, card_h, z, cards_clip_r, Color(0.28, 0.44, 0.60, 0.24), maxf(1.0, 1.3 * z), false)
 
-	# 2) 全資源・全施設カード描画（ビューポート内にクリップして描画）
+	# 2) 全資源・全施設カード描画（ドット絵アイコン＋フルネーム表記！）
+	var name_fs := clampi(int(round(14.0 * z)), 8, 22)
+	var sub_fs := clampi(int(round(10.5 * z)), 7, 16)
+	var cost_fs := clampi(int(round(11.0 * z)), 7, 17)
 	for nd in State.ITEM_TREE_NODES:
 		var nid := String(nd["id"])
 		var nr: Rect2 = node_rects[nid]
@@ -1515,19 +1566,41 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		_panel(vis_r, bg, bd, 2.8 if (is_sel or is_in or is_out) else 1.5)
 
 		var it := _get_visual_tex(String(nd["icon"]))
-		var isz := 38.0
-		var ic_r := Rect2(nr.position.x + 10.0, nr.position.y + (nr.size.y - isz) * 0.5, isz, isz)
+		var isz := 40.0 * z
+		var ic_r := Rect2(nr.position.x + 8.0 * z, nr.position.y + (nr.size.y - isz) * 0.5, isz, isz)
 		if it and cards_clip_r.encloses(ic_r):
 			root_ctrl.draw_texture_rect(it, ic_r, false)
-		var tx := nr.position.x + isz + 16.0
-		if nr.position.y >= cards_clip_r.position.y - 4.0 and nr.end.y <= cards_clip_r.end.y + 4.0 and tx < cards_clip_r.end.x - 16.0:
-			var max_tw := int(minf(nr.end.x - tx - 6.0, cards_clip_r.end.x - tx - 4.0))
-			if max_tw > 20 and tx >= cards_clip_r.position.x:
-				root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 28.0), String(nd["name"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, 14, Color.WHITE)
-				root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 52.0), String(nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, 11, Color(0.70, 0.90, 1.0) if is_fac else Color(0.55, 0.98, 0.80))
+
+		var tx := nr.position.x + isz + 14.0 * z
+		if nr.position.y >= cards_clip_r.position.y - 4.0 and nr.end.y <= cards_clip_r.end.y + 4.0 and tx < cards_clip_r.end.x - 12.0:
+			var max_tw := int(minf(nr.end.x - tx - 6.0 * z, cards_clip_r.end.x - tx - 4.0))
+			if max_tw > 18 and tx >= cards_clip_r.position.x:
+				var cost_d: Dictionary = nd.get("cost", {})
+				if cost_d.is_empty():
+					root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 34.0 * z), String(nd["name"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, name_fs, Color.WHITE)
+					root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 62.0 * z), String(nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, sub_fs, Color(0.55, 0.98, 0.80))
+				else:
+					root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 23.0 * z), String(nd["name"]), HORIZONTAL_ALIGNMENT_LEFT, max_tw, name_fs, Color.WHITE)
+					# 中段：必要アイテムのドット絵アイコン ＋ ×数
+					var cx_i := tx
+					var c_isz := 16.0 * z
+					var c_y := nr.position.y + 31.0 * z
+					for ck in cost_d.keys():
+						var cq := int(cost_d[ck])
+						var cit := _get_visual_tex(String(ck))
+						var c_rect := Rect2(cx_i, c_y, c_isz, c_isz)
+						var num_w := (28.0 if cq >= 10 else 22.0) * z
+						if cit and cards_clip_r.encloses(c_rect) and cx_i + c_isz + num_w <= nr.end.x - 4.0 * z:
+							root_ctrl.draw_texture_rect(cit, c_rect, false)
+							root_ctrl.draw_string(font, Vector2(cx_i + c_isz + 2.0 * z, c_y + 13.0 * z), "×%d" % cq, HORIZONTAL_ALIGNMENT_LEFT, int(num_w + 6.0), cost_fs, Color(1.0, 0.92, 0.52))
+						cx_i += c_isz + num_w + 6.0 * z
+					# 下段：省略なしのフルネーム素材表記（鉄板×16 銅線×10 回路×6 チタン×6 など）
+					var s_txt := String(nd["sub"])
+					var line_sub_fs := clampi(int(round((9.6 if s_txt.length() >= 18 else 10.8) * z)), 7, 16)
+					root_ctrl.draw_string(font, Vector2(tx, nr.position.y + 74.0 * z), s_txt, HORIZONTAL_ALIGNMENT_LEFT, max_tw, line_sub_fs, Color(0.72, 0.92, 1.0) if is_fac else Color(0.55, 0.98, 0.80))
 		_add_hit(vis_r, "item_tree_pick", nid)
 
-	# 2b) アクティブな上流チェーン（シアン太線: 原石→溶鉱炉→基礎素材→組立機→完成品）＆下流エッジ（ゴールド太線）を最前面に描画！
+	# 2b) アクティブな上流チェーン（シアン太線）＆下流エッジ（ゴールド太線）を最前面に描画！
 	for ed in State.ITEM_TREE_EDGES:
 		var u := String(ed[0]); var v := String(ed[1])
 		if not node_rects.has(u) or not node_rects.has(v): continue
@@ -1538,8 +1611,8 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		var c_u := int(node_map[u]["col"]); var r_u := int(node_map[u]["row"])
 		var c_v := int(node_map[v]["col"]); var r_v := int(node_map[v]["row"])
 		var lcol := Color(0.32, 0.98, 1.0, 0.98) if is_up_edge else Color(1.0, 0.84, 0.28, 0.98)
-		_draw_routed_tree_edge(ru, rv, c_u, r_u, c_v, r_v, row0_y, row_step, card_h, cards_clip_r, Color(0.02, 0.05, 0.10, 0.94), 6.0, false)
-		_draw_routed_tree_edge(ru, rv, c_u, r_u, c_v, r_v, row0_y, row_step, card_h, cards_clip_r, lcol, 3.4, true)
+		_draw_routed_tree_edge(ru, rv, c_u, r_u, c_v, r_v, row0_y, row_step, card_h, z, cards_clip_r, Color(0.02, 0.05, 0.10, 0.94), maxf(3.6, 5.8 * z), false)
+		_draw_routed_tree_edge(ru, rv, c_u, r_u, c_v, r_v, row0_y, row_step, card_h, z, cards_clip_r, lcol, maxf(2.2, 3.3 * z), true)
 
 	# ビューポート外枠と2Dスクロールバー描画
 	root_ctrl.draw_rect(_tree_view_rect, Color(0.30, 0.56, 0.74, 0.85), false, 1.5)
@@ -1556,13 +1629,15 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		root_ctrl.draw_rect(Rect2(vx + vw - 8.0, vy + header_h + 4.0, 5.0, sb_h), Color(0.08, 0.14, 0.22, 0.9))
 		root_ctrl.draw_rect(Rect2(vx + vw - 8.0, thumb_y, 5.0, thumb_h), Color(0.42, 0.94, 1.0, 0.92))
 
-	# 3) 下部：選択カードの詳細工程＆必要材料チェーン表示
+	# 3) 下部詳細カード：制作に必要なアイテムのドット絵アイコン ＋ フルネーム ＋ ×数 を大きく視覚表示！
 	var dr := Rect2(r.position.x + 12, r.end.y - detail_h - 8, mw - 24, detail_h)
 	_panel(dr, Color(0.05, 0.09, 0.16, 0.98), Color(0.42, 0.94, 1.0), 1.8)
 	var sel_nd: Dictionary = node_map.get(item_tree_sel, State.ITEM_TREE_NODES[0])
 	var sit := _get_visual_tex(String(sel_nd["icon"]))
+	var icon_box := Rect2(dr.position.x + 10, dr.position.y + 12, 62, 62)
+	_panel(icon_box, Color(0.08, 0.16, 0.26, 0.95), Color(0.36, 0.72, 0.94, 0.85), 1.4)
 	if sit:
-		root_ctrl.draw_texture_rect(sit, Rect2(dr.position.x + 12, dr.position.y + 18, 52, 52), false)
+		root_ctrl.draw_texture_rect(sit, Rect2(icon_box.position.x + 6, icon_box.position.y + 6, 50, 50), false)
 
 	var in_names: Array[String] = []
 	var out_names: Array[String] = []
@@ -1572,13 +1647,40 @@ func _draw_item_tree_modal(vp: Vector2, portrait: bool, font: Font) -> void:
 		if String(ed[0]) == item_tree_sel and node_map.has(String(ed[1])):
 			out_names.append(String(node_map[String(ed[1])]["name"]))
 
-	var dtx := dr.position.x + 74.0
-	var dtw := int(dr.size.x - 84.0)
+	var dtx := dr.position.x + 82.0
+	var dtw := int(dr.size.x - 92.0)
 	var kind_tag := "【施設・装備】" if String(sel_nd["kind"]) == "fac" else ("【資源・加工品】（所持: %d）" % State.get_r(item_tree_sel))
-	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 26), "%s  %s" % [String(sel_nd["name"]), kind_tag], HORIZONTAL_ALIGNMENT_LEFT, dtw, 14 if portrait else 16, Color(1.0, 0.90, 0.42))
-	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 52), "工程: " + String(sel_nd["recipe"]), HORIZONTAL_ALIGNMENT_LEFT, dtw, 12 if portrait else 14, Color(0.92, 0.98, 1.0))
-	var chain_s := ("入力(青): " + ("・".join(in_names) if not in_names.is_empty() else "原石採掘")) + "  →  用途(黄): " + ("・".join(out_names) if not out_names.is_empty() else "最終目標")
-	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 78), chain_s, HORIZONTAL_ALIGNMENT_LEFT, dtw, 11 if portrait else 13, Color(0.46, 0.98, 0.84))
+	root_ctrl.draw_string(font, Vector2(dtx, dr.position.y + 23), "%s  %s" % [String(sel_nd["name"]), kind_tag], HORIZONTAL_ALIGNMENT_LEFT, dtw, 14 if portrait else 16, Color(1.0, 0.90, 0.42))
+
+	# 制作・製造に必要なアイテムのドット絵バッジ行（[ドット絵] 鉄板 ×16  [ドット絵] 銅線 ×10 ...）
+	var sel_cost: Dictionary = sel_nd.get("cost", {})
+	var badge_y := dr.position.y + 32.0
+	var badge_x := dtx
+	if sel_cost.is_empty():
+		var raw_pill := Rect2(badge_x, badge_y, minf(float(dtw), 280.0), 34.0)
+		_panel(raw_pill, Color(0.08, 0.22, 0.28, 0.95), Color(0.38, 0.92, 0.78), 1.3)
+		if sit:
+			root_ctrl.draw_texture_rect(sit, Rect2(raw_pill.position.x + 6, raw_pill.position.y + 5, 24, 24), false)
+		root_ctrl.draw_string(font, Vector2(raw_pill.position.x + 36, raw_pill.position.y + 22), "必要素材なし（%s）" % String(sel_nd["sub"]), HORIZONTAL_ALIGNMENT_LEFT, int(raw_pill.size.x - 42), 12, Color(0.76, 1.0, 0.90))
+	else:
+		var n_ing := sel_cost.size()
+		var max_pill_w := (float(dtw) - float(n_ing - 1) * 6.0) / float(maxi(1, n_ing))
+		for ck in sel_cost.keys():
+			var cq := int(sel_cost[ck])
+			var cname := State.res_name(String(ck))
+			var lbl_s := "%s ×%d" % [cname, cq]
+			var pill_w := clampf(float(lbl_s.length()) * 11.5 + 38.0, 84.0, minf(168.0, max_pill_w))
+			var pill_r := Rect2(badge_x, badge_y, pill_w, 34.0)
+			_panel(pill_r, Color(0.09, 0.22, 0.34, 0.96), Color(0.46, 0.94, 1.0), 1.4)
+			var cit := _get_visual_tex(String(ck))
+			if cit:
+				root_ctrl.draw_texture_rect(cit, Rect2(pill_r.position.x + 5, pill_r.position.y + 5, 24, 24), false)
+			root_ctrl.draw_string(font, Vector2(pill_r.position.x + 32, pill_r.position.y + 23), lbl_s, HORIZONTAL_ALIGNMENT_LEFT, int(pill_w - 35), 11 if (portrait and n_ing >= 4) else 13, Color(1.0, 0.95, 0.68))
+			badge_x += pill_w + 6.0
+
+	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.position.y + 91), "工程: " + String(sel_nd["recipe"]), HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 12 if portrait else 13, Color(0.92, 0.98, 1.0))
+	var chain_s := ("入力元(青線): " + ("・".join(in_names) if not in_names.is_empty() else "原石採掘")) + "  →  出力・用途先(黄線): " + ("・".join(out_names) if not out_names.is_empty() else "最終目標")
+	root_ctrl.draw_string(font, Vector2(dr.position.x + 12, dr.position.y + 112), chain_s, HORIZONTAL_ALIGNMENT_LEFT, int(dr.size.x - 24), 11 if portrait else 12, Color(0.46, 0.98, 0.84))
 
 # 11. カーゴデポ（倉庫）モーダル
 func _draw_depot_modal(vp: Vector2, font: Font) -> void:

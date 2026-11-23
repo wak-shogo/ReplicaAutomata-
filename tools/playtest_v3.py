@@ -203,19 +203,30 @@ def main():
         mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_09_mobile_tech_detail.png"))
         assert tm_td["tech_detail"] is True, f"Mobile tap Tech Card did not open detail popup! {tm_td}"
 
-        # Open Recipe Tree on Mobile Portrait (412x915) & capture both initial and scrolled views!
+        # Open Recipe Tree on Mobile Portrait (412x915) & capture initial, Col 5 (Mass Driver), and zoomed views!
         mpage.keyboard.press("KeyI")
         time.sleep(0.45)
         tm_it = tel(mpage)
         print("MOBILE RECIPE TREE:", "modal=", tm_it["modal"], flush=True)
         mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_10_mobile_recipe_tree.png"))
         assert tm_it["modal"] == 8, f"Mobile Recipe Tree did not open! {tm_it}"
-        # Tap Stage Jump button 「2.組立・回路」 on Mobile Portrait Recipe Tree!
-        # Logical HUD width=500, modal mw=488 (x=6..494), mh=810 (y=(1110-810)/2=150..960), nav_y=150+40=190..218 (cy=204)
-        # Button 3 ("2.組立・回路") is around logical x=235 -> CSS (235 * 0.824 = 194, 204 * 0.824 = 168)
-        mpage.touchscreen.tap(194, 168)
-        time.sleep(0.45)
+        # Tap Stage Jump button 「3.回路・研究pt」 + 「右▶」 on Mobile Portrait Recipe Tree to view 3Dプリンタ & マスドライバー!
+        # Logical HUD width=500, modal mw=488 (x=6..494), mh=830 (y=(1110-830)/2=140..970), nav_y=140+40=180..208 (cy=194 -> CSS y=160)
+        # Button 4 ("3.回路・研究pt") logical cx ~ 295 -> CSS x=243; Button 5 ("右▶") logical cx ~ 372 -> CSS x=306
+        mpage.touchscreen.tap(243, 160)
+        time.sleep(0.3)
+        mpage.touchscreen.tap(306, 160)
+        time.sleep(0.3)
+        # Tap マスドライバー card (row 2 -> logical y ~ 140+74+30+16 + 2*140 + 40 = 580 -> CSS y=478, CSS x=110)
+        mpage.touchscreen.tap(110, 478)
+        time.sleep(0.4)
         mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_10b_mobile_recipe_tree_scrolled.png"))
+        # Tap Zoom Out 「－」 twice (logical cx ~ 418 -> CSS x=344, y=160)
+        mpage.touchscreen.tap(344, 160)
+        time.sleep(0.25)
+        mpage.touchscreen.tap(344, 160)
+        time.sleep(0.35)
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_10c_mobile_recipe_tree_zoomed.png"))
         mctx.close()
         browser.close()
 

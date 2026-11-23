@@ -365,55 +365,55 @@ const MEGAS: Dictionary = {
 # ------------------------------------------------------------------------------
 const ITEM_TREE_NODES: Array[Dictionary] = [
 	# Col 0: 各惑星の原石 (7種)
-	{"id": "fe",          "kind": "res", "col": 0, "row": 0, "name": "鉄",          "icon": "fe",          "sub": "テラ-I",     "recipe": "テラ-I 地表・洞窟・ドリル鉱床で採掘"},
-	{"id": "cu",          "kind": "res", "col": 0, "row": 1, "name": "銅",          "icon": "cu",          "sub": "テラ-I",     "recipe": "テラ-I 地表・洞窟・ドリル鉱床で採掘"},
-	{"id": "si",          "kind": "res", "col": 0, "row": 2, "name": "ケイ素",      "icon": "si",          "sub": "テラ-I",     "recipe": "テラ-I 洞窟の青い結晶・鉱床で採掘"},
-	{"id": "ti",          "kind": "res", "col": 0, "row": 3, "name": "チタン",      "icon": "ti",          "sub": "衛星ルナ",   "recipe": "【宇宙進出】衛星ルナの地表・洞窟で採掘"},
-	{"id": "ignis_ore",   "kind": "res", "col": 0, "row": 4, "name": "紅蓮鉱",      "icon": "ignis_ore",   "sub": "イグニス-I", "recipe": "【内周惑星】イグニス-Iの灼熱地層で採掘"},
-	{"id": "ice",         "kind": "res", "col": 0, "row": 5, "name": "永久氷晶",    "icon": "ice",         "sub": "クライオ-IV","recipe": "【外周惑星】クライオ-IVの氷結洞窟で採掘"},
-	{"id": "astra_shard", "kind": "res", "col": 0, "row": 6, "name": "アストラ結晶","icon": "astra_shard", "sub": "アストラ-V", "recipe": "【敵中枢惑星】艦隊で制圧後に採掘可能"},
+	{"id": "fe",          "kind": "res", "col": 0, "row": 0, "name": "鉄",          "icon": "fe",          "cost": {}, "sub": "惑星テラ-Iで採掘",       "recipe": "テラ-I 地表・洞窟・ドリル鉱床で採掘"},
+	{"id": "cu",          "kind": "res", "col": 0, "row": 1, "name": "銅",          "icon": "cu",          "cost": {}, "sub": "惑星テラ-Iで採掘",       "recipe": "テラ-I 地表・洞窟・ドリル鉱床で採掘"},
+	{"id": "si",          "kind": "res", "col": 0, "row": 2, "name": "ケイ素",      "icon": "si",          "cost": {}, "sub": "惑星テラ-Iで採掘",       "recipe": "テラ-I 洞窟の青い結晶・鉱床で採掘"},
+	{"id": "ti",          "kind": "res", "col": 0, "row": 3, "name": "チタン",      "icon": "ti",          "cost": {}, "sub": "衛星ルナで採掘",         "recipe": "【宇宙進出】衛星ルナの地表・洞窟で採掘"},
+	{"id": "ignis_ore",   "kind": "res", "col": 0, "row": 4, "name": "紅蓮鉱",      "icon": "ignis_ore",   "cost": {}, "sub": "惑星イグニス-Iで採掘",   "recipe": "【内周惑星】イグニス-Iの灼熱地層で採掘"},
+	{"id": "ice",         "kind": "res", "col": 0, "row": 5, "name": "永久氷晶",    "icon": "ice",         "cost": {}, "sub": "惑星クライオ-IVで採掘",  "recipe": "【外周惑星】クライオ-IVの氷結洞窟で採掘"},
+	{"id": "astra_shard", "kind": "res", "col": 0, "row": 6, "name": "アストラ結晶","icon": "astra_shard", "cost": {}, "sub": "惑星アストラ-Vで採掘",   "recipe": "【敵中枢惑星】艦隊で制圧後に採掘可能"},
 
 	# Col 1: 一次精錬（溶鉱炉を鉄・銅・ケイ素の真横に配置！）＋採掘・物流・初期設備 (7種)
-	{"id": "drill",       "kind": "fac", "col": 1, "row": 0, "name": "採掘ドリル",  "icon": "drill",       "sub": "鉄12 銅6",   "recipe": "硬質鉱床から原石を自動採掘(12W)"},
-	{"id": "smelter",     "kind": "fac", "col": 1, "row": 1, "name": "溶鉱炉",      "icon": "smelter",     "sub": "鉄18 銅10",  "recipe": "鉄×2→鉄板 / 銅×2→銅線 / ケイ素×2→基板"},
-	{"id": "depot",       "kind": "fac", "col": 1, "row": 2, "name": "倉庫(デポ)",  "icon": "depot",       "sub": "鉄16 銅6",   "recipe": "接続先施設のレシピ必要量だけを自動供給"},
-	{"id": "seed_core",   "kind": "fac", "col": 1, "row": 3, "name": "シード自機",  "icon": "seed_core",   "sub": "初期機体",   "recipe": "採掘ビームで全惑星の原石を直接採掘"},
-	{"id": "fab_drone",   "kind": "fac", "col": 1, "row": 4, "name": "ドローン",    "icon": "fab_drone",   "sub": "鉄10 銅6",   "recipe": "鉄×10 + 銅×6 → クラフト製造"},
-	{"id": "solar",       "kind": "fac", "col": 1, "row": 5, "name": "ソーラー",    "icon": "solar",       "sub": "鉄10 銅6",   "recipe": "昼間に44W発電 → 電線でテスラへ"},
-	{"id": "tesla",       "kind": "fac", "col": 1, "row": 6, "name": "テスラ/蓄電", "icon": "tesla",       "sub": "鉄10 銅8",   "recipe": "周囲へ無線配電＆夜間バッテリー連携"},
+	{"id": "drill",       "kind": "fac", "col": 1, "row": 0, "name": "採掘ドリル",  "icon": "drill",       "cost": {"fe": 12, "cu": 6},  "sub": "鉄×12 銅×6",   "recipe": "硬質鉱床から原石を自動採掘(消費電力12W)"},
+	{"id": "smelter",     "kind": "fac", "col": 1, "row": 1, "name": "溶鉱炉",      "icon": "smelter",     "cost": {"fe": 18, "cu": 10}, "sub": "鉄×18 銅×10",  "recipe": "鉄×2→鉄板 / 銅×2→銅線 / ケイ素×2→基板"},
+	{"id": "depot",       "kind": "fac", "col": 1, "row": 2, "name": "倉庫(デポ)",  "icon": "depot",       "cost": {"fe": 16, "cu": 6},  "sub": "鉄×16 銅×6",   "recipe": "接続先施設のレシピ必要量だけを自動供給"},
+	{"id": "seed_core",   "kind": "fac", "col": 1, "row": 3, "name": "シード自機",  "icon": "seed_core",   "cost": {},                    "sub": "初期プレイヤー機", "recipe": "採掘ビームで全惑星の原石を直接採掘"},
+	{"id": "fab_drone",   "kind": "fac", "col": 1, "row": 4, "name": "ドローン",    "icon": "fab_drone",   "cost": {"fe": 10, "cu": 6},  "sub": "鉄×10 銅×6",   "recipe": "採掘＆クラフト速度を+18%強化"},
+	{"id": "solar",       "kind": "fac", "col": 1, "row": 5, "name": "ソーラーパネル","icon": "solar",     "cost": {"fe": 10, "cu": 6},  "sub": "鉄×10 銅×6",   "recipe": "昼間に44W発電 → 電線でテスラリレーへ接続"},
+	{"id": "tesla",       "kind": "fac", "col": 1, "row": 6, "name": "テスラリレー","icon": "tesla",       "cost": {"fe": 10, "cu": 8},  "sub": "鉄×10 銅×8",   "recipe": "周囲へ無線配電＆施設耐久HPを自動修復"},
 
 	# Col 2: 一次精錬素材 + 基礎電力・宇宙推進 (5種)
-	{"id": "plate_fe",        "kind": "res", "col": 2, "row": 0, "name": "鉄板",          "icon": "plate_fe",        "sub": "鉄×2",         "recipe": "鉄×2 → [溶鉱炉] → 鉄板×1"},
-	{"id": "wire_cu",         "kind": "res", "col": 2, "row": 1, "name": "銅線",          "icon": "wire_cu",         "sub": "銅×2",         "recipe": "銅×2 → [溶鉱炉] → 銅線×1"},
-	{"id": "wafer_si",        "kind": "res", "col": 2, "row": 2, "name": "基板",          "icon": "wafer_si",        "sub": "ケイ素×2",     "recipe": "ケイ素×2 → [溶鉱炉] → 基板×1"},
-	{"id": "battery",         "kind": "fac", "col": 2, "row": 4, "name": "夜間蓄電池",    "icon": "battery",         "sub": "鉄12 銅8 珪4", "recipe": "昼の余剰電力を蓄電し夜間稼働"},
-	{"id": "orbital_booster", "kind": "fac", "col": 2, "row": 6, "name": "軌道ブースター","icon": "orbital_booster", "sub": "鉄16 銅8 板4", "recipe": "テラ-Iから宇宙＆衛星ルナへ飛び立つ推進機"},
+	{"id": "plate_fe",        "kind": "res", "col": 2, "row": 0, "name": "鉄板",          "icon": "plate_fe",        "cost": {"fe": 2},                        "sub": "鉄×2",                 "recipe": "溶鉱炉で精錬（鉄×2 → 鉄板×1）"},
+	{"id": "wire_cu",         "kind": "res", "col": 2, "row": 1, "name": "銅線",          "icon": "wire_cu",         "cost": {"cu": 2},                        "sub": "銅×2",                 "recipe": "溶鉱炉で精錬（銅×2 → 銅線×1）"},
+	{"id": "wafer_si",        "kind": "res", "col": 2, "row": 2, "name": "基板",          "icon": "wafer_si",        "cost": {"si": 2},                        "sub": "ケイ素×2",             "recipe": "溶鉱炉で精錬（ケイ素×2 → 基板×1）"},
+	{"id": "battery",         "kind": "fac", "col": 2, "row": 4, "name": "夜間バッテリー","icon": "battery",         "cost": {"fe": 12, "cu": 8, "si": 4},     "sub": "鉄×12 銅×8 ケイ素×4", "recipe": "昼の余剰電力を蓄電し夜間も工場を稼働"},
+	{"id": "orbital_booster", "kind": "fac", "col": 2, "row": 6, "name": "軌道ブースター","icon": "orbital_booster", "cost": {"fe": 16, "cu": 8, "plate_fe": 4},"sub": "鉄×16 銅×8 鉄板×4",   "recipe": "テラ-Iから宇宙空間＆衛星ルナへ飛び立つ推進機"},
 
 	# Col 3: 自動組立機・地上中級施設・初期軌道施設 (5種)
-	{"id": "assembler",  "kind": "fac", "col": 3, "row": 1, "name": "自動組立機",    "icon": "assembler",  "sub": "板8 線6 珪4", "recipe": "回路・チタン合金・プラズマ・超伝導・研究ポイント製造"},
-	{"id": "geothermal", "kind": "fac", "col": 3, "row": 3, "name": "地熱発電所",    "icon": "geothermal", "sub": "板8 線6 珪6", "recipe": "昼夜無休で135Wを大出力発電"},
-	{"id": "turret",     "kind": "fac", "col": 3, "row": 4, "name": "レーザー砲台",  "icon": "turret",     "sub": "板6 線6",     "recipe": "他惑星の汚染襲撃機やマップ外敵機を自動迎撃"},
-	{"id": "orb_power",  "kind": "fac", "col": 3, "row": 5, "name": "軌道発電衛星",  "icon": "orb_power",  "sub": "板6 線6 チタン4","recipe": "同一軌道上で+120W発電し地上・軌道へ送電"},
-	{"id": "orb_laser",  "kind": "fac", "col": 3, "row": 6, "name": "軌道採掘機",    "icon": "orb_laser",  "sub": "板8 線6 チタン6","recipe": "軌道から地上鉱脈を自動採掘し宇宙へ打ち上げ"},
+	{"id": "assembler",  "kind": "fac", "col": 3, "row": 1, "name": "自動組立機",    "icon": "assembler",  "cost": {"plate_fe": 8, "wire_cu": 6, "si": 4},                 "sub": "鉄板×8 銅線×6 ケイ素×4",         "recipe": "回路・チタン合金・プラズマセル・超伝導ロッド・研究ポイント製造"},
+	{"id": "geothermal", "kind": "fac", "col": 3, "row": 3, "name": "地熱発電所",    "icon": "geothermal", "cost": {"plate_fe": 8, "wire_cu": 6, "si": 6},                 "sub": "鉄板×8 銅線×6 ケイ素×6",         "recipe": "昼夜を問わず常時135Wを安定発電"},
+	{"id": "turret",     "kind": "fac", "col": 3, "row": 4, "name": "レーザー砲台",  "icon": "turret",     "cost": {"plate_fe": 6, "wire_cu": 6},                          "sub": "鉄板×6 銅線×6",                   "recipe": "月面や他惑星の汚染襲撃機・マップ外敵機を自動迎撃"},
+	{"id": "orb_power",  "kind": "fac", "col": 3, "row": 5, "name": "軌道発電衛星",  "icon": "orb_power",  "cost": {"plate_fe": 6, "wire_cu": 6, "wafer_si": 4, "ti": 4},  "sub": "鉄板×6 銅線×6 基板×4 チタン×4", "recipe": "同一軌道上で+120W発電し地上・軌道へ無線送電"},
+	{"id": "orb_laser",  "kind": "fac", "col": 3, "row": 6, "name": "軌道採掘レーザー","icon": "orb_laser","cost": {"plate_fe": 8, "wire_cu": 6, "wafer_si": 4, "ti": 6},  "sub": "鉄板×8 銅線×6 基板×4 チタン×6", "recipe": "軌道から地上鉱脈を自動採掘し宇宙へ打ち上げ"},
 
 	# Col 4: 組立完成素材・惑星固有加工品 (4種)
-	{"id": "circuit",     "kind": "res", "col": 4, "row": 0, "name": "回路",          "icon": "circuit",     "sub": "鉄板1+銅線1",   "recipe": "鉄板×1 + 銅線×1 → [自動組立機] → 回路×1"},
-	{"id": "alloy",       "kind": "res", "col": 4, "row": 2, "name": "チタン合金",    "icon": "alloy",       "sub": "鉄板2+チタン1", "recipe": "鉄板×2 + チタン×1 → [自動組立機] → チタン合金×1"},
-	{"id": "plasma_cell", "kind": "res", "col": 4, "row": 4, "name": "プラズマセル",  "icon": "plasma_cell", "sub": "紅蓮鉱2+合金1", "recipe": "紅蓮鉱×2 + チタン合金×1 → [自動組立機] → プラズマセル×1"},
-	{"id": "cryo_rod",    "kind": "res", "col": 4, "row": 6, "name": "超伝導ロッド",  "icon": "cryo_rod",    "sub": "氷晶2+基板1",   "recipe": "永久氷晶×2 + 基板×1 → [自動組立機] → 超伝導ロッド×1"},
+	{"id": "circuit",     "kind": "res", "col": 4, "row": 0, "name": "回路",          "icon": "circuit",     "cost": {"plate_fe": 1, "wire_cu": 1},   "sub": "鉄板×1 銅線×1",       "recipe": "自動組立機で製造（鉄板×1 + 銅線×1 → 回路×1）"},
+	{"id": "alloy",       "kind": "res", "col": 4, "row": 2, "name": "チタン合金",    "icon": "alloy",       "cost": {"plate_fe": 2, "ti": 1},        "sub": "鉄板×2 チタン×1",     "recipe": "自動組立機で製造（鉄板×2 + チタン×1 → チタン合金×1）"},
+	{"id": "plasma_cell", "kind": "res", "col": 4, "row": 4, "name": "プラズマセル",  "icon": "plasma_cell", "cost": {"ignis_ore": 2, "alloy": 1},    "sub": "紅蓮鉱×2 チタン合金×1","recipe": "自動組立機で製造（紅蓮鉱×2 + チタン合金×1 → プラズマセル×1）"},
+	{"id": "cryo_rod",    "kind": "res", "col": 4, "row": 6, "name": "超伝導ロッド",  "icon": "cryo_rod",    "cost": {"ice": 2, "wafer_si": 1},       "sub": "永久氷晶×2 基板×1",   "recipe": "自動組立機で製造（永久氷晶×2 + 基板×1 → 超伝導ロッド×1）"},
 
 	# Col 5: 高度製造施設（軌道回収・軌道クラフト局・3Dプリンタ・マスドライバー）(4種)
-	{"id": "gantry_printer", "kind": "fac", "col": 5, "row": 0, "name": "3Dプリンタ",    "icon": "gantry_printer", "sub": "板14 回路6 チタン6", "recipe": "鉄板×2 + 回路×1 → プローブ×1"},
-	{"id": "mass_driver",    "kind": "fac", "col": 5, "row": 2, "name": "マスドライバー","icon": "mass_driver",    "sub": "板16 線10 回路6",    "recipe": "プローブを宇宙へ射出し艦隊+12機"},
-	{"id": "orb_collector",  "kind": "fac", "col": 5, "row": 4, "name": "軌道回収機",    "icon": "orb_collector",  "sub": "板8 回路4 チタン6",  "recipe": "軌道採掘で浮上した資源パケットを磁気回収"},
-	{"id": "orb_station",    "kind": "fac", "col": 5, "row": 6, "name": "軌道クラフト局","icon": "orb_station",    "sub": "板12 回路6 合金4",   "recipe": "軌道上で量子コア・ダイソン板・反物質・研究ポイント製造"},
+	{"id": "gantry_printer", "kind": "fac", "col": 5, "row": 0, "name": "3Dプリンタ",      "icon": "gantry_printer", "cost": {"plate_fe": 14, "circuit": 6, "ti": 6},              "sub": "鉄板×14 回路×6 チタン×6",         "recipe": "鉄板×2 + 回路×1 からプローブを連続造形(34W)"},
+	{"id": "mass_driver",    "kind": "fac", "col": 5, "row": 2, "name": "マスドライバー",  "icon": "mass_driver",    "cost": {"plate_fe": 16, "wire_cu": 10, "circuit": 6, "ti": 6},"sub": "鉄板×16 銅線×10 回路×6 チタン×6","recipe": "プローブを宇宙へ射出し艦隊を編成(30W)"},
+	{"id": "orb_collector",  "kind": "fac", "col": 5, "row": 4, "name": "軌道回収モジュール","icon": "orb_collector","cost": {"plate_fe": 8, "circuit": 4, "ti": 6},               "sub": "鉄板×8 回路×4 チタン×6",          "recipe": "軌道採掘で浮上した資源パケットを磁気回収し軌道クラフト局へ転送"},
+	{"id": "orb_station",    "kind": "fac", "col": 5, "row": 6, "name": "軌道クラフト局",  "icon": "orb_station",    "cost": {"plate_fe": 12, "circuit": 6, "alloy": 4},           "sub": "鉄板×12 回路×6 チタン合金×4",     "recipe": "軌道上で量子コア・ダイソン板・反物質コア・研究ポイントを製造"},
 
 	# Col 6: 最終完成アイテム＆クリア目標「研究ポイント」(5種)
-	{"id": "probe_stock",  "kind": "res", "col": 6, "row": 0, "name": "プローブ艦隊",  "icon": "probe_stock",  "sub": "10,000機艦隊",      "recipe": "3Dプリンタ/軌道局 → マスドライバーで艦隊編成"},
-	{"id": "sci_pack",     "kind": "res", "col": 6, "row": 1, "name": "研究ポイント",  "icon": "sci_pack",     "sub": "1,000ptでクリア!", "recipe": "組立機(鉄板+回路→+20pt) / 軌道局(量子コア+チタン→+60pt)"},
-	{"id": "quantum_core", "kind": "res", "col": 6, "row": 3, "name": "量子コア",      "icon": "quantum_core", "sub": "珪2+銅2 / 超伝導", "recipe": "ケイ素×2+銅×2 (または超伝導ロッド) → [軌道クラフト局]"},
-	{"id": "dyson_panel",  "kind": "res", "col": 6, "row": 5, "name": "ダイソン板",    "icon": "dyson_panel",  "sub": "鉄2+ケイ素2",      "recipe": "鉄×2 + ケイ素×2 → [軌道クラフト局] → ダイソン板×1"},
-	{"id": "antimatter",   "kind": "res", "col": 6, "row": 6, "name": "反物質コア",    "icon": "antimatter",   "sub": "量子1+アストラ結晶","recipe": "量子コア×1 + アストラ結晶(または鉄×2) → [軌道クラフト局]"},
+	{"id": "probe_stock",  "kind": "res", "col": 6, "row": 0, "name": "プローブ艦隊",  "icon": "probe_stock",  "cost": {"plate_fe": 2, "circuit": 1},         "sub": "鉄板×2 回路×1",           "recipe": "3Dプリンタまたは軌道クラフト局で製造 → マスドライバーで艦隊射出"},
+	{"id": "sci_pack",     "kind": "res", "col": 6, "row": 1, "name": "研究ポイント",  "icon": "sci_pack",     "cost": {"plate_fe": 1, "circuit": 1},         "sub": "1,000pt達成でクリア！",     "recipe": "自動組立機(鉄板×1+回路×1→+20pt) / 軌道クラフト局(量子コア×1+チタン×1→+60pt)"},
+	{"id": "quantum_core", "kind": "res", "col": 6, "row": 3, "name": "量子コア",      "icon": "quantum_core", "cost": {"si": 2, "cu": 2},                    "sub": "ケイ素×2 銅×2",           "recipe": "軌道クラフト局で製造（ケイ素×2 + 銅×2 → 量子コア×1）"},
+	{"id": "dyson_panel",  "kind": "res", "col": 6, "row": 5, "name": "ダイソン板",    "icon": "dyson_panel",  "cost": {"fe": 2, "si": 2},                    "sub": "鉄×2 ケイ素×2",           "recipe": "軌道クラフト局で製造（鉄×2 + ケイ素×2 → ダイソン板×1）"},
+	{"id": "antimatter",   "kind": "res", "col": 6, "row": 6, "name": "反物質コア",    "icon": "antimatter",   "cost": {"quantum_core": 1, "astra_shard": 1}, "sub": "量子コア×1 アストラ結晶×1","recipe": "軌道クラフト局で製造（量子コア×1 + アストラ結晶×1 → 反物質コア×1）"},
 ]
 
 # 特定アイテムの製造に必要な「直接の原料・施設」マップ（上流ツリー自動展開用！）
