@@ -202,6 +202,20 @@ def main():
         print("MOBILE TECH DETAIL POPUP:", "tech_detail=", tm_td["tech_detail"], flush=True)
         mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_09_mobile_tech_detail.png"))
         assert tm_td["tech_detail"] is True, f"Mobile tap Tech Card did not open detail popup! {tm_td}"
+
+        # Open Recipe Tree on Mobile Portrait (412x915) & capture both initial and scrolled views!
+        mpage.keyboard.press("KeyI")
+        time.sleep(0.45)
+        tm_it = tel(mpage)
+        print("MOBILE RECIPE TREE:", "modal=", tm_it["modal"], flush=True)
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_10_mobile_recipe_tree.png"))
+        assert tm_it["modal"] == 8, f"Mobile Recipe Tree did not open! {tm_it}"
+        # Tap Stage Jump button 「2.組立・回路」 on Mobile Portrait Recipe Tree!
+        # Logical HUD width=500, modal mw=488 (x=6..494), mh=810 (y=(1110-810)/2=150..960), nav_y=150+40=190..218 (cy=204)
+        # Button 3 ("2.組立・回路") is around logical x=235 -> CSS (235 * 0.824 = 194, 204 * 0.824 = 168)
+        mpage.touchscreen.tap(194, 168)
+        time.sleep(0.45)
+        mpage.screenshot(path=os.path.join(SHOT_DIR, "v5_10b_mobile_recipe_tree_scrolled.png"))
         mctx.close()
         browser.close()
 

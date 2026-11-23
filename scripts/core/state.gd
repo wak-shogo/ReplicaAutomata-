@@ -462,7 +462,6 @@ const ITEM_TREE_EDGES: Array[Array] = [
 	["plate_fe", "assembler"], ["wire_cu", "assembler"], ["wafer_si", "assembler"],
 	["plate_fe", "geothermal"], ["wire_cu", "turret"],
 	# 衛星ルナ＆他惑星原石 → 軌道施設・自動組立機
-	["orbital_booster", "ti"],
 	["ti", "orb_power"], ["ti", "orb_laser"], ["ti", "assembler"],
 	["ignis_ore", "assembler"], ["ice", "assembler"],
 	# 自動組立機 → 回路・合金・惑星加工品・研究ポイント
