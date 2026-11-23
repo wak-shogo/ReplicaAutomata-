@@ -27,11 +27,15 @@ if (typeof window === 'undefined') {
             return;
         }
 
-        const request = (coepCredentialless && r.mode === "no-cors")
-            ? new Request(r, {
-                credentials: "omit",
-            })
-            : r;
+        const isAsset = r.url.indexOf("index.pck") !== -1 || r.url.indexOf("index.html") !== -1 || r.url.indexOf("index.js") !== -1;
+        const fetchOpts = {};
+        if (coepCredentialless && r.mode === "no-cors") {
+            fetchOpts.credentials = "omit";
+        }
+        if (isAsset) {
+            fetchOpts.cache = "no-store";
+        }
+        const request = Object.keys(fetchOpts).length > 0 ? new Request(r, fetchOpts) : r;
         event.respondWith(
             fetch(request)
                 .then((response) => {
