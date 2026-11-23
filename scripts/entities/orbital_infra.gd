@@ -548,7 +548,9 @@ func _draw() -> void:
 			var gc := Color(1.0, 0.84, 0.34, 0.32) if bid == "orb_power" else Color(0.32, 0.96, 1.0, 0.30)
 			draw_texture_rect(glow, Rect2(mp.x - bw, mp.y - bw, bw * 2.0, bw * 2.0), false, gc)
 		draw_set_transform(mp, rot, Vector2.ONE)
-		var t := ArtReg.get_t(String(info["tex"]))
+		var o_key := String(info["tex"])
+		var o_frame := (1 + (int(floor(anim_t * 7.5 + float(m["uid"]))) % 5)) if bool(m["powered"]) else 0
+		var t := ArtReg.get_anim(o_key, o_frame)
 		if t:
 			draw_texture_rect(t, Rect2(-bw * 0.5, -bh * 0.5, bw, bh), false)
 		if int(m["uid"]) == salvage_armed_oid:

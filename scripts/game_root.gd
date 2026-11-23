@@ -6,6 +6,7 @@ extends Node2D
 # + Always Player-Centered Camera + Larger Visual-First Japanese HUD + Exhaustive Headless Test Suite.
 
 @onready var sky: Node2D = $CosmicSky
+@onready var phys_atmos: Node2D = $PhysAtmosphere
 @onready var home_root: Node2D = $HomeSystem
 @onready var planet: SphericalPlanet = $HomeSystem/SphericalPlanet
 @onready var grid: Node2D = $HomeSystem/IndustrialGrid
@@ -13,6 +14,7 @@ extends Node2D
 @onready var orbital: Node2D = $OrbitalInfra
 @onready var player: Node2D = $SeedUnit
 @onready var cam: Camera2D = $Camera2D
+@onready var phys_light: CanvasLayer = $PhysLighting
 @onready var hud: CanvasLayer = $CommandHUD
 
 var user_zoom: float = 0.88
@@ -23,6 +25,7 @@ var _test_failed: bool = false
 
 func _ready() -> void:
 	sky.planet = planet
+	phys_atmos.planet = planet
 	planet.home_root = home_root
 	planet.factory = grid
 	planet.step_celestials(0.0, true)
@@ -38,6 +41,11 @@ func _ready() -> void:
 	player.planet = planet
 	player.grid = grid
 	player.swarm = swarm
+	phys_light.planet = planet
+	phys_light.grid = grid
+	phys_light.orbital = orbital
+	phys_light.player = player
+	phys_light.cam = cam
 	hud.planet = planet
 	hud.grid = grid
 	hud.orbital = orbital

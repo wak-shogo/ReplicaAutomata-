@@ -48,6 +48,13 @@ var chunk_meshes: Array[MeshInstance2D] = []
 var chunk_texs: Array[ImageTexture] = []
 var dirty_chunks: Array[int] = []
 
+# Real-time Polar Voxel Occupancy Textures for GPU Ray-Traced Sunlight & Cave Shadows!
+var terra_occ_img: Image = null
+var terra_occ_tex: ImageTexture = null
+var extra_occ_img: Image = null
+var extra_occ_tex: ImageTexture = null
+const EXTRA_OCC_BAND: Dictionary = {"luna": 0, "ignis": 1, "cryo": 2, "astra": 3}
+
 # Sliced Voxel Data & Chunk Meshes for LUNA, IGNIS-I, CRYO-IV, ASTRA-V!
 var extra_vox: Dictionary = {} # body_id -> Dictionary
 var dirty_extra: Array[Array] = [] # [body_id, chunk_idx]
@@ -77,9 +84,66 @@ func _ready() -> void:
 	if get_parent() is Node2D and get_parent().name == "HomeSystem":
 		home_root = get_parent()
 	_init_chunk_nodes()
+	_init_occ_textures()
 	_init_solar_system()
 	generate_planet()
 	_init_extra_planets()
+
+func _init_occ_textures() -> void:
+	terra_occ_img = Image.create(COLS, ROWS, false, Image.FORMAT_R8)
+	terra_occ_tex = ImageTexture.create_from_image(terra_occ_img)
+	extra_occ_img = Image.create(EX_COLS, EX_ROWS * 4, false, Image.FORMAT_R8)
+	extra_occ_tex = ImageTexture.create_from_image(extra_occ_img)
+
+func _sync_terra_occ_all() -> void:
+	if not terra_occ_img: return
+	var buf := PackedByteArray()
+	buf.resize(COLS * ROWS)
+	for i in range(COLS * ROWS):
+		var m := int(mat[i])
+		buf[i] = 255 if (m == 1 or m == 2 or m == 3) else 0
+	terra_occ_img = Image.create_from_data(COLS, ROWS, false, Image.FORMAT_R8, buf)
+	terra_occ_tex.update(terra_occ_img)
+
+func _sync_terra_occ_chunk(ci: int) -> void:
+	if not terra_occ_img: return
+	var base_c := ci * CHUNK_COLS
+	for r in range(ROWS):
+		var row_off := r * COLS
+		for lc in range(CHUNK_COLS):
+			var c := base_c + lc
+			var m := int(mat[row_off + c])
+			var v := 1.0 if (m == 1 or m == 2 or m == 3) else 0.0
+			terra_occ_img.set_pixel(c, r, Color(v, 0.0, 0.0, 1.0))
+	terra_occ_tex.update(terra_occ_img)
+
+func _sync_extra_occ_body(bid: String) -> void:
+	if not extra_occ_img or not extra_vox.has(bid) or not EXTRA_OCC_BAND.has(bid): return
+	var band: int = int(EXTRA_OCC_BAND[bid])
+	var e_mat: PackedByteArray = extra_vox[bid]["mat"]
+	var y_off := band * EX_ROWS
+	for r in range(EX_ROWS):
+		var row_off := r * EX_COLS
+		for c in range(EX_COLS):
+			var m := int(e_mat[row_off + c])
+			var v := 1.0 if (m == 1 or m == 2 or m == 3) else 0.0
+			extra_occ_img.set_pixel(c, y_off + r, Color(v, 0.0, 0.0, 1.0))
+	extra_occ_tex.update(extra_occ_img)
+
+func _sync_extra_occ_chunk(bid: String, ci: int) -> void:
+	if not extra_occ_img or not extra_vox.has(bid) or not EXTRA_OCC_BAND.has(bid): return
+	var band: int = int(EXTRA_OCC_BAND[bid])
+	var e_mat: PackedByteArray = extra_vox[bid]["mat"]
+	var y_off := band * EX_ROWS
+	var base_c := ci * EX_CHUNK_COLS
+	for r in range(EX_ROWS):
+		var row_off := r * EX_COLS
+		for lc in range(EX_CHUNK_COLS):
+			var c := base_c + lc
+			var m := int(e_mat[row_off + c])
+			var v := 1.0 if (m == 1 or m == 2 or m == 3) else 0.0
+			extra_occ_img.set_pixel(c, y_off + r, Color(v, 0.0, 0.0, 1.0))
+	extra_occ_tex.update(extra_occ_img)
 
 func _init_chunk_nodes() -> void:
 	for ci in range(CHUNKS):
@@ -401,7 +465,8 @@ func generate_planet() -> void:
 		})
 		next_dn_id += 1
 
-	# 4. Bake spawn chunks immediately
+	# 4. Bake spawn chunks immediately + upload full GPU occupancy texture for ray-traced sunlight!
+	_sync_terra_occ_all()
 	dirty_chunks.clear()
 	var spawn_ci := SPAWN_COL / CHUNK_COLS
 	for dci in range(-2, 3):
@@ -536,6 +601,9 @@ func _init_extra_planets() -> void:
 			})
 			next_dn_id += 1
 
+		# Upload GPU occupancy band for ray-traced sunlight & shadows on this planet
+		_sync_extra_occ_body(bid)
+
 		# Bake first 3 chunks immediately, queue rest lazily
 		for ci in range(EX_CHUNKS):
 			if ci < 3:
@@ -636,6 +704,7 @@ func _bake_extra_chunk(bid: String, ci: int) -> void:
 	var img := Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, data)
 	var tex_arr: Array = ev["texs"]
 	tex_arr[ci].update(img)
+	_sync_extra_occ_chunk(bid, ci)
 
 func _paint_vein(c0: int, r0: int, rc: int, rr: int, oid: int) -> void:
 	for dr in range(-rr, rr + 1):
@@ -725,6 +794,7 @@ func _bake_chunk(ci: int) -> void:
 
 	var img := Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, data)
 	chunk_texs[ci].update(img)
+	_sync_terra_occ_chunk(ci)
 
 func _physics_process(delta: float) -> void:
 	step_celestials(delta)
@@ -1293,12 +1363,7 @@ func _draw() -> void:
 	var sun_ang := sun_dir.angle()
 	var terra_p := Vector2(bodies["terra"]["pos"])
 
-	# 1. Terra Atmospheric Halo
-	for b in range(6):
-		var t := float(b) / 6.0
-		draw_circle(Vector2.ZERO, lerpf(R_SURFACE, R_ATMOS, 1.0 - t), Color(0.11, 0.24, 0.46, 0.05 + t * 0.035))
-	draw_arc(Vector2.ZERO, R_ATMOS, sun_ang - PI * 0.55, sun_ang + PI * 0.55, 64, Color(0.36, 0.78, 1.0, 0.34), 3.0 / maxf(0.02, z))
-	draw_arc(Vector2.ZERO, R_ATMOS, sun_ang + PI * 0.55, sun_ang + PI * 1.45, 64, Color(0.14, 0.22, 0.36, 0.16), 2.0 / maxf(0.02, z))
+	# 1. Atmospheric Scattering is now rendered physically via Rayleigh+Mie shader in PhysAtmosphere!
 
 	# 2. Terra Molten Magma Core
 	if vrect.intersects(Rect2(-R_CORE - 400, -R_CORE - 400, (R_CORE + 400) * 2.0, (R_CORE + 400) * 2.0)):
@@ -1349,7 +1414,10 @@ func _draw() -> void:
 				var bp_l := b_off + Vector2(bst["local_pos"])
 				var brot := float(bst["ang"]) + PI * 0.5
 				var is_drv := String(bst.get("kind", "")) == "enemy_driver"
-				var ft_e := ArtReg.get_t("mass_driver" if is_drv else "gantry_printer")
+				var e_key := "mass_driver" if is_drv else "gantry_printer"
+				var e_active := (State.enemy_printers_left > 0 and State.enemy_drivers_left > 0)
+				var e_frame := (1 + (int(floor(anim_t * (6.0 if is_drv else 8.0) + float(bst["idx"]))) % 5)) if e_active else 0
+				var ft_e := ArtReg.get_anim(e_key, e_frame)
 				draw_set_transform(bp_l, brot, Vector2.ONE)
 				draw_rect(Rect2(-68, -4, 136, 12), Color(0.24, 0.06, 0.10, 0.96))
 				draw_rect(Rect2(-68, -4, 136, 3), Color(1.0, 0.32, 0.42))
@@ -1400,40 +1468,23 @@ func _draw() -> void:
 			draw_rect(Rect2(-30, -4, 60, 3), Color(0.56, 0.64, 0.76))
 			draw_rect(Rect2(-24, -10, 48, 8), Color(0.18, 0.22, 0.30))
 			draw_rect(Rect2(-20, -9, 40, 5), oc * pulse)
-			draw_polygon(PackedVector2Array([Vector2(-14, -9), Vector2(-9, -22), Vector2(-3, -9)]), PackedColorArray([oc]))
-			draw_polygon(PackedVector2Array([Vector2(-4, -9), Vector2(2, -26), Vector2(8, -9)]), PackedColorArray([oc.lightened(0.28)]))
-			draw_polygon(PackedVector2Array([Vector2(6, -9), Vector2(13, -20), Vector2(18, -9)]), PackedColorArray([oc]))
+			var dn_ore := String(dn["ore"])
+			var dn_tex_id := "ore_fe" if dn_ore == "fe" else ("ore_cu" if dn_ore == "cu" else ("crystal_si" if dn_ore in ["si", "ice"] else "ore_ti"))
+			var dn_tex := ArtReg.get_t(dn_tex_id)
+			if dn_tex:
+				var dn_mod := Color.WHITE if dn_ore in ["fe", "cu", "si", "ti"] else oc.lightened(0.28)
+				draw_texture_rect(dn_tex, Rect2(-26, -42, 52, 42), false, dn_mod)
 			if placing_drill:
 				var pr := 42.0 + sin(anim_t * 6.5) * 5.0
 				draw_arc(Vector2(0, -10), pr, 0.0, TAU, 28, Color(1.0, 0.88, 0.32, 0.92), 2.6)
 			if z >= 0.36:
-				var ic := ArtReg.get_icon(String(dn["ore"]))
+				var ic := ArtReg.get_icon(dn_ore)
 				if ic:
-					draw_texture_rect(ic, Rect2(-28, -42, 16, 16), false)
-				draw_string(font_dn, Vector2(-10, -29), "ドリル鉱床", HORIZONTAL_ALIGNMENT_LEFT, 82, 11, Color(1.0, 0.90, 0.44) if placing_drill else Color(0.86, 0.92, 1.0, 0.88))
+					draw_texture_rect(ic, Rect2(-32, -58, 18, 18), false)
+				draw_string(font_dn, Vector2(-12, -44), "ドリル鉱床", HORIZONTAL_ALIGNMENT_LEFT, 86, 11, Color(1.0, 0.90, 0.44) if placing_drill else Color(0.86, 0.92, 1.0, 0.88))
 			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	# 4. Real Geometric Day/Night Shadow Annulus on Terra's Nightside
-	var night_ang := sun_ang + PI
-	var sh_segs := 40
-	var sh_pts := PackedVector2Array()
-	for i in range(sh_segs + 1):
-		var a := night_ang - PI * 0.52 + float(i) / float(sh_segs) * PI * 1.04
-		sh_pts.append(Vector2(cos(a), sin(a)) * (R_SURFACE + 52.0))
-	for i in range(sh_segs, -1, -1):
-		var a := night_ang - PI * 0.52 + float(i) / float(sh_segs) * PI * 1.04
-		sh_pts.append(Vector2(cos(a), sin(a)) * (R_CORE + 16.0))
-	draw_colored_polygon(sh_pts, Color(0.010, 0.016, 0.044, 0.64))
-	var deep_pts := PackedVector2Array()
-	for i in range(sh_segs + 1):
-		var a := night_ang - PI * 0.38 + float(i) / float(sh_segs) * PI * 0.76
-		deep_pts.append(Vector2(cos(a), sin(a)) * (R_SURFACE + 52.0))
-	for i in range(sh_segs, -1, -1):
-		var a := night_ang - PI * 0.38 + float(i) / float(sh_segs) * PI * 0.76
-		deep_pts.append(Vector2(cos(a), sin(a)) * (R_CORE + 16.0))
-	draw_colored_polygon(deep_pts, Color(0.006, 0.010, 0.028, 0.36))
-	draw_arc(Vector2.ZERO, R_SURFACE + 14.0, sun_ang + PI * 0.44, sun_ang + PI * 0.56, 16, Color(1.0, 0.54, 0.22, 0.48), 28.0)
-	draw_arc(Vector2.ZERO, R_SURFACE + 14.0, sun_ang - PI * 0.56, sun_ang - PI * 0.44, 16, Color(1.0, 0.54, 0.22, 0.48), 28.0)
+	# 4. Physical Sunlight, Per-Voxel Terrain/Cave Shadows & Eclipses are ray-traced in PhysLighting!
 
 	# 5. Smoke Plumes, Sparks & Popups
 	for sm in smokes:

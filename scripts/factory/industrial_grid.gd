@@ -1210,6 +1210,8 @@ func _process(delta: float) -> void:
 		var bid := String(b["id"])
 		var body_id := String(b.get("body_id", "terra"))
 		var pwr := float(b["pwr_ratio"])
+		if float(b.get("fire_flash", 0.0)) > 0.0:
+			b["fire_flash"] = maxf(0.0, float(b["fire_flash"]) - delta * 3.2)
 		b["blocked"] = false
 		if pwr > 0.05:
 			b["timer"] = float(b["timer"]) + delta * spd * pwr
@@ -1387,6 +1389,7 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _fire_railgun(b: Dictionary) -> void:
+	b["fire_flash"] = 1.0
 	var n: Vector2 = b["normal"]; var tang := Vector2(-n.y, n.x)
 	var dir := (n * 0.72 + tang * 0.69).normalized()
 	var muzzle := Vector2(b["pos"]) + n * 86.0 + tang * 46.0
@@ -1402,8 +1405,64 @@ func _fire_railgun(b: Dictionary) -> void:
 	Sfx.play("launch")
 
 # ------------------------------------------------------------------------------
-# RENDERING: BUILDINGS, HP BARS, WIRES & PCB-AUTOROUTED CONVEYOR TRACES
+# RENDERING: BUILDINGS, MULTI-FRAME SPRITE ANIMATIONS, HP BARS, WIRES & CONVEYORS
 # ------------------------------------------------------------------------------
+func _get_building_anim_tex(b: Dictionary, tex_key: String) -> Texture2D:
+	var n_frames := ArtReg.get_anim_count(tex_key)
+	if n_frames <= 1:
+		return ArtReg.get_t(tex_key)
+	var bid := String(b["id"])
+	var pwr := float(b["pwr_ratio"])
+	var uid_ph := float(int(b["uid"]) % 17) * 0.37
+	match bid:
+		"mass_driver":
+			if float(b.get("fire_flash", 0.0)) > 0.15:
+				return ArtReg.get_anim(tex_key, 5)
+			if pwr <= 0.05 or int(b["in_buf"].get("probe_stock", 0)) <= 0:
+				return ArtReg.get_anim(tex_key, 0)
+			var chg := clampf(float(b["timer"]) / 2.2, 0.0, 0.999)
+			return ArtReg.get_anim(tex_key, 1 + int(chg * 4.0))
+		"gantry_printer":
+			var ib: Dictionary = b["in_buf"]
+			if pwr <= 0.05 or int(ib.get("plate_fe", 0)) < 2 or int(ib.get("circuit", 0)) < 1:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 8.5 + uid_ph)) % 5))
+		"smelter":
+			if pwr <= 0.05 or b["in_buf"].is_empty():
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 9.5 + uid_ph)) % 5))
+		"assembler":
+			if pwr <= 0.05 or b["in_buf"].is_empty():
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 9.0 + uid_ph)) % 5))
+		"drill":
+			if pwr <= 0.05:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 12.5 + uid_ph)) % 5))
+		"tesla":
+			if pwr <= 0.10:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 11.0 + uid_ph)) % 5))
+		"geothermal":
+			if float(b.get("pipe_prog", 1.0)) < 1.0:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 8.0 + uid_ph)) % 5))
+		"battery":
+			if float(b["battery_kj"]) <= 5.0:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 6.5 + uid_ph)) % 5))
+		"solar":
+			var wpos := planet.to_world_pos(Vector2(b["pos"])) if planet else Vector2(b["pos"])
+			var sun_l := planet.get_sunlight_world(wpos) if planet else 1.0
+			if sun_l <= 0.12:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 3.2 + uid_ph)) % 5))
+		"turret":
+			if pwr <= 0.05:
+				return ArtReg.get_anim(tex_key, 0)
+			return ArtReg.get_anim(tex_key, 1 + (int(floor(anim_t * 7.5 + uid_ph)) % 5))
+	return ArtReg.get_t(tex_key)
+
 func _draw() -> void:
 	if not planet: return
 	var glow := ArtReg.get_t("glow")
@@ -1479,7 +1538,8 @@ func _draw() -> void:
 			draw_rect(Rect2(-bw * 0.48, -2, bw * 0.96, 10), Color(0.16, 0.20, 0.26, 0.95))
 			draw_rect(Rect2(-bw * 0.48, -2, bw * 0.96, 2), Color(0.45, 0.52, 0.62))
 
-		var t := ArtReg.get_t(String(info["tex"]))
+		var tex_key := String(info["tex"])
+		var t := _get_building_anim_tex(b, tex_key)
 		var y_off := 16.0 if bid == "drill" else 0.0
 		if t: draw_texture_rect(t, Rect2(-bw * 0.5, -bh + y_off, bw, bh), false)
 

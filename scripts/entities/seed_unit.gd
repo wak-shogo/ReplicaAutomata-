@@ -492,7 +492,7 @@ func _draw() -> void:
 		else:
 			draw_circle(dp, 6.0, Color(0.94, 0.74, 0.30))
 
-	var ctex := ArtReg.get_t("seed_core")
+	var ctex := ArtReg.get_anim("seed_core", int(floor(anim_t * 5.0)) % 4)
 	if glow:
 		draw_texture_rect(glow, Rect2(-28, -28, 56, 56), false, Color(0.26, 0.88, 1.0, 0.24))
 	if ctex:
